@@ -142,7 +142,7 @@ async fn login(
         }
     };
 
-    if let Err(_) = auth_session.login(&user).await {
+    if auth_session.login(&user).await.is_err() {
         return Err(AppError::InternalServerError(
             "Failed to create session".into(),
         ));
@@ -152,7 +152,7 @@ async fn login(
 }
 
 async fn logout(mut auth_session: AuthSession) -> Result<impl IntoResponse, AppError> {
-    if let Err(_) = auth_session.logout().await {
+    if auth_session.logout().await.is_err() {
         return Err(AppError::InternalServerError("Failed to logout".into()));
     }
     Ok(Json(json!({ "message": "Logged out successfully" })))

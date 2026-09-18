@@ -53,6 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nest("/api/v1/auth", modules::auth::router())
         .nest("/api/v1/sis", modules::sis::handler::router())
         .layer(auth_layer)
+        .layer(tower_http::trace::TraceLayer::new_for_http())
         .with_state(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));

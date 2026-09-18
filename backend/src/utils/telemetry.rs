@@ -1,11 +1,32 @@
 use opentelemetry::{global, KeyValue};
-use opentelemetry_otlp::SpanExporter;
+use opentelemetry_otlp::{SpanExporter, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::{trace::SdkTracerProvider, Resource};
+use std::collections::HashMap;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 pub fn init_telemetry() -> Result<(), Box<dyn std::error::Error>> {
-    // 1. Setup OpenTelemetry OTLP Exporter
-    let exporter = SpanExporter::builder().with_http().build()?;
+    // 1. Setup global error handler to catch export failures
+
+    // 2. Parse Environment Variables explicitly
+    let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
+        .unwrap_or_else(|_| "http://localhost:4318/v1/traces".to_string());
+
+    let mut headers = HashMap::new();
+    if let Ok(h) = std::env::var("OTEL_EXPORTER_OTLP_HEADERS") {
+        for part in h.split(',') {
+            let mut kv = part.splitn(2, '=');
+            if let (Some(k), Some(v)) = (kv.next(), kv.next()) {
+                headers.insert(k.trim().to_string(), v.trim().to_string());
+            }
+        }
+    }
+
+    // 3. Setup OpenTelemetry OTLP Exporter explicitly
+    let exporter = SpanExporter::builder()
+        .with_http()
+        .with_endpoint(endpoint)
+        .with_headers(headers)
+        .build()?;
 
     let provider = SdkTracerProvider::builder()
         .with_batch_exporter(exporter)
@@ -24,7 +45,7 @@ pub fn init_telemetry() -> Result<(), Box<dyn std::error::Error>> {
 
     let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
 
-    // 2. Setup File & Console Layers
+    // 4. Setup File & Console Layers
     let file_appender = tracing_appender::rolling::daily("logs", "eravaya.log");
     let (non_blocking_appender, guard) = tracing_appender::non_blocking(file_appender);
 
@@ -40,7 +61,7 @@ pub fn init_telemetry() -> Result<(), Box<dyn std::error::Error>> {
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| "info,eravaya=debug,tower_http=info".into());
 
-    // 3. Combine all layers
+    // 5. Combine all layers
     tracing_subscriber::registry()
         .with(filter)
         .with(console_layer)

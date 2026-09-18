@@ -5,43 +5,38 @@ use axum::{
 };
 use serde_json::json;
 
+#[derive(Debug)]
 pub enum AppError {
-    Database(sqlx::Error),
-    Internal(String),
+    Database(String),
+    NotFound(String),
+    Forbidden(String),
+    Unauthorized(String),
+    InternalServerError(String),
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, error_message) = match self {
-            AppError::Database(e) => {
-                tracing::error!("Database error: {}", e);
+            AppError::Database(err) => {
+                tracing::error!("Database error: {}", err);
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    "A database error occurred".to_string(),
+                    "Internal server error".to_string(),
                 )
             }
-            AppError::Internal(e) => {
-                tracing::error!("Internal error: {}", e);
+            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
+            AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg),
+            AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),
+            AppError::InternalServerError(msg) => {
+                tracing::error!("Internal server error: {}", msg);
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    "An internal error occurred".to_string(),
+                    "Internal server error".to_string(),
                 )
             }
         };
 
-        let body = Json(json!({
-            "success": false,
-            "error": {
-                "message": error_message
-            }
-        }));
-
+        let body = Json(json!({ "error": error_message }));
         (status, body).into_response()
-    }
-}
-
-impl From<sqlx::Error> for AppError {
-    fn from(inner: sqlx::Error) -> Self {
-        AppError::Database(inner)
     }
 }

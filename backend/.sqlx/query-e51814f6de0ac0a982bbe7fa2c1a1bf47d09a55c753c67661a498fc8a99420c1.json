@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name\n            FROM users u\n            JOIN schools s ON u.school_id = s.id\n            WHERE s.code = $1 AND u.username = $2 AND u.status = 'ACTIVE' AND s.status = 'ACTIVE'\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "school_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "username",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "password_hash",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "display_name",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "e51814f6de0ac0a982bbe7fa2c1a1bf47d09a55c753c67661a498fc8a99420c1"
+}

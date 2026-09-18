@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO roles (school_id, name, code, description, is_system_role) \n         VALUES ($1, 'Super Admin', 'SUPER_ADMIN', 'Full system access', true) RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0a074a7c23eb73478596f53ce9ecd947513555ade371519a4fd67856c70e60b4"
+}

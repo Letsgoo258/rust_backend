@@ -240,3 +240,26 @@ CREATE TRIGGER set_timestamp_rooms BEFORE UPDATE ON rooms FOR EACH ROW EXECUTE P
 CREATE TRIGGER set_timestamp_class_sections BEFORE UPDATE ON class_sections FOR EACH ROW EXECUTE PROCEDURE trigger_set_timestamp();
 CREATE TRIGGER set_timestamp_subjects BEFORE UPDATE ON subjects FOR EACH ROW EXECUTE PROCEDURE trigger_set_timestamp();
 
+
+-- Add System-Level Role Enum
+CREATE TYPE system_role_type AS ENUM (
+    'SUPER_ADMIN',  -- Eravaya platform administrators
+    'SCHOOL_ADMIN', -- Principal / School Owners
+    'STAFF',        -- General staff (HR, Accounts, etc)
+    'TEACHER',      -- Academic teachers
+    'STUDENT',      -- Enrolled students
+    'PARENT'        -- Guardians
+);
+
+ALTER TABLE users ADD COLUMN user_type system_role_type NOT NULL DEFAULT 'STUDENT';
+
+-- Insert the core system permissions globally
+INSERT INTO permissions (code, name, description) VALUES
+('USERS_CREATE', 'Create Users', 'Allows creating new users in the school'),
+('USERS_VIEW', 'View Users', 'Allows viewing users in the school'),
+('USERS_EDIT', 'Edit Users', 'Allows editing users in the school'),
+('USERS_DELETE', 'Delete Users', 'Allows deleting users in the school'),
+('ACADEMICS_MANAGE', 'Manage Academics', 'Allows managing classes, sections, and subjects'),
+('ATTENDANCE_MARK', 'Mark Attendance', 'Allows marking daily attendance'),
+('FEES_MANAGE', 'Manage Fees', 'Allows generating invoices and recording payments')
+ON CONFLICT (code) DO NOTHING;

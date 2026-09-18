@@ -9,6 +9,9 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@grafana/faro-react": "^2.12.0",
+    "@grafana/faro-web-sdk": "^2.12.0",
+    "@grafana/faro-web-tracing": "^2.12.0",
     "next": "16.3.5",
     "react": "19.2.8",
     "react-dom": "19.2.8"

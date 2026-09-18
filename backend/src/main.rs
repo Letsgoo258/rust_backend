@@ -16,6 +16,7 @@ use std::panic;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Initialize structured concurrency tracing (Console + File + Grafana OpenTelemetry)
+    dotenvy::dotenv().ok();
     utils::telemetry::init_telemetry()?;
 
     // 2. Set up global panic hook to prevent silent thread deaths

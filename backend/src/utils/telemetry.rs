@@ -1,7 +1,7 @@
 use opentelemetry::{global, KeyValue};
 use opentelemetry_otlp::SpanExporter;
 use opentelemetry_sdk::{trace::SdkTracerProvider, Resource};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 pub fn init_telemetry() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Setup OpenTelemetry OTLP Exporter
@@ -24,9 +24,12 @@ pub fn init_telemetry() -> Result<(), Box<dyn std::error::Error>> {
 
     let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
 
-    // 2. Setup File & Console Layers (Existing)
+    // 2. Setup File & Console Layers
     let file_appender = tracing_appender::rolling::daily("logs", "eravaya.log");
-    let (non_blocking_appender, _guard) = tracing_appender::non_blocking(file_appender);
+    let (non_blocking_appender, guard) = tracing_appender::non_blocking(file_appender);
+
+    // Leak the guard so the background thread stays alive for the lifetime of the program
+    std::mem::forget(guard);
 
     let console_layer = tracing_subscriber::fmt::layer().with_thread_ids(true);
     let file_layer = tracing_subscriber::fmt::layer()
@@ -34,9 +37,12 @@ pub fn init_telemetry() -> Result<(), Box<dyn std::error::Error>> {
         .with_ansi(false)
         .with_thread_ids(true);
 
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "info,eravaya=debug,tower_http=info".into());
+
     // 3. Combine all layers
     tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::from_default_env())
+        .with(filter)
         .with(console_layer)
         .with(file_layer)
         .with(otel_layer)

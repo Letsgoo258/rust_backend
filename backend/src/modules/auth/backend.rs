@@ -40,7 +40,6 @@ pub type SessionLayer =
 
 #[derive(Clone)]
 pub struct Credentials {
-    pub school_code: String,
     pub username: String,
     pub password: String,
 }
@@ -61,9 +60,9 @@ impl AuthnBackend for Backend {
             SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.user_type::TEXT as "user_type!"
             FROM users u
             JOIN schools s ON u.school_id = s.id
-            WHERE s.code = $1 AND u.username = $2 AND u.status = 'ACTIVE' AND s.status = 'ACTIVE'
+            WHERE (u.username = $1 OR u.email = $1) AND u.status = 'ACTIVE' AND s.status = 'ACTIVE'
+            LIMIT 1
             "#,
-            creds.school_code,
             creds.username
         )
         .fetch_optional(&self.db)

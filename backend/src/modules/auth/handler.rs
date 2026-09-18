@@ -124,7 +124,6 @@ async fn login(
     Json(payload): Json<LoginRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let creds = Credentials {
-        school_code: payload.school_code,
         username: payload.username,
         password: payload.password,
     };

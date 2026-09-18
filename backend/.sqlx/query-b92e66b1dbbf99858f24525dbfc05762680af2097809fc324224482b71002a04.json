@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.user_type::TEXT as \"user_type!\"\n            FROM users u\n            JOIN schools s ON u.school_id = s.id\n            WHERE s.code = $1 AND u.username = $2 AND u.status = 'ACTIVE' AND s.status = 'ACTIVE'\n            ",
+  "query": "\n            SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.user_type::TEXT as \"user_type!\"\n            FROM users u\n            JOIN schools s ON u.school_id = s.id\n            WHERE (u.username = $1 OR u.email = $1) AND u.status = 'ACTIVE' AND s.status = 'ACTIVE'\n            LIMIT 1\n            ",
   "describe": {
     "columns": [
       {
@@ -36,7 +36,6 @@
     ],
     "parameters": {
       "Left": [
-        "Text",
         "Text"
       ]
     },
@@ -49,5 +48,5 @@
       null
     ]
   },
-  "hash": "b239108e7c74c73f0da2f9c2bea64816a8436004a6003311486e0d4f296b8153"
+  "hash": "b92e66b1dbbf99858f24525dbfc05762680af2097809fc324224482b71002a04"
 }

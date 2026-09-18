@@ -61,11 +61,6 @@ export default function LoginPage() {
 
         <form onSubmit={handleLogin} className="space-y-5">
           <div className="space-y-1.5">
-            <label className="block text-xs font-medium text-gray-700 uppercase tracking-wide">School Code</label>
-            <input required name="school_code" type="text" placeholder="ERA01" className="w-full bg-white border border-gray-200 focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF] outline-none rounded-lg px-3 py-2.5 text-sm transition-all uppercase" />
-          </div>
-
-          <div className="space-y-1.5">
             <label className="block text-xs font-medium text-gray-700 uppercase tracking-wide">Username / Email</label>
             <input required name="username" type="text" placeholder="admin@school.com" className="w-full bg-white border border-gray-200 focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF] outline-none rounded-lg px-3 py-2.5 text-sm transition-all" />
           </div>

@@ -5,6 +5,7 @@ import {
   initializeFaro,
   getWebInstrumentations,
   ReactIntegration,
+  faro
 } from '@grafana/faro-react';
 import { TracingInstrumentation } from '@grafana/faro-web-tracing';
 
@@ -12,9 +13,11 @@ export default function FaroProvider({ children }: { children: React.ReactNode }
   useEffect(() => {
     const faroUrl = process.env.NEXT_PUBLIC_FARO_URL;
     
-    if (faroUrl && typeof window !== 'undefined') {
+    // Prevent strict mode double initialization
+    if (faroUrl && typeof window !== 'undefined' && !faro.api) {
       initializeFaro({
         url: faroUrl,
+        isolate: true, // Also safe measure
         app: {
           name: 'eravaya-frontend',
           version: '0.1.0',

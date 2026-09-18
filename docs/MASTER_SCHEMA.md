@@ -3,7 +3,7 @@
 **This document represents the single source of truth for the complete, up-to-date PostgreSQL schema.** 
 Whenever a new migration adds tables or columns, this file must be updated so that the full architecture can be viewed and understood in one place.
 
-*The raw SQL version is also maintained at `backend/master_schema.sql`.*
+*The raw SQL version is also maintained at `backend/master_migration.sql`.*
 
 ## Current Schema Definition
 

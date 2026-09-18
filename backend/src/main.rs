@@ -11,22 +11,31 @@ use axum::Router;
 use config::AppConfig;
 use state::AppState;
 use std::net::SocketAddr;
+use std::panic;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+    // 1. Initialize structured concurrency tracing (Console + File + Grafana OpenTelemetry)
+    utils::telemetry::init_telemetry()?;
+
+    // 2. Set up global panic hook to prevent silent thread deaths
+    panic::set_hook(Box::new(|panic_info| {
+        tracing::error!(
+            "CRITICAL SYSTEM FAILURE: Thread panicked! Details: {:?}",
+            panic_info
+        );
+    }));
 
     tracing::info!("Starting ERAVAYA ERP backend initialization...");
 
     let config = AppConfig::from_env();
 
+    // 3. Database with connection timeout to prevent deadlocks hanging the startup
     tracing::info!("Connecting to the database...");
     let pool = match db::init_pool(&config).await {
         Ok(pool) => pool,
         Err(e) => {
-            tracing::warn!("Failed to connect to the database: {:?}", e);
+            tracing::error!("FATAL: Failed to connect to the database: {:?}", e);
             return Err(e.into());
         }
     };
@@ -48,7 +57,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Server listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
 
+    // 4. Serve with Graceful Shutdown to ensure threads exit intelligently
+    axum::serve(listener, app)
+        .with_graceful_shutdown(utils::shutdown::shutdown_signal())
+        .await?;
+
+    tracing::info!("Server shut down gracefully. All worker threads cleaned up.");
+    // Ensure all OTLP telemetry traces are flushed before the program exits
     Ok(())
 }

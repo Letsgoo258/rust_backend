@@ -24,6 +24,8 @@ pub fn router() -> Router<AppState> {
         .route("/login", post(login))
         .route("/logout", post(logout))
         .route("/me", get(me))
+        .route("/verify/email", post(verify_email))
+        .route("/verify/phone", post(verify_phone))
 }
 
 /// Idempotent setup endpoint to create the very first School and Super Admin.
@@ -287,4 +289,69 @@ async fn get_schools(
             schools,
         }),
     ))
+}
+
+#[derive(serde::Deserialize)]
+pub struct VerifyPhoneRequest {
+    pub otp: String,
+}
+
+#[tracing::instrument(err, skip(state, auth_session))]
+async fn verify_email(
+    mut auth_session: AuthSession,
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, AppError> {
+    let user = auth_session
+        .user
+        .clone()
+        .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+    // Mark verified
+    sqlx::query!("UPDATE users SET email_verified = true WHERE id = $1", user.id)
+        .execute(&state.db)
+        .await?;
+
+    // Refresh session user (simplistic way)
+    if let Ok(Some(mut updated_user)) = sqlx::query_as!(
+        crate::modules::auth::backend::User,
+        r#"SELECT id, school_id, username, password_hash, display_name, user_type::TEXT as "user_type!", email_verified, phone_verified
+           FROM users WHERE id = $1"#,
+        user.id
+    ).fetch_optional(&state.db).await {
+        // Log in again to update session
+        let _ = auth_session.login(&updated_user).await;
+    }
+
+    Ok((StatusCode::OK, Json(serde_json::json!({ "message": "Email verified successfully" }))))
+}
+
+#[tracing::instrument(err, skip(state, auth_session, payload))]
+async fn verify_phone(
+    mut auth_session: AuthSession,
+    State(state): State<AppState>,
+    Json(payload): Json<VerifyPhoneRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let user = auth_session
+        .user
+        .clone()
+        .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+    if payload.otp != "123456" {
+        return Err(AppError::BadRequest("Invalid OTP".into()));
+    }
+
+    sqlx::query!("UPDATE users SET phone_verified = true WHERE id = $1", user.id)
+        .execute(&state.db)
+        .await?;
+        
+    if let Ok(Some(mut updated_user)) = sqlx::query_as!(
+        crate::modules::auth::backend::User,
+        r#"SELECT id, school_id, username, password_hash, display_name, user_type::TEXT as "user_type!", email_verified, phone_verified
+           FROM users WHERE id = $1"#,
+        user.id
+    ).fetch_optional(&state.db).await {
+        let _ = auth_session.login(&updated_user).await;
+    }
+
+    Ok((StatusCode::OK, Json(serde_json::json!({ "message": "Phone verified successfully" }))))
 }

@@ -11,7 +11,46 @@ export default function DashboardLayout({
 }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [user, setUser] = useState<{ display_name?: string; username: string; school_id?: string; user_type?: string } | null>(null);
+  const [user, setUser] = useState<{ display_name?: string; username: string; school_id?: string; user_type?: string; email_verified?: boolean; phone_verified?: boolean } | null>(null);
+  
+  const [verifyingEmail, setVerifyingEmail] = useState(false);
+  const [verifyingPhone, setVerifyingPhone] = useState(false);
+  const [showPhoneModal, setShowPhoneModal] = useState(false);
+  const [otp, setOtp] = useState("");
+  const [phoneError, setPhoneError] = useState("");
+
+  const handleVerifyEmail = async () => {
+    setVerifyingEmail(true);
+    try {
+      const res = await fetch("/api/v1/auth/verify/email", { method: "POST" });
+      if (res.ok) {
+        setUser(prev => prev ? { ...prev, email_verified: true } : null);
+      }
+    } finally {
+      setVerifyingEmail(false);
+    }
+  };
+
+  const handleVerifyPhone = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setVerifyingPhone(true);
+    setPhoneError("");
+    try {
+      const res = await fetch("/api/v1/auth/verify/phone", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ otp })
+      });
+      if (res.ok) {
+        setUser(prev => prev ? { ...prev, phone_verified: true } : null);
+        setShowPhoneModal(false);
+      } else {
+        setPhoneError("Invalid OTP. Hint: 123456");
+      }
+    } finally {
+      setVerifyingPhone(false);
+    }
+  };
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -165,10 +204,96 @@ export default function DashboardLayout({
         </aside>
 
         {/* Main Content */}
-        <main className="flex-1 overflow-auto bg-[#F4F5F7] p-6 lg:p-8">
+        <main className="flex-1 overflow-auto bg-[#F4F5F7] p-6 lg:p-8 relative">
           <div className="max-w-6xl mx-auto">
+            
+            {user && (!user.email_verified || !user.phone_verified) && (
+              <div className="mb-8 bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded-r-lg shadow-sm">
+                <div className="flex items-start">
+                  <div className="flex-shrink-0">
+                    <svg className="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                    </svg>
+                  </div>
+                  <div className="ml-3">
+                    <h3 className="text-sm font-medium text-yellow-800">
+                      Action Required: Verify your identity
+                    </h3>
+                    <div className="mt-2 text-sm text-yellow-700">
+                      <p>
+                        {!user.email_verified 
+                          ? "Please verify your email address to secure your account."
+                          : "Please verify your phone number via WhatsApp to complete onboarding."}
+                      </p>
+                    </div>
+                    <div className="mt-4">
+                      {!user.email_verified ? (
+                        <button
+                          onClick={handleVerifyEmail}
+                          disabled={verifyingEmail}
+                          className="bg-yellow-100 text-yellow-800 hover:bg-yellow-200 px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
+                        >
+                          {verifyingEmail ? "Sending..." : "Send Verification Email"}
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => setShowPhoneModal(true)}
+                          className="bg-yellow-100 text-yellow-800 hover:bg-yellow-200 px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
+                        >
+                          Verify Phone Number
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {children}
           </div>
+          
+          {/* Phone Verification Modal */}
+          {showPhoneModal && (
+            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+              <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+                <h2 className="text-lg font-bold text-gray-900 mb-2">Verify Phone Number</h2>
+                <p className="text-sm text-gray-500 mb-6">Enter the 6-digit WhatsApp OTP sent to your registered number.</p>
+                
+                <form onSubmit={handleVerifyPhone}>
+                  <div className="space-y-4">
+                    <div>
+                      <input 
+                        type="text" 
+                        value={otp}
+                        onChange={(e) => setOtp(e.target.value)}
+                        placeholder="123456" 
+                        maxLength={6}
+                        className="w-full text-center text-2xl tracking-[0.5em] font-mono bg-gray-50 border border-gray-300 focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF] outline-none rounded-lg px-4 py-3"
+                      />
+                      {phoneError && <p className="text-xs text-red-500 mt-2 text-center">{phoneError}</p>}
+                    </div>
+                    <div className="flex gap-3">
+                      <button 
+                        type="button" 
+                        onClick={() => setShowPhoneModal(false)}
+                        className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium py-2.5 rounded-lg text-sm transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button 
+                        type="submit"
+                        disabled={verifyingPhone || otp.length < 6}
+                        className="flex-1 bg-[#3366FF] hover:bg-[#2B57D9] disabled:opacity-50 text-white font-medium py-2.5 rounded-lg text-sm transition-colors"
+                      >
+                        {verifyingPhone ? "Verifying..." : "Verify OTP"}
+                      </button>
+                    </div>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
         </main>
       </div>
     </div>

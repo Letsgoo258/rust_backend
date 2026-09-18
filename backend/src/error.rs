@@ -11,6 +11,8 @@ pub enum AppError {
     Database(#[from] sqlx::Error),
     #[error("not found: {0}")]
     NotFound(String),
+    #[error("bad request: {0}")]
+    BadRequest(String),
     #[error("forbidden: {0}")]
     Forbidden(String),
     #[error("unauthorized: {0}")]
@@ -30,6 +32,7 @@ impl IntoResponse for AppError {
                 )
             }
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
+            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg.clone()),
             AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg.clone()),
             AppError::InternalServerError(msg) => {

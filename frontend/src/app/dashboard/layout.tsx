@@ -11,7 +11,7 @@ export default function DashboardLayout({
 }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [user, setUser] = useState<{ display_name: string; school_name: string } | null>(null);
+  const [user, setUser] = useState<{ display_name: string; school_name: string; user_type?: string } | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {

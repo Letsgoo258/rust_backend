@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT id, school_id, username, password_hash, display_name\n            FROM users\n            WHERE id = $1 AND status = 'ACTIVE'\n            ",
+  "query": "\n            SELECT id, school_id, username, password_hash, display_name, user_type::TEXT as \"user_type!\"\n            FROM users\n            WHERE id = $1 AND status = 'ACTIVE'\n            ",
   "describe": {
     "columns": [
       {
@@ -27,6 +27,11 @@
         "ordinal": 4,
         "name": "display_name",
         "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "user_type!",
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -39,8 +44,9 @@
       false,
       false,
       false,
-      true
+      true,
+      null
     ]
   },
-  "hash": "402d86aa800f6f03bd4171e43615012e40ebd58c813dbe89d6c42a275a10c442"
+  "hash": "68ce6b0adfeecb7fab1d9323e499dc80a91468b0b5485543691dd0b306a9088e"
 }

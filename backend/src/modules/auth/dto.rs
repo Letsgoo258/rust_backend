@@ -39,3 +39,17 @@ pub struct SetupResponse {
     pub school_id: uuid::Uuid,
     pub user_id: uuid::Uuid,
 }
+
+#[derive(serde::Deserialize)]
+pub struct CreateSchoolRequest {
+    pub name: String,
+    pub code: String,
+    pub email: Option<String>,
+    pub phone: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct CreateSchoolResponse {
+    pub message: String,
+    pub school_id: uuid::Uuid,
+}

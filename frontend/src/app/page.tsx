@@ -1,119 +1,61 @@
-"use client";
+import Link from "next/link";
 
-import { useState } from "react";
-
-export default function SetupPage() {
-  const [loading, setLoading] = useState(false);
-  const [success, setSuccess] = useState(false);
-  const [errorMsg, setErrorMsg] = useState("");
-
-  const handleSetup = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    setLoading(true);
-    setErrorMsg("");
-
-    const formData = new FormData(e.currentTarget);
-    const data = Object.fromEntries(formData.entries());
-
-    try {
-      const res = await fetch("/api/v1/auth/setup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-      });
-
-      if (!res.ok) {
-        const error = await res.json();
-        throw new Error(error.error || "Setup failed");
-      }
-
-      setSuccess(true);
-    } catch (err: any) {
-      setErrorMsg(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  if (success) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="w-full max-w-md bg-white/70 backdrop-blur-2xl border border-white/40 shadow-sm rounded-3xl p-10 text-center">
-          <div className="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-6 shadow-md">
-            <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-            </svg>
-          </div>
-          <h2 className="text-2xl font-semibold tracking-tight mb-2">Setup Complete</h2>
-          <p className="text-gray-500 text-sm mb-8">Your ERP has been initialized. You can now log in securely.</p>
-          <button onClick={() => window.location.href = '/login'} className="w-full bg-[#0071E3] hover:bg-[#0077ED] text-white font-medium py-3 rounded-xl transition-all">
-            Continue to Login
-          </button>
-        </div>
-      </div>
-    );
-  }
-
+export default function LandingPage() {
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden">
-      {/* Subtle background element */}
-      <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] rounded-full bg-blue-100 blur-[120px] opacity-60 z-0"></div>
-      
-      <div className="w-full max-w-md bg-white/60 backdrop-blur-2xl border border-white/50 shadow-[0_8px_40px_rgb(0,0,0,0.04)] rounded-3xl p-8 z-10 relative">
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-semibold tracking-tight text-gray-900 mb-2">Welcome</h1>
-          <p className="text-gray-500 text-sm">Initialize your ERAVAYA environment.</p>
+    <div className="min-h-screen bg-white text-gray-900 selection:bg-[#3366FF]/20 flex flex-col font-sans">
+      {/* Navbar */}
+      <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-xl border-b border-gray-100">
+        <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 bg-[#0C152E] rounded-md flex items-center justify-center">
+              <span className="text-white font-bold text-sm">E</span>
+            </div>
+            <span className="font-semibold tracking-tight text-lg">Eravaya</span>
+          </div>
+          <nav className="flex items-center gap-6">
+            <Link href="/login" className="text-sm font-medium text-gray-600 hover:text-gray-900 transition-colors">
+              Sign in
+            </Link>
+            <Link href="/login" className="text-sm font-medium bg-[#0C152E] text-white px-4 py-2 rounded-full hover:bg-gray-800 transition-all shadow-sm">
+              Get Started
+            </Link>
+          </nav>
         </div>
+      </header>
 
-        {errorMsg && (
-          <div className="mb-6 p-4 bg-red-50/50 backdrop-blur-md border border-red-100 text-red-600 text-sm rounded-xl text-center">
-            {errorMsg}
-          </div>
-        )}
-
-        <form onSubmit={handleSetup} className="space-y-4">
-          <div className="flex gap-4">
-            <div className="space-y-1 w-full">
-              <label className="text-xs font-medium text-gray-500 ml-1">School Name</label>
-              <input required name="school_name" type="text" placeholder="ERAVAYA Academy" className="w-full bg-white/50 border border-gray-200 focus:border-[#0071E3] focus:ring-1 focus:ring-[#0071E3] outline-none rounded-xl px-4 py-3 text-sm transition-all" />
-            </div>
-            <div className="space-y-1 w-full">
-              <label className="text-xs font-medium text-gray-500 ml-1">Code</label>
-              <input required name="school_code" type="text" placeholder="ERA01" className="w-full bg-white/50 border border-gray-200 focus:border-[#0071E3] focus:ring-1 focus:ring-[#0071E3] outline-none rounded-xl px-4 py-3 text-sm transition-all uppercase" />
-            </div>
-          </div>
-
-          <div className="flex gap-4 pt-2">
-            <div className="space-y-1 w-full">
-              <label className="text-xs font-medium text-gray-500 ml-1">Admin First Name</label>
-              <input required name="first_name" type="text" placeholder="Abhiram" className="w-full bg-white/50 border border-gray-200 focus:border-[#0071E3] focus:ring-1 focus:ring-[#0071E3] outline-none rounded-xl px-4 py-3 text-sm transition-all" />
-            </div>
-            <div className="space-y-1 w-full">
-              <label className="text-xs font-medium text-gray-500 ml-1">Last Name</label>
-              <input required name="last_name" type="text" placeholder="Admin" className="w-full bg-white/50 border border-gray-200 focus:border-[#0071E3] focus:ring-1 focus:ring-[#0071E3] outline-none rounded-xl px-4 py-3 text-sm transition-all" />
-            </div>
-          </div>
-
-          <div className="space-y-1 pt-2">
-            <label className="text-xs font-medium text-gray-500 ml-1">Admin Username</label>
-            <input required name="admin_username" type="text" placeholder="admin" className="w-full bg-white/50 border border-gray-200 focus:border-[#0071E3] focus:ring-1 focus:ring-[#0071E3] outline-none rounded-xl px-4 py-3 text-sm transition-all" />
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-xs font-medium text-gray-500 ml-1">Admin Email</label>
-            <input required name="admin_email" type="email" placeholder="admin@eravaya.com" className="w-full bg-white/50 border border-gray-200 focus:border-[#0071E3] focus:ring-1 focus:ring-[#0071E3] outline-none rounded-xl px-4 py-3 text-sm transition-all" />
-          </div>
-
-          <div className="space-y-1 pb-4">
-            <label className="text-xs font-medium text-gray-500 ml-1">Secure Password</label>
-            <input required name="admin_password" type="password" placeholder="••••••••" className="w-full bg-white/50 border border-gray-200 focus:border-[#0071E3] focus:ring-1 focus:ring-[#0071E3] outline-none rounded-xl px-4 py-3 text-sm transition-all" />
-          </div>
-
-          <button disabled={loading} type="submit" className="w-full bg-[#0071E3] hover:bg-[#0077ED] disabled:bg-[#0071E3]/50 text-white font-medium py-3 rounded-xl transition-all shadow-sm text-sm">
-            {loading ? "Initializing System..." : "Complete Setup"}
-          </button>
-        </form>
-      </div>
+      {/* Hero Section */}
+      <main className="flex-1 flex flex-col items-center justify-center text-center px-6 py-20 max-w-4xl mx-auto mt-10">
+        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 border border-blue-100 text-blue-700 text-xs font-medium mb-8">
+          <span className="relative flex h-2 w-2">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
+          </span>
+          Eravaya ERP 2.0 is now live
+        </div>
+        
+        <h1 className="text-5xl md:text-7xl font-bold tracking-tight text-gray-900 leading-[1.1] mb-6">
+          The operating system <br className="hidden md:block" />
+          <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#3366FF] to-[#00C2FF]">for modern schools.</span>
+        </h1>
+        
+        <p className="text-lg md:text-xl text-gray-500 max-w-2xl mb-10 leading-relaxed">
+          Manage admissions, academics, HR, and finances in one unified platform. 
+          Built for speed, designed for clarity.
+        </p>
+        
+        <div className="flex flex-col sm:flex-row items-center gap-4">
+          <Link href="/login" className="w-full sm:w-auto text-base font-medium bg-[#3366FF] hover:bg-[#2B57D9] text-white px-8 py-3.5 rounded-full transition-all shadow-lg shadow-blue-500/20">
+            Access Dashboard
+          </Link>
+          <a href="#features" className="w-full sm:w-auto text-base font-medium bg-white hover:bg-gray-50 text-gray-900 border border-gray-200 px-8 py-3.5 rounded-full transition-all shadow-sm">
+            Explore Features
+          </a>
+        </div>
+      </main>
+      
+      <footer className="mt-auto py-8 border-t border-gray-100 text-center text-sm text-gray-500">
+        <p>&copy; {new Date().getFullYear()} Eravaya Technologies. All rights reserved.</p>
+      </footer>
     </div>
   );
 }

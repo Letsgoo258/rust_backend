@@ -10,6 +10,7 @@ pub struct User {
     pub username: String,
     pub password_hash: String,
     pub display_name: Option<String>,
+    pub user_type: String,
 }
 
 impl AuthUser for User {
@@ -57,7 +58,7 @@ impl AuthnBackend for Backend {
         let user = sqlx::query_as!(
             User,
             r#"
-            SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name
+            SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.user_type::TEXT as "user_type!"
             FROM users u
             JOIN schools s ON u.school_id = s.id
             WHERE s.code = $1 AND u.username = $2 AND u.status = 'ACTIVE' AND s.status = 'ACTIVE'
@@ -84,7 +85,7 @@ impl AuthnBackend for Backend {
         let user = sqlx::query_as!(
             User,
             r#"
-            SELECT id, school_id, username, password_hash, display_name
+            SELECT id, school_id, username, password_hash, display_name, user_type::TEXT as "user_type!"
             FROM users
             WHERE id = $1 AND status = 'ACTIVE'
             "#,

@@ -3,7 +3,7 @@ use crate::{
     modules::auth::backend::AuthSession,
     modules::auth::{
         backend::Credentials,
-        dto::{LoginRequest, SetupRequest, SetupResponse},
+        dto::{LoginRequest, SetupRequest, SetupResponse, CreateSchoolRequest, CreateSchoolResponse},
     },
     state::AppState,
     utils::password::hash_password,
@@ -20,6 +20,7 @@ use serde_json::json;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/setup", post(setup_system))
+        .route("/schools", post(create_school))
         .route("/login", post(login))
         .route("/logout", post(logout))
         .route("/me", get(me))
@@ -163,4 +164,45 @@ async fn me(auth_session: AuthSession) -> Result<impl IntoResponse, AppError> {
         Some(user) => Ok(Json(user)),
         None => Err(AppError::Unauthorized("Not logged in".into())),
     }
+}
+
+
+#[tracing::instrument(err, skip(state, auth_session, payload))]
+async fn create_school(
+    auth_session: AuthSession,
+    State(state): State<AppState>,
+    Json(payload): Json<CreateSchoolRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let user = auth_session
+        .user
+        .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+    // Check if SUPER_ADMIN
+    let user_type: Option<String> = sqlx::query_scalar!("SELECT user_type::TEXT FROM users WHERE id = $1", user.id)
+        .fetch_one(&state.db)
+        .await?;
+        
+    if user_type.as_deref() != Some("SUPER_ADMIN") {
+        return Err(AppError::Forbidden("Only Super Admins can create schools".into()));
+    }
+
+    let school_id = sqlx::query_scalar!(
+        "INSERT INTO schools (name, code, email, phone, status) VALUES ($1, $2, $3, $4, 'ACTIVE') RETURNING id",
+        payload.name,
+        payload.code,
+        payload.email,
+        payload.phone
+    )
+    .fetch_one(&state.db)
+    .await?;
+
+    tracing::info!("Super Admin {} created new school: {}", user.username, payload.name);
+
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateSchoolResponse {
+            message: "School successfully created.".to_string(),
+            school_id,
+        }),
+    ))
 }

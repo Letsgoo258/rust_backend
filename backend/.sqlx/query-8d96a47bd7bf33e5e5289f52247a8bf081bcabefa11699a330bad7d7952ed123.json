@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.user_type::TEXT as \"user_type!\"\n            FROM users u\n            JOIN schools s ON u.school_id = s.id\n            WHERE (u.username = $1 OR u.email = $1) AND u.status = 'ACTIVE' AND s.status = 'ACTIVE'\n            LIMIT 1\n            ",
+  "query": "\n            SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.user_type::TEXT as \"user_type!\", u.email_verified, u.phone_verified, s.status::TEXT as \"school_status!\"\n            FROM users u\n            JOIN schools s ON u.school_id = s.id\n            WHERE u.id = $1 AND u.status = 'ACTIVE'\n            ",
   "describe": {
     "columns": [
       {
@@ -32,11 +32,26 @@
         "ordinal": 5,
         "name": "user_type!",
         "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "email_verified",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 7,
+        "name": "phone_verified",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 8,
+        "name": "school_status!",
+        "type_info": "Text"
       }
     ],
     "parameters": {
       "Left": [
-        "Text"
+        "Uuid"
       ]
     },
     "nullable": [
@@ -45,8 +60,11 @@
       false,
       false,
       true,
+      null,
+      false,
+      false,
       null
     ]
   },
-  "hash": "b92e66b1dbbf99858f24525dbfc05762680af2097809fc324224482b71002a04"
+  "hash": "8d96a47bd7bf33e5e5289f52247a8bf081bcabefa11699a330bad7d7952ed123"
 }

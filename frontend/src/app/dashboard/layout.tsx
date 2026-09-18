@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
+import { Input } from "@/components/ui/Input";
+import { Button } from "@/components/ui/Button";
 
 export default function DashboardLayout({
   children,
@@ -11,7 +13,7 @@ export default function DashboardLayout({
 }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [user, setUser] = useState<{ display_name?: string; username: string; school_id?: string; user_type?: string; email_verified?: boolean; phone_verified?: boolean } | null>(null);
+  const [user, setUser] = useState<{ display_name?: string; username: string; school_id?: string; user_type?: string; email_verified?: boolean; phone_verified?: boolean; school_status?: string } | null>(null);
   
   const [verifyingEmail, setVerifyingEmail] = useState(false);
   const [verifyingPhone, setVerifyingPhone] = useState(false);
@@ -28,6 +30,26 @@ export default function DashboardLayout({
       }
     } finally {
       setVerifyingEmail(false);
+    }
+  };
+
+  
+  const handleSetupSchool = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const formData = new FormData(e.currentTarget);
+    const payload = Object.fromEntries(formData.entries());
+    
+    try {
+      const res = await fetch("/api/v1/auth/schools/setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        setUser(prev => prev ? { ...prev, school_status: "ACTIVE" } : null);
+      }
+    } catch (err) {
+      console.error(err);
     }
   };
 
@@ -257,7 +279,38 @@ export default function DashboardLayout({
               </div>
             )}
 
-            {children}
+            {user?.school_status === 'PENDING_SETUP' && user?.email_verified && user?.phone_verified ? (
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200/60 p-8 max-w-3xl mx-auto">
+                <h2 className="text-xl font-bold text-gray-900 mb-2">Complete School Profile</h2>
+                <p className="text-sm text-gray-500 mb-8">Before you can access your dashboard, please complete your school's profile.</p>
+                <form onSubmit={handleSetupSchool} className="space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <Input required name="short_name" type="text" label="Short Name (e.g. GWH)" />
+                    <Input name="website" type="url" label="Website URL" placeholder="https://" />
+                  </div>
+                  
+                  <h3 className="text-md font-medium text-gray-900 border-b pb-2 pt-4">Location Details</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="md:col-span-2">
+                      <Input required name="address_line_1" type="text" label="Address Line 1" />
+                    </div>
+                    <div className="md:col-span-2">
+                      <Input name="address_line_2" type="text" label="Address Line 2 (Optional)" />
+                    </div>
+                    <Input required name="city" type="text" label="City" />
+                    <Input required name="district" type="text" label="District" />
+                    <Input required name="state" type="text" label="State/Province" />
+                    <Input required name="country" type="text" label="Country" />
+                    <Input required name="postal_code" type="text" label="Postal/Zip Code" />
+                    <Input required name="timezone" type="text" label="Timezone" defaultValue="UTC" />
+                  </div>
+                  
+                  <div className="pt-6">
+                    <Button type="submit" className="w-full">Save & Activate School</Button>
+                  </div>
+                </form>
+              </div>
+            ) : children}
           </div>
           
           {/* Phone Verification Modal */}

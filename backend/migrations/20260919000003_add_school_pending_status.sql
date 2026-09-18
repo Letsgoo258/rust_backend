@@ -1,0 +1,1 @@
+ALTER TYPE school_status ADD VALUE 'PENDING_SETUP';

@@ -26,6 +26,7 @@ pub fn router() -> Router<AppState> {
         .route("/me", get(me))
         .route("/verify/email", post(verify_email))
         .route("/verify/phone", post(verify_phone))
+        .route("/schools/setup", post(setup_school_details))
 }
 
 /// Idempotent setup endpoint to create the very first School and Super Admin.
@@ -314,8 +315,8 @@ async fn verify_email(
     // Refresh session user (simplistic way)
     if let Ok(Some(mut updated_user)) = sqlx::query_as!(
         crate::modules::auth::backend::User,
-        r#"SELECT id, school_id, username, password_hash, display_name, user_type::TEXT as "user_type!", email_verified, phone_verified
-           FROM users WHERE id = $1"#,
+        r#"SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.user_type::TEXT as "user_type!", u.email_verified, u.phone_verified, s.status::TEXT as "school_status!"
+           FROM users u JOIN schools s ON u.school_id = s.id WHERE u.id = $1"#,
         user.id
     ).fetch_optional(&state.db).await {
         // Log in again to update session
@@ -346,12 +347,77 @@ async fn verify_phone(
         
     if let Ok(Some(mut updated_user)) = sqlx::query_as!(
         crate::modules::auth::backend::User,
-        r#"SELECT id, school_id, username, password_hash, display_name, user_type::TEXT as "user_type!", email_verified, phone_verified
-           FROM users WHERE id = $1"#,
+        r#"SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.user_type::TEXT as "user_type!", u.email_verified, u.phone_verified, s.status::TEXT as "school_status!"
+           FROM users u JOIN schools s ON u.school_id = s.id WHERE u.id = $1"#,
         user.id
     ).fetch_optional(&state.db).await {
         let _ = auth_session.login(&updated_user).await;
     }
 
     Ok((StatusCode::OK, Json(serde_json::json!({ "message": "Phone verified successfully" }))))
+}
+
+#[derive(serde::Deserialize)]
+pub struct SchoolSetupRequest {
+    pub short_name: Option<String>,
+    pub website: Option<String>,
+    pub address_line_1: String,
+    pub address_line_2: Option<String>,
+    pub city: String,
+    pub district: String,
+    pub state: String,
+    pub country: String,
+    pub postal_code: String,
+    pub timezone: String,
+}
+
+#[tracing::instrument(err, skip(state, auth_session, payload))]
+async fn setup_school_details(
+    mut auth_session: AuthSession,
+    State(state): State<AppState>,
+    Json(payload): Json<SchoolSetupRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let user = auth_session
+        .user
+        .clone()
+        .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+    // Only SCHOOL_ADMIN can do this
+    if user.user_type != "SCHOOL_ADMIN" {
+        return Err(AppError::Forbidden("Only School Admins can perform setup".into()));
+    }
+
+    // Must have verified email and phone
+    if !user.email_verified || !user.phone_verified {
+        return Err(AppError::BadRequest("Must verify email and phone first".into()));
+    }
+
+    sqlx::query!(
+        "UPDATE schools SET short_name = $1, website = $2, address_line_1 = $3, address_line_2 = $4, city = $5, district = $6, state = $7, country = $8, postal_code = $9, timezone = $10, status = 'ACTIVE' WHERE id = $11",
+        payload.short_name,
+        payload.website,
+        payload.address_line_1,
+        payload.address_line_2,
+        payload.city,
+        payload.district,
+        payload.state,
+        payload.country,
+        payload.postal_code,
+        payload.timezone,
+        user.school_id
+    )
+    .execute(&state.db)
+    .await?;
+
+    // Refresh session
+    if let Ok(Some(mut updated_user)) = sqlx::query_as!(
+        crate::modules::auth::backend::User,
+        r#"SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.user_type::TEXT as "user_type!", u.email_verified, u.phone_verified, s.status::TEXT as "school_status!"
+           FROM users u JOIN schools s ON u.school_id = s.id WHERE u.id = $1"#,
+        user.id
+    ).fetch_optional(&state.db).await {
+        let _ = auth_session.login(&updated_user).await;
+    }
+
+    Ok((StatusCode::OK, Json(serde_json::json!({ "message": "School setup completed" }))))
 }

@@ -13,6 +13,7 @@ pub struct User {
     pub user_type: String,
     pub email_verified: bool,
     pub phone_verified: bool,
+    pub school_status: String,
 }
 
 impl AuthUser for User {
@@ -59,10 +60,10 @@ impl AuthnBackend for Backend {
         let user = sqlx::query_as!(
             User,
             r#"
-            SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.user_type::TEXT as "user_type!", u.email_verified, u.phone_verified
+            SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.user_type::TEXT as "user_type!", u.email_verified, u.phone_verified, s.status::TEXT as "school_status!"
             FROM users u
             JOIN schools s ON u.school_id = s.id
-            WHERE (u.username = $1 OR u.email = $1) AND u.status = 'ACTIVE' AND s.status = 'ACTIVE'
+            WHERE (u.username = $1 OR u.email = $1) AND u.status = 'ACTIVE' AND s.status IN ('ACTIVE', 'PENDING_SETUP')
             LIMIT 1
             "#,
             creds.username
@@ -86,9 +87,10 @@ impl AuthnBackend for Backend {
         let user = sqlx::query_as!(
             User,
             r#"
-            SELECT id, school_id, username, password_hash, display_name, user_type::TEXT as "user_type!", email_verified, phone_verified
-            FROM users
-            WHERE id = $1 AND status = 'ACTIVE'
+            SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.user_type::TEXT as "user_type!", u.email_verified, u.phone_verified, s.status::TEXT as "school_status!"
+            FROM users u
+            JOIN schools s ON u.school_id = s.id
+            WHERE u.id = $1 AND u.status = 'ACTIVE'
             "#,
             user_id
         )

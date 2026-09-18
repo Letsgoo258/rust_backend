@@ -17,7 +17,7 @@ use std::panic;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Initialize structured concurrency tracing (Console + File + Grafana OpenTelemetry)
     dotenvy::dotenv().ok();
-    utils::telemetry::init_telemetry()?;
+    let _provider = utils::telemetry::init_telemetry()?;
 
     // 2. Set up global panic hook to prevent silent thread deaths
     panic::set_hook(Box::new(|panic_info| {

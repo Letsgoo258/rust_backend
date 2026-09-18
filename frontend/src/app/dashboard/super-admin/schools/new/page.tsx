@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/Button";
 
 export default function NewSchoolPage() {
   const router = useRouter();
@@ -83,9 +84,9 @@ export default function NewSchoolPage() {
           </div>
 
           <div className="pt-4 border-t border-gray-100 flex justify-end">
-            <button disabled={loading} type="submit" className="bg-[#3366FF] hover:bg-[#2B57D9] disabled:bg-[#3366FF]/70 text-white font-medium py-2 px-6 rounded-lg transition-all text-sm shadow-sm">
-              {loading ? "Creating..." : "Create School"}
-            </button>
+            <Button type="submit" loading={loading} loadingText="Creating...">
+              Create School
+            </Button>
           </div>
         </form>
       )}

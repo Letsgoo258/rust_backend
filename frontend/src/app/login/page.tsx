@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
+import { Button } from "@/components/ui/Button";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -123,9 +124,9 @@ export default function LoginPage() {
               />
             </div>
 
-            <button disabled={loading} type="submit" className="w-full bg-[#3366FF] hover:bg-[#2B57D9] disabled:bg-[#3366FF]/70 text-white font-semibold py-3 rounded-lg transition-all text-[15px] shadow-sm mt-2">
-              {loading ? "Continuing..." : "Continue"}
-            </button>
+            <Button type="submit" loading={loading} loadingText="Continuing..." fullWidth className="mt-2">
+              Continue
+            </Button>
           </form>
 
           <div className="flex items-center my-6">

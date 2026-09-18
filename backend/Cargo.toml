@@ -21,14 +21,14 @@ axum-login = "0.15"
 tower-sessions = "0.12"
 tower-sessions-sqlx-store = { version = "0.13", features = ["postgres"] }
 thiserror = "1.0"
-reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls-native-roots"] }
 lettre = { version = "0.11", default-features = false, features = ["tokio1", "tokio1-rustls-tls", "builder", "smtp-transport"] }
 time = "0.3.55"
 async-trait = "0.1.92"
 tracing-appender = "0.2.5"
 opentelemetry = "0.32.0"
 opentelemetry_sdk = { version = "0.32.1", features = ["rt-tokio"] }
-opentelemetry-otlp = { version = "0.32.0", features = ["http-proto", "reqwest-client", "reqwest-rustls"] }
+opentelemetry-otlp = { version = "0.32.0", features = ["http-proto", "reqwest-blocking-client"] }
 tracing-opentelemetry = "0.33.0"
 
 [lib]

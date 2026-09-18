@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
+import { Input } from "@/components/ui/Input";
 
 export default function NewSchoolPage() {
   const router = useRouter();
@@ -66,25 +67,10 @@ export default function NewSchoolPage() {
             <div>
               <h3 className="text-lg font-medium text-gray-900 border-b pb-2 mb-4">School Details</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="space-y-1.5">
-                  <label className="block text-sm font-medium text-gray-700">School Name</label>
-                  <input required name="name" type="text" placeholder="Greenwood High" className="w-full bg-white border border-gray-200 focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF] outline-none rounded-lg px-3 py-2 text-sm" />
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="block text-sm font-medium text-gray-700">School Code (Unique)</label>
-                  <input required name="code" type="text" placeholder="GWH01" className="w-full bg-white border border-gray-200 focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF] outline-none rounded-lg px-3 py-2 text-sm uppercase" />
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="block text-sm font-medium text-gray-700">School Email (Optional)</label>
-                  <input name="email" type="email" placeholder="contact@greenwood.edu" className="w-full bg-white border border-gray-200 focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF] outline-none rounded-lg px-3 py-2 text-sm" />
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="block text-sm font-medium text-gray-700">Phone Number (Optional)</label>
-                  <input name="phone" type="tel" placeholder="+1 234 567 8900" className="w-full bg-white border border-gray-200 focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF] outline-none rounded-lg px-3 py-2 text-sm" />
-                </div>
+                <Input required name="name" type="text" label="School Name" placeholder="Greenwood High" />
+                <Input required name="code" type="text" label="School Code (Unique)" placeholder="GWH01" className="uppercase" />
+                <Input name="email" type="email" label="School Email (Optional)" placeholder="contact@greenwood.edu" />
+                <Input name="phone" type="tel" label="Phone Number (Optional)" placeholder="+1 234 567 8900" />
               </div>
             </div>
 
@@ -93,29 +79,12 @@ export default function NewSchoolPage() {
               <p className="text-sm text-gray-500 mb-4">This user will log in to configure the rest of the school's data.</p>
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="space-y-1.5">
-                  <label className="block text-sm font-medium text-gray-700">First Name</label>
-                  <input required name="admin_first_name" type="text" placeholder="Jane" className="w-full bg-white border border-gray-200 focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF] outline-none rounded-lg px-3 py-2 text-sm" />
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="block text-sm font-medium text-gray-700">Last Name</label>
-                  <input required name="admin_last_name" type="text" placeholder="Doe" className="w-full bg-white border border-gray-200 focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF] outline-none rounded-lg px-3 py-2 text-sm" />
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="block text-sm font-medium text-gray-700">Admin Username</label>
-                  <input required name="admin_username" type="text" placeholder="admin_gwh" className="w-full bg-white border border-gray-200 focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF] outline-none rounded-lg px-3 py-2 text-sm" />
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="block text-sm font-medium text-gray-700">Admin Email</label>
-                  <input required name="admin_email" type="email" placeholder="jane@greenwood.edu" className="w-full bg-white border border-gray-200 focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF] outline-none rounded-lg px-3 py-2 text-sm" />
-                </div>
-
-                <div className="space-y-1.5 md:col-span-2">
-                  <label className="block text-sm font-medium text-gray-700">Temporary Password</label>
-                  <input required name="admin_password" type="password" placeholder="••••••••" className="w-full bg-white border border-gray-200 focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF] outline-none rounded-lg px-3 py-2 text-sm" />
+                <Input required name="admin_first_name" type="text" label="First Name" placeholder="Jane" />
+                <Input required name="admin_last_name" type="text" label="Last Name" placeholder="Doe" />
+                <Input required name="admin_username" type="text" label="Admin Username" placeholder="admin_gwh" />
+                <Input required name="admin_email" type="email" label="Admin Email" placeholder="jane@greenwood.edu" />
+                <div className="md:col-span-2">
+                  <Input required name="admin_password" type="password" label="Temporary Password" placeholder="••••••••" />
                 </div>
               </div>
             </div>

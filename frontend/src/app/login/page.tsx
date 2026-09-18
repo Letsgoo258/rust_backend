@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { Button } from "@/components/ui/Button";
+import { Input } from "@/components/ui/Input";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -104,25 +105,19 @@ export default function LoginPage() {
           )}
 
           <form onSubmit={handleLogin} className="space-y-4">
-            <div>
-              <input 
-                required 
-                name="username" 
-                type="text" 
-                placeholder="Enter your email or username" 
-                className="w-full bg-white border border-gray-300 focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF] outline-none rounded-lg px-4 py-3 text-[15px] transition-all placeholder:text-gray-400" 
-              />
-            </div>
+            <Input 
+              required 
+              name="username" 
+              type="text" 
+              placeholder="Enter your email or username" 
+            />
 
-            <div>
-              <input 
-                required 
-                name="password" 
-                type="password" 
-                placeholder="Password" 
-                className="w-full bg-white border border-gray-300 focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF] outline-none rounded-lg px-4 py-3 text-[15px] transition-all placeholder:text-gray-400" 
-              />
-            </div>
+            <Input 
+              required 
+              name="password" 
+              type="password" 
+              placeholder="Password" 
+            />
 
             <Button type="submit" loading={loading} loadingText="Continuing..." fullWidth className="mt-2">
               Continue

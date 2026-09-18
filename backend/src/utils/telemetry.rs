@@ -1,4 +1,3 @@
-use opentelemetry::trace::TracerProvider as _;
 use opentelemetry::{global, KeyValue};
 use opentelemetry_otlp::SpanExporter;
 use opentelemetry_sdk::{trace::SdkTracerProvider, Resource};

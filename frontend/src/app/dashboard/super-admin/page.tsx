@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 
 interface School {
@@ -19,6 +20,23 @@ interface StatsResponse {
 }
 
 export default function SuperAdminDashboard() {
+  const router = useRouter();
+
+  const handleImpersonate = async (schoolId: string) => {
+    try {
+      const res = await fetch("/api/v1/auth/switch-tenant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ school_id: schoolId })
+      });
+      if (res.ok) {
+        window.location.href = "/dashboard";
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   const [stats, setStats] = useState<StatsResponse | null>(null);
   const [loading, setLoading] = useState(true);
 

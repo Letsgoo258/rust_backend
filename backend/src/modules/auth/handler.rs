@@ -27,6 +27,7 @@ pub fn router() -> Router<AppState> {
         .route("/verify/email", post(verify_email))
         .route("/verify/phone", post(verify_phone))
         .route("/schools/setup", post(setup_school_details))
+        .route("/switch-tenant", post(switch_tenant))
 }
 
 /// Idempotent setup endpoint to create the very first School and Super Admin.
@@ -420,4 +421,48 @@ async fn setup_school_details(
     }
 
     Ok((StatusCode::OK, Json(serde_json::json!({ "message": "School setup completed" }))))
+}
+
+
+
+#[derive(serde::Deserialize)]
+pub struct SwitchTenantRequest {
+    pub school_id: uuid::Uuid,
+}
+
+#[tracing::instrument(err, skip(state, auth_session, payload))]
+async fn switch_tenant(
+    mut auth_session: AuthSession,
+    State(state): State<AppState>,
+    Json(payload): Json<SwitchTenantRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let user = auth_session
+        .user
+        .clone()
+        .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+    // Only SUPER_ADMIN can switch tenants
+    if user.user_type != "SUPER_ADMIN" {
+        return Err(AppError::Forbidden("Only Super Admins can switch tenants".into()));
+    }
+
+    // Ensure the target school exists and is active
+    let school_status = sqlx::query_scalar!("SELECT status::TEXT as \"status!\" FROM schools WHERE id = $1", payload.school_id)
+        .fetch_optional(&state.db)
+        .await?;
+
+    if school_status.is_none() {
+        return Err(AppError::NotFound("School not found".into()));
+    }
+
+    // Create a modified user object with the new school_id
+    let mut updated_user = user.clone();
+    updated_user.school_id = payload.school_id;
+
+    // We don't update the database! We just update the session cookie!
+    // The AuthSession backend implementation just serializes this User struct.
+    // So logging in with this modified struct will overwrite the session cookie.
+    let _ = auth_session.login(&updated_user).await;
+
+    Ok((StatusCode::OK, Json(serde_json::json!({ "message": "Switched tenant successfully" }))))
 }

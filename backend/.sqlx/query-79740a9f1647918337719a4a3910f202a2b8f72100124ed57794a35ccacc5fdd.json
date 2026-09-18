@@ -1,0 +1,76 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, school_id, user_id, admission_number, first_name, last_name, date_of_birth, gender, blood_group, status as \"status!\"\n        FROM students\n        WHERE school_id = $1\n        ORDER BY first_name ASC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "school_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "user_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "admission_number",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "first_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "last_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "date_of_birth",
+        "type_info": "Date"
+      },
+      {
+        "ordinal": 7,
+        "name": "gender",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 8,
+        "name": "blood_group",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 9,
+        "name": "status!",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "79740a9f1647918337719a4a3910f202a2b8f72100124ed57794a35ccacc5fdd"
+}

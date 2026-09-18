@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct LoginRequest {
     pub school_code: String,
     pub username: String,
@@ -19,4 +19,22 @@ pub struct UserDto {
     pub school_id: uuid::Uuid,
     pub username: String,
     pub display_name: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+pub struct SetupRequest {
+    pub school_name: String,
+    pub school_code: String,
+    pub admin_username: String,
+    pub admin_email: String,
+    pub admin_password: String,
+    pub first_name: String,
+    pub last_name: String,
+}
+
+#[derive(serde::Serialize)]
+pub struct SetupResponse {
+    pub message: String,
+    pub school_id: uuid::Uuid,
+    pub user_id: uuid::Uuid,
 }

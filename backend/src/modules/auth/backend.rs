@@ -3,7 +3,7 @@ use axum_login::{AuthUser, AuthnBackend, UserId};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-#[derive(Clone, Debug, sqlx::FromRow)]
+#[derive(Clone, Debug, sqlx::FromRow, serde::Serialize)]
 pub struct User {
     pub id: Uuid,
     pub school_id: Uuid,

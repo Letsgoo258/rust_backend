@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO students (school_id, admission_number, first_name, last_name, date_of_birth, gender, blood_group, status)\n        VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACTIVE')\n        RETURNING id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Date",
+        "Varchar",
+        "Varchar"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "13b4dd19d5ac103c3c9f83f586f9c119744483d299cc5538d73d25ce883ba031"
+}

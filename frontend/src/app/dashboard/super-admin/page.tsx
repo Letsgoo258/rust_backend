@@ -107,38 +107,6 @@ export default function SuperAdminDashboard() {
         </div>
       </div>
 
-      {/* Promotional Banner (Key Updates) */}
-      <div>
-        <h2 className="text-lg font-bold text-gray-900 mb-4">Key Updates - Platform News</h2>
-        <div className="w-full bg-gradient-to-r from-[#F0F4FF] to-[#E5EDF9] rounded-xl overflow-hidden flex flex-col md:flex-row items-center p-8 relative">
-          <div className="flex-1 relative z-10">
-            <div className="flex items-center gap-2 mb-3">
-              <span className="text-[#3366FF] font-bold italic tracking-tight">Eravaya</span>
-              <span className="bg-[#3366FF] text-white text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider">Academics</span>
-            </div>
-            <h3 className="text-2xl font-bold text-[#0C152E] leading-tight mb-3">
-              Modern grading and<br/>report cards, automated
-            </h3>
-            <p className="text-sm text-gray-600 max-w-sm mb-6">
-              Track student performance, generate transcripts, and engage parents effortlessly.
-            </p>
-          </div>
-          
-          <div className="flex-1 flex justify-center md:justify-end gap-6 relative z-10 w-full md:w-auto">
-            <div className="space-y-2 hidden lg:block">
-              <div className="bg-[#EAEFFD] text-[#3366FF] border border-[#3366FF]/20 text-xs font-medium px-4 py-1.5 rounded-full text-center">Configurable grading scales</div>
-              <div className="bg-[#EAEFFD] text-[#3366FF] border border-[#3366FF]/20 text-xs font-medium px-4 py-1.5 rounded-full text-center">One-click report cards</div>
-              <div className="bg-[#EAEFFD] text-[#3366FF] border border-[#3366FF]/20 text-xs font-medium px-4 py-1.5 rounded-full text-center">Included with Standard Plan</div>
-            </div>
-            <div className="flex items-center">
-              <button className="bg-[#3366FF] hover:bg-[#2B57D9] text-white font-bold py-3 px-6 rounded-lg shadow-sm transition-all text-sm w-full md:w-auto">
-                Explore Module
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
       {/* Tenants Table */}
       <div>
         <div className="flex items-center justify-between mb-4">

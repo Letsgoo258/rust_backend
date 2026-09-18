@@ -21,10 +21,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. Set up global panic hook to prevent silent thread deaths
     panic::set_hook(Box::new(|panic_info| {
-        tracing::error!(
-            "CRITICAL SYSTEM FAILURE: Thread panicked! Details: {:?}",
-            panic_info
-        );
+        let location = panic_info.location().map(|l| l.to_string()).unwrap_or_else(|| "unknown".into());
+        let msg = match panic_info.payload().downcast_ref::<&str>() {
+            Some(s) => *s,
+            None => match panic_info.payload().downcast_ref::<String>() {
+                Some(s) => &s[..],
+                None => "Box<dyn Any>",
+            }
+        };
+        tracing::error!("PANIC at {}: {}", location, msg);
     }));
 
     tracing::info!("Starting ERAVAYA ERP backend initialization...");
@@ -53,7 +58,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nest("/api/v1/auth", modules::auth::router())
         .nest("/api/v1/sis", modules::sis::handler::router())
         .layer(auth_layer)
-        .layer(tower_http::trace::TraceLayer::new_for_http())
+        
+        .layer(
+            tower_http::trace::TraceLayer::new_for_http()
+                .on_response(
+                    |response: &axum::response::Response, latency: std::time::Duration, _span: &tracing::Span| {
+                        if response.status().is_server_error() || response.status().is_client_error() {
+                            tracing::error!(
+                                latency_ms = latency.as_millis(),
+                                status = response.status().as_u16(),
+                                otel.status_code = "ERROR",
+                                "HTTP Request failed"
+                            );
+                        } else {
+                            tracing::info!(
+                                latency_ms = latency.as_millis(),
+                                status = response.status().as_u16(),
+                                "HTTP Request succeeded"
+                            );
+                        }
+                    },
+                ),
+        )
         .with_state(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));

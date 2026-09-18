@@ -46,7 +46,7 @@ async fn create_student(
     )
     .fetch_one(&state.db)
     .await
-    .map_err(|e| AppError::Database(e.to_string()))?;
+    ?;
 
     Ok((
         StatusCode::CREATED,
@@ -77,7 +77,7 @@ async fn list_students(
     )
     .fetch_all(&state.db)
     .await
-    .map_err(|e| AppError::Database(e.to_string()))?;
+    ?;
 
     Ok(Json(students))
 }
@@ -103,7 +103,7 @@ async fn get_student(
     )
     .fetch_optional(&state.db)
     .await
-    .map_err(|e| AppError::Database(e.to_string()))?;
+    ?;
 
     match student {
         Some(s) => Ok(Json(s)),
@@ -134,7 +134,7 @@ async fn create_guardian(
     )
     .fetch_one(&state.db)
     .await
-    .map_err(|e| AppError::Database(e.to_string()))?;
+    ?;
 
     Ok((
         StatusCode::CREATED,

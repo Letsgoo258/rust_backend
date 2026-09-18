@@ -34,7 +34,7 @@ async fn setup_system(
     let school_count: i64 = sqlx::query_scalar!("SELECT COUNT(*) FROM schools")
         .fetch_one(&state.db)
         .await
-        .map_err(|e| AppError::Database(e.to_string()))?
+        ?
         .unwrap_or(0);
 
     if school_count > 0 {
@@ -51,7 +51,7 @@ async fn setup_system(
         .db
         .begin()
         .await
-        .map_err(|e| AppError::Database(e.to_string()))?;
+        ?;
 
     // Create the School
     let school_id = sqlx::query_scalar!(
@@ -61,7 +61,7 @@ async fn setup_system(
     )
     .fetch_one(&mut *tx)
     .await
-    .map_err(|e| AppError::Database(e.to_string()))?;
+    ?;
 
     // Create the Super Admin Role
     let role_id = sqlx::query_scalar!(
@@ -71,7 +71,7 @@ async fn setup_system(
     )
     .fetch_one(&mut *tx)
     .await
-    .map_err(|e| AppError::Database(e.to_string()))?;
+    ?;
 
     // Create the Admin User
     let user_id = sqlx::query_scalar!(
@@ -86,7 +86,7 @@ async fn setup_system(
     )
     .fetch_one(&mut *tx)
     .await
-    .map_err(|e| AppError::Database(e.to_string()))?;
+    ?;
 
     // Assign Role to User
     sqlx::query!(
@@ -96,11 +96,11 @@ async fn setup_system(
     )
     .execute(&mut *tx)
     .await
-    .map_err(|e| AppError::Database(e.to_string()))?;
+    ?;
 
     tx.commit()
         .await
-        .map_err(|e| AppError::Database(e.to_string()))?;
+        ?;
 
     tracing::info!(
         "System successfully initialized with school '{}' and admin user '{}'",

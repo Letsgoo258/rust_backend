@@ -8,8 +8,12 @@ pub fn init_telemetry() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Setup global error handler to catch export failures
 
     // 2. Parse Environment Variables explicitly
-    let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
+    let mut endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
         .unwrap_or_else(|_| "http://localhost:4318/v1/traces".to_string());
+
+    if !endpoint.ends_with("/v1/traces") {
+        endpoint.push_str("/v1/traces");
+    }
 
     let mut headers = HashMap::new();
     if let Ok(h) = std::env::var("OTEL_EXPORTER_OTLP_HEADERS") {

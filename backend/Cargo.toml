@@ -21,7 +21,7 @@ axum-login = "0.15"
 tower-sessions = "0.12"
 tower-sessions-sqlx-store = { version = "0.13", features = ["postgres"] }
 thiserror = "1.0"
-reqwest = { version = "0.12", features = ["json", "rustls-tls-native-roots"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls-native-roots", "blocking"] }
 lettre = { version = "0.11", default-features = false, features = ["tokio1", "tokio1-rustls-tls", "builder", "smtp-transport"] }
 time = "0.3.55"
 async-trait = "0.1.92"

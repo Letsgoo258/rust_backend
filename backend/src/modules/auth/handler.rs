@@ -20,7 +20,7 @@ use serde_json::json;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/setup", post(setup_system))
-        .route("/schools", post(create_school))
+        .route("/schools", get(get_schools).post(create_school))
         .route("/login", post(login))
         .route("/logout", post(logout))
         .route("/me", get(me))
@@ -240,6 +240,51 @@ async fn create_school(
         Json(CreateSchoolResponse {
             message: "School and Admin Account successfully created.".to_string(),
             school_id,
+        }),
+    ))
+}
+
+#[tracing::instrument(err, skip(state, auth_session))]
+async fn get_schools(
+    auth_session: AuthSession,
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, AppError> {
+    let user = auth_session
+        .user
+        .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+    // Check if SUPER_ADMIN
+    let user_type: Option<String> = sqlx::query_scalar!("SELECT user_type::TEXT FROM users WHERE id = $1", user.id)
+        .fetch_one(&state.db)
+        .await?;
+        
+    if user_type.as_deref() != Some("SUPER_ADMIN") {
+        return Err(AppError::Forbidden("Only Super Admins can view platform stats".into()));
+    }
+
+    let total_users: i64 = sqlx::query_scalar!("SELECT COUNT(*) FROM users")
+        .fetch_one(&state.db)
+        .await?
+        .unwrap_or(0);
+
+    let active_tenants: i64 = sqlx::query_scalar!("SELECT COUNT(*) FROM schools WHERE status = 'ACTIVE'")
+        .fetch_one(&state.db)
+        .await?
+        .unwrap_or(0);
+
+    let schools = sqlx::query_as!(
+        crate::modules::auth::dto::SchoolDto,
+        "SELECT id, name, code, status::TEXT as \"status!\", created_at::TEXT as \"created_at!\" FROM schools ORDER BY created_at DESC"
+    )
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok((
+        StatusCode::OK,
+        Json(crate::modules::auth::dto::SuperAdminStatsResponse {
+            total_users,
+            active_tenants,
+            schools,
         }),
     ))
 }

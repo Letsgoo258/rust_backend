@@ -57,3 +57,19 @@ pub struct CreateSchoolResponse {
     pub message: String,
     pub school_id: uuid::Uuid,
 }
+
+#[derive(serde::Serialize)]
+pub struct SchoolDto {
+    pub id: uuid::Uuid,
+    pub name: String,
+    pub code: String,
+    pub status: String,
+    pub created_at: String,
+}
+
+#[derive(serde::Serialize)]
+pub struct SuperAdminStatsResponse {
+    pub total_users: i64,
+    pub active_tenants: i64,
+    pub schools: Vec<SchoolDto>,
+}

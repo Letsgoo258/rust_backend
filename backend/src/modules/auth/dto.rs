@@ -45,6 +45,11 @@ pub struct CreateSchoolRequest {
     pub code: String,
     pub email: Option<String>,
     pub phone: Option<String>,
+    pub admin_username: String,
+    pub admin_email: String,
+    pub admin_password: String,
+    pub admin_first_name: String,
+    pub admin_last_name: String,
 }
 
 #[derive(serde::Serialize)]

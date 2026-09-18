@@ -61,26 +61,65 @@ export default function NewSchoolPage() {
             </div>
           )}
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="space-y-1.5">
-              <label className="block text-sm font-medium text-gray-700">School Name</label>
-              <input required name="name" type="text" placeholder="Greenwood High" className="w-full bg-white border border-gray-200 focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF] outline-none rounded-lg px-3 py-2 text-sm" />
+          <div className="space-y-6">
+            
+            <div>
+              <h3 className="text-lg font-medium text-gray-900 border-b pb-2 mb-4">School Details</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="space-y-1.5">
+                  <label className="block text-sm font-medium text-gray-700">School Name</label>
+                  <input required name="name" type="text" placeholder="Greenwood High" className="w-full bg-white border border-gray-200 focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF] outline-none rounded-lg px-3 py-2 text-sm" />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-sm font-medium text-gray-700">School Code (Unique)</label>
+                  <input required name="code" type="text" placeholder="GWH01" className="w-full bg-white border border-gray-200 focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF] outline-none rounded-lg px-3 py-2 text-sm uppercase" />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-sm font-medium text-gray-700">School Email (Optional)</label>
+                  <input name="email" type="email" placeholder="contact@greenwood.edu" className="w-full bg-white border border-gray-200 focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF] outline-none rounded-lg px-3 py-2 text-sm" />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-sm font-medium text-gray-700">Phone Number (Optional)</label>
+                  <input name="phone" type="tel" placeholder="+1 234 567 8900" className="w-full bg-white border border-gray-200 focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF] outline-none rounded-lg px-3 py-2 text-sm" />
+                </div>
+              </div>
             </div>
 
-            <div className="space-y-1.5">
-              <label className="block text-sm font-medium text-gray-700">School Code (Unique)</label>
-              <input required name="code" type="text" placeholder="GWH01" className="w-full bg-white border border-gray-200 focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF] outline-none rounded-lg px-3 py-2 text-sm uppercase" />
+            <div>
+              <h3 className="text-lg font-medium text-gray-900 border-b pb-2 mb-4">School Admin Account</h3>
+              <p className="text-sm text-gray-500 mb-4">This user will log in to configure the rest of the school's data.</p>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="space-y-1.5">
+                  <label className="block text-sm font-medium text-gray-700">First Name</label>
+                  <input required name="admin_first_name" type="text" placeholder="Jane" className="w-full bg-white border border-gray-200 focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF] outline-none rounded-lg px-3 py-2 text-sm" />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-sm font-medium text-gray-700">Last Name</label>
+                  <input required name="admin_last_name" type="text" placeholder="Doe" className="w-full bg-white border border-gray-200 focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF] outline-none rounded-lg px-3 py-2 text-sm" />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-sm font-medium text-gray-700">Admin Username</label>
+                  <input required name="admin_username" type="text" placeholder="admin_gwh" className="w-full bg-white border border-gray-200 focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF] outline-none rounded-lg px-3 py-2 text-sm" />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-sm font-medium text-gray-700">Admin Email</label>
+                  <input required name="admin_email" type="email" placeholder="jane@greenwood.edu" className="w-full bg-white border border-gray-200 focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF] outline-none rounded-lg px-3 py-2 text-sm" />
+                </div>
+
+                <div className="space-y-1.5 md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700">Temporary Password</label>
+                  <input required name="admin_password" type="password" placeholder="••••••••" className="w-full bg-white border border-gray-200 focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF] outline-none rounded-lg px-3 py-2 text-sm" />
+                </div>
+              </div>
             </div>
 
-            <div className="space-y-1.5">
-              <label className="block text-sm font-medium text-gray-700">Contact Email</label>
-              <input name="email" type="email" placeholder="admin@greenwood.edu" className="w-full bg-white border border-gray-200 focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF] outline-none rounded-lg px-3 py-2 text-sm" />
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="block text-sm font-medium text-gray-700">Phone Number</label>
-              <input name="phone" type="tel" placeholder="+1 234 567 8900" className="w-full bg-white border border-gray-200 focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF] outline-none rounded-lg px-3 py-2 text-sm" />
-            </div>
           </div>
 
           <div className="pt-4 border-t border-gray-100 flex justify-end">

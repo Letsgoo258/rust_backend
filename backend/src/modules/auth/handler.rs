@@ -185,6 +185,10 @@ async fn create_school(
         return Err(AppError::Forbidden("Only Super Admins can create schools".into()));
     }
 
+    let hashed_password = hash_password(&payload.admin_password)?;
+
+    let mut tx = state.db.begin().await?;
+
     let school_id = sqlx::query_scalar!(
         "INSERT INTO schools (name, code, email, phone, status) VALUES ($1, $2, $3, $4, 'ACTIVE') RETURNING id",
         payload.name,
@@ -192,15 +196,49 @@ async fn create_school(
         payload.email,
         payload.phone
     )
-    .fetch_one(&state.db)
+    .fetch_one(&mut *tx)
     .await?;
 
-    tracing::info!("Super Admin {} created new school: {}", user.username, payload.name);
+    // Create the School Admin Role
+    let role_id = sqlx::query_scalar!(
+        "INSERT INTO roles (school_id, name, code, description, is_system_role) 
+         VALUES ($1, 'School Admin', 'SCHOOL_ADMIN', 'School level administrator', true) RETURNING id",
+        school_id
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+
+    // Create the Admin User
+    let user_id = sqlx::query_scalar!(
+        "INSERT INTO users (school_id, username, email, password_hash, first_name, last_name, status, user_type) 
+         VALUES ($1, $2, $3, $4, $5, $6, 'ACTIVE', 'SCHOOL_ADMIN') RETURNING id",
+        school_id,
+        payload.admin_username,
+        payload.admin_email,
+        hashed_password,
+        payload.admin_first_name,
+        payload.admin_last_name
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+
+    // Assign Role to User
+    sqlx::query!(
+        "INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)",
+        user_id,
+        role_id
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    tracing::info!("Super Admin {} created new school: {} with admin {}", user.username, payload.name, payload.admin_username);
 
     Ok((
         StatusCode::CREATED,
         Json(CreateSchoolResponse {
-            message: "School successfully created.".to_string(),
+            message: "School and Admin Account successfully created.".to_string(),
             school_id,
         }),
     ))

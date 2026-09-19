@@ -81,8 +81,8 @@ async fn setup_system(
 
     // Create the Admin User
     let user_id = sqlx::query_scalar!(
-        "INSERT INTO users (school_id, username, email, password_hash, first_name, last_name, status, user_type) 
-         VALUES ($1, $2, $3, $4, $5, $6, 'ACTIVE', 'SUPER_ADMIN') RETURNING id",
+        "INSERT INTO users (school_id, username, email, password_hash, first_name, last_name, status, roles) 
+         VALUES ($1, $2, $3, $4, $5, $6, 'ACTIVE', '{SUPER_ADMIN}') RETURNING id",
         school_id,
         payload.admin_username,
         payload.admin_email,
@@ -182,11 +182,11 @@ async fn create_school(
         .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
 
     // Check if SUPER_ADMIN
-    let user_type: Option<String> = sqlx::query_scalar!("SELECT user_type::TEXT FROM users WHERE id = $1", user.id)
+    let roles = sqlx::query_scalar!("SELECT roles::TEXT[] as \"roles!\" FROM users WHERE id = $1", user.id)
         .fetch_one(&state.db)
         .await?;
         
-    if user_type.as_deref() != Some("SUPER_ADMIN") {
+    if !roles.contains(&"SUPER_ADMIN".to_string()) {
         return Err(AppError::Forbidden("Only Super Admins can create schools".into()));
     }
 
@@ -207,7 +207,7 @@ async fn create_school(
     // Create the School Admin Role
     let role_id = sqlx::query_scalar!(
         "INSERT INTO roles (school_id, name, code, description, is_system_role) 
-         VALUES ($1, 'School Admin', 'SCHOOL_ADMIN', 'School level administrator', true) RETURNING id",
+         VALUES ($1, 'School Admin', '{SCHOOL_ADMIN}', 'School level administrator', true) RETURNING id",
         school_id
     )
     .fetch_one(&mut *tx)
@@ -215,8 +215,8 @@ async fn create_school(
 
     // Create the Admin User
     let user_id = sqlx::query_scalar!(
-        "INSERT INTO users (school_id, username, email, password_hash, first_name, last_name, status, user_type) 
-         VALUES ($1, $2, $3, $4, $5, $6, 'ACTIVE', 'SCHOOL_ADMIN') RETURNING id",
+        "INSERT INTO users (school_id, username, email, password_hash, first_name, last_name, status, roles) 
+         VALUES ($1, $2, $3, $4, $5, $6, 'ACTIVE', '{SCHOOL_ADMIN}') RETURNING id",
         school_id,
         payload.admin_username,
         payload.admin_email,
@@ -259,11 +259,11 @@ async fn get_schools(
         .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
 
     // Check if SUPER_ADMIN
-    let user_type: Option<String> = sqlx::query_scalar!("SELECT user_type::TEXT FROM users WHERE id = $1", user.id)
+    let roles = sqlx::query_scalar!("SELECT roles::TEXT[] as \"roles!\" FROM users WHERE id = $1", user.id)
         .fetch_one(&state.db)
         .await?;
         
-    if user_type.as_deref() != Some("SUPER_ADMIN") {
+    if !roles.contains(&"SUPER_ADMIN".to_string()) {
         return Err(AppError::Forbidden("Only Super Admins can view platform stats".into()));
     }
 
@@ -317,7 +317,7 @@ async fn verify_email(
     // Refresh session user (simplistic way)
     if let Ok(Some(mut updated_user)) = sqlx::query_as!(
         crate::modules::auth::backend::User,
-        r#"SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.user_type::TEXT as "user_type!", u.email_verified, u.phone_verified, s.status::TEXT as "school_status!"
+        r#"SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.roles::TEXT[] as "roles!", u.email_verified, u.phone_verified, s.status::TEXT as "school_status!"
            FROM users u JOIN schools s ON u.school_id = s.id WHERE u.id = $1"#,
         user.id
     ).fetch_optional(&state.db).await {
@@ -349,7 +349,7 @@ async fn verify_phone(
         
     if let Ok(Some(mut updated_user)) = sqlx::query_as!(
         crate::modules::auth::backend::User,
-        r#"SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.user_type::TEXT as "user_type!", u.email_verified, u.phone_verified, s.status::TEXT as "school_status!"
+        r#"SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.roles::TEXT[] as "roles!", u.email_verified, u.phone_verified, s.status::TEXT as "school_status!"
            FROM users u JOIN schools s ON u.school_id = s.id WHERE u.id = $1"#,
         user.id
     ).fetch_optional(&state.db).await {
@@ -385,7 +385,7 @@ async fn setup_school_details(
         .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
 
     // Only SCHOOL_ADMIN can do this
-    if user.user_type != "SCHOOL_ADMIN" {
+    if !user.roles.contains(&"SCHOOL_ADMIN".to_string()) {
         return Err(AppError::Forbidden("Only School Admins can perform setup".into()));
     }
 
@@ -414,7 +414,7 @@ async fn setup_school_details(
     // Refresh session
     if let Ok(Some(mut updated_user)) = sqlx::query_as!(
         crate::modules::auth::backend::User,
-        r#"SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.user_type::TEXT as "user_type!", u.email_verified, u.phone_verified, s.status::TEXT as "school_status!"
+        r#"SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.roles::TEXT[] as "roles!", u.email_verified, u.phone_verified, s.status::TEXT as "school_status!"
            FROM users u JOIN schools s ON u.school_id = s.id WHERE u.id = $1"#,
         user.id
     ).fetch_optional(&state.db).await {
@@ -443,7 +443,7 @@ async fn switch_tenant(
         .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
 
     // Only SUPER_ADMIN can switch tenants
-    if user.user_type != "SUPER_ADMIN" {
+    if !user.roles.contains(&"SUPER_ADMIN".to_string()) {
         return Err(AppError::Forbidden("Only Super Admins can switch tenants".into()));
     }
 
@@ -487,7 +487,7 @@ async fn invite_admin(
         .user
         .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
 
-    if user.user_type != "SCHOOL_ADMIN" {
+    if !user.roles.contains(&"SCHOOL_ADMIN".to_string()) {
         return Err(AppError::Forbidden("Only School Admins can invite other admins.".into()));
     }
 
@@ -500,8 +500,8 @@ async fn invite_admin(
 
     let new_user_id = sqlx::query_scalar!(
         r#"
-        INSERT INTO users (school_id, email, password_hash, first_name, last_name, phone, user_type, email_verified, phone_verified, status)
-        VALUES ($1, $2, $3, $4, $5, $6, 'SCHOOL_ADMIN', false, false, 'ACTIVE')
+        INSERT INTO users (school_id, email, password_hash, first_name, last_name, phone, roles, email_verified, phone_verified, status)
+        VALUES ($1, $2, $3, $4, $5, $6, '{SCHOOL_ADMIN}', false, false, 'ACTIVE')
         RETURNING id
         "#,
         user.school_id,

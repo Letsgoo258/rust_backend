@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.user_type::TEXT as \"user_type!\", u.email_verified, u.phone_verified, s.status::TEXT as \"school_status!\"\n           FROM users u JOIN schools s ON u.school_id = s.id WHERE u.id = $1",
+  "query": "\n            SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.roles::TEXT[] as \"roles!\", u.email_verified, u.phone_verified, s.status::TEXT as \"school_status!\"\n            FROM users u\n            JOIN schools s ON u.school_id = s.id\n            WHERE u.id = $1 AND u.status = 'ACTIVE'\n            ",
   "describe": {
     "columns": [
       {
@@ -30,8 +30,8 @@
       },
       {
         "ordinal": 5,
-        "name": "user_type!",
-        "type_info": "Text"
+        "name": "roles!",
+        "type_info": "TextArray"
       },
       {
         "ordinal": 6,
@@ -66,5 +66,5 @@
       null
     ]
   },
-  "hash": "fd135b9658624f633f5be304ef210119ff94ff5f7cc1d66850bf16b81749129a"
+  "hash": "0d58d7a129460de30f27df35a9e31a2c7411235ba53fb1178c466de61f780c11"
 }

@@ -24,7 +24,10 @@ export default function SuperAdminPage() {
 
   useEffect(() => {
     fetch("/api/v1/auth/super-admin/stats")
-      .then(res => res.json())
+      .then(res => {
+        if (!res.ok) throw new Error("API Error");
+        return res.json();
+      })
       .then(data => {
         setStats(data);
         setLoading(false);

@@ -13,7 +13,7 @@ export default function DashboardLayout({
 }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [user, setUser] = useState<{ display_name?: string; username: string; school_id?: string; user_type?: string; email_verified?: boolean; phone_verified?: boolean; school_status?: string } | null>(null);
+  const [user, setUser] = useState<{ display_name?: string; username: string; school_id?: string; roles?: string[]; email_verified?: boolean; phone_verified?: boolean; school_status?: string } | null>(null);
   
   const [verifyingEmail, setVerifyingEmail] = useState(false);
   const [verifyingPhone, setVerifyingPhone] = useState(false);
@@ -98,7 +98,7 @@ export default function DashboardLayout({
     );
   }
 
-  const isSuperAdmin = user?.user_type === "SUPER_ADMIN";
+  const isSuperAdmin = user?.roles?.includes("SUPER_ADMIN");
 
   const topNavItems = [
     { name: "Eravaya Home", path: "/dashboard", icon: "M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6", active: pathname === "/dashboard" || (!pathname.includes("/super-admin") && !pathname.includes("/staff") && !pathname.includes("/reports") && !pathname.includes("/observe") && !pathname.includes("/admissions") && !pathname.includes("/permissions")) },
@@ -176,7 +176,7 @@ export default function DashboardLayout({
             <div className="absolute right-0 top-10 w-48 bg-white rounded-xl shadow-lg border border-gray-100 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-50">
               <div className="px-4 py-3 border-b border-gray-100">
                 <p className="text-sm font-medium text-gray-900 truncate">{user?.display_name || user?.username}</p>
-                <p className="text-xs text-gray-500 truncate capitalize">{user?.user_type?.replace('_', ' ').toLowerCase() || 'User'}</p>
+                <p className="text-xs text-gray-500 truncate capitalize">{user?.roles?.[0]?.replace('_', ' ').toLowerCase() || 'User'}</p>
               </div>
               <div className="p-2">
                 <button 

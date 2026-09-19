@@ -172,7 +172,7 @@ export default function SuperAdminPage() {
                   <th className="px-6 py-3 font-medium">School Name</th>
                   <th className="px-6 py-3 font-medium">Code</th>
                   <th className="px-6 py-3 font-medium">Status</th>
-                  <th className="px-6 py-3 font-medium text-right">Created</th>
+                  <th className="px-6 py-3 font-medium">Created</th>\n                  <th className="px-6 py-3 font-medium text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -201,14 +201,28 @@ export default function SuperAdminPage() {
                         {s.status}
                       </span>
                     </td>
-                    <td className="px-6 py-4 text-right text-gray-500">
+                    <td className="px-6 py-4 text-gray-500">
                       {new Date(s.created_at).toLocaleDateString()}
+                    </td>
+                    <td className="px-6 py-4 text-right font-medium space-x-3">
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); handleToggleStatus(s.id, s.status); }}
+                        className="text-gray-500 hover:text-gray-900 bg-gray-100 hover:bg-gray-200 px-3 py-1.5 rounded-md text-xs transition-colors"
+                      >
+                        {s.status === "ACTIVE" ? "Deactivate" : "Activate"}
+                      </button>
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); startDelete(s.id); }}
+                        className="text-red-600 hover:text-white bg-red-50 hover:bg-red-600 px-3 py-1.5 rounded-md text-xs transition-colors"
+                      >
+                        Delete
+                      </button>
                     </td>
                   </tr>
                 ))}
                 {stats?.schools?.length === 0 && (
                   <tr>
-                    <td colSpan={4} className="px-6 py-8 text-center text-gray-500">No schools found. Create one to get started.</td>
+                    <td colSpan={5} className="px-6 py-8 text-center text-gray-500">No schools found. Create one to get started.</td>
                   </tr>
                 )}
               </tbody>

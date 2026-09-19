@@ -247,7 +247,7 @@ export default function SuperAdminPage() {
               </p>
               
               <div className="bg-yellow-50 text-yellow-800 text-xs p-3 rounded-lg border border-yellow-200 mb-4">
-                An OTP has been dispatched to your verified admin contacts. (Check backend terminal logs).
+                An OTP has been sent to your email address.
               </div>
               
               <div className="mb-4">

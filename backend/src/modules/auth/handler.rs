@@ -592,12 +592,29 @@ pub async fn request_delete_otp(
     sqlx::query!("INSERT INTO admin_action_otps (user_id, action_type, target_id, otp_code, expires_at) VALUES ($1, 'DELETE_SCHOOL', $2, $3, NOW() + INTERVAL '10 minutes')", user.id, id, otp)
         .execute(&state.db).await?;
 
-    tracing::warn!("============================================================");
-    tracing::warn!("OTP DISPATCHED FOR SUPER ADMIN: {}", user.email_verified); // We can just print the OTP safely in dev
-    tracing::warn!("ACTION: DELETE_SCHOOL");
-    tracing::warn!("TARGET: {}", id);
-    tracing::warn!("YOUR OTP CODE IS: {}", otp);
-    tracing::warn!("============================================================");
+    let email_body = format!(
+        "<h1>Action Required</h1>\n\
+        <p>You have requested to <b>permanently delete</b> school tenant <code>{}</code>.</p>\n\
+        <p>If you initiated this action, please enter the following OTP to confirm:</p>\n\
+        <h2 style='color:red; letter-spacing:4px'>{}</h2>\n\
+        <p>This code will expire in 10 minutes.</p>\n\
+        <br>\n\
+        <p><i>If you did not request this action, please ignore this email.</i></p>",
+        id, otp
+    );
+
+    if let Err(e) = crate::utils::email::send_email(&user.username, "Eravaya: Confirm Tenant Deletion", &email_body).await {
+        tracing::error!("Failed to send OTP email to {}: {}", user.username, e);
+        // Fallback for dev
+        tracing::warn!("============================================================");
+        tracing::warn!("OTP DISPATCHED FOR SUPER ADMIN: {}", user.username);
+        tracing::warn!("ACTION: DELETE_SCHOOL");
+        tracing::warn!("TARGET: {}", id);
+        tracing::warn!("YOUR OTP CODE IS: {}", otp);
+        tracing::warn!("============================================================");
+    } else {
+        tracing::info!("Sent OTP email to {}", user.username);
+    }
 
     Ok((axum::http::StatusCode::OK, axum::Json(serde_json::json!({ "message": "OTP generated and printed to server console" }))))
 }

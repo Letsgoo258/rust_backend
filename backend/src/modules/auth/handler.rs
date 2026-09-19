@@ -19,6 +19,7 @@ use serde_json::json;
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/add-admin", post(invite_admin))
         .route("/setup", post(setup_system))
         .route("/schools", get(get_schools).post(create_school))
         .route("/login", post(login))
@@ -465,4 +466,59 @@ async fn switch_tenant(
     let _ = auth_session.login(&updated_user).await;
 
     Ok((StatusCode::OK, Json(serde_json::json!({ "message": "Switched tenant successfully" }))))
+}
+
+
+#[derive(serde::Deserialize, Debug)]
+pub struct InviteAdminRequest {
+    pub email: String,
+    pub first_name: String,
+    pub last_name: String,
+    pub phone: String,
+}
+
+#[tracing::instrument(err, skip(state, auth_session))]
+async fn invite_admin(
+    auth_session: AuthSession,
+    State(state): State<AppState>,
+    Json(payload): Json<InviteAdminRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let user = auth_session
+        .user
+        .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+    if user.user_type != "SCHOOL_ADMIN" {
+        return Err(AppError::Forbidden("Only School Admins can invite other admins.".into()));
+    }
+
+    if user.school_status != "ACTIVE" {
+        return Err(AppError::Forbidden("School setup must be completed first.".into()));
+    }
+
+    let password_hash = crate::utils::password::hash_password("password")
+        .map_err(|e| AppError::InternalServerError(e.to_string()))?;
+
+    let new_user_id = sqlx::query_scalar!(
+        r#"
+        INSERT INTO users (school_id, email, password_hash, first_name, last_name, phone, user_type, email_verified, phone_verified, status)
+        VALUES ($1, $2, $3, $4, $5, $6, 'SCHOOL_ADMIN', false, false, 'ACTIVE')
+        RETURNING id
+        "#,
+        user.school_id,
+        payload.email,
+        password_hash,
+        payload.first_name,
+        payload.last_name,
+        payload.phone
+    )
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "message": "School Admin invited successfully. Default password is 'password'. They must verify email and phone on first login.",
+            "user_id": new_user_id
+        })),
+    ))
 }

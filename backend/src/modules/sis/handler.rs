@@ -30,6 +30,10 @@ async fn create_student(
         .user
         .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
 
+    if user.school_status != "ACTIVE" {
+        return Err(AppError::Forbidden("School is not fully setup and active.".into()));
+    }
+
     let student_id = sqlx::query_scalar!(
         r#"
         INSERT INTO students (school_id, admission_number, first_name, last_name, date_of_birth, gender, blood_group, status)
@@ -65,6 +69,10 @@ async fn list_students(
         .user
         .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
 
+    if user.school_status != "ACTIVE" {
+        return Err(AppError::Forbidden("School is not fully setup and active.".into()));
+    }
+
     let students = sqlx::query_as!(
         StudentDto,
         r#"
@@ -90,6 +98,10 @@ async fn get_student(
     let user = auth_session
         .user
         .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+    if user.school_status != "ACTIVE" {
+        return Err(AppError::Forbidden("School is not fully setup and active.".into()));
+    }
 
     let student = sqlx::query_as!(
         StudentDto,
@@ -119,6 +131,10 @@ async fn create_guardian(
     let user = auth_session
         .user
         .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+    if user.school_status != "ACTIVE" {
+        return Err(AppError::Forbidden("School is not fully setup and active.".into()));
+    }
 
     let guardian_id = sqlx::query_scalar!(
         r#"

@@ -685,7 +685,7 @@ pub async fn submit_verify_otp(
         return Err(AppError::BadRequest("No valid WhatsApp OTP requested".into()));
     }
 
-    sqlx::query!("UPDATE users SET email_verified = true, phone_verified = true WHERE id = $1", user.id).execute(&state.db).await?;
+    sqlx::query!("UPDATE users SET email_verified = true, phone_verified = true, status = 'ACTIVE' WHERE id = $1", user.id).execute(&state.db).await?;
 
     if let Ok(Some(updated_user)) = sqlx::query_as!(
         crate::modules::auth::backend::User,

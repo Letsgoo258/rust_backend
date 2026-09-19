@@ -21,7 +21,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/add-admin", post(invite_admin))
         .route("/setup", post(setup_system))
-        .route("/schools", get(get_schools).post(create_school))
+        .route("/schools", post(create_school))
         .route("/login", post(login))
         .route("/logout", post(logout))
         .route("/me", get(me))
@@ -29,6 +29,7 @@ pub fn router() -> Router<AppState> {
         .route("/verify/phone", post(verify_phone))
         .route("/schools/setup", post(setup_school_details))
         .route("/switch-tenant", post(switch_tenant))
+        .route("/super-admin/stats", axum::routing::get(get_super_admin_stats))
 }
 
 /// Idempotent setup endpoint to create the very first School and Super Admin.
@@ -252,7 +253,7 @@ async fn create_school(
 }
 
 #[tracing::instrument(err, skip(state, auth_session))]
-async fn get_schools(
+async fn get_super_admin_stats(
     auth_session: AuthSession,
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, AppError> {

@@ -69,9 +69,8 @@ export function AnalyticsProvider({ children }: { children: React.ReactNode }) {
         let name = target.innerText || target.getAttribute('aria-label') || target.tagName;
         if (name.length > 50) name = name.substring(0, 50);
         
-        sendTelemetry("CLICK", {
-          component: name,
-        });
+        // // Click telemetry disabled to prevent DB connection exhaustion
+        // sendTelemetry("CLICK", { component: name });
       }
     };
 

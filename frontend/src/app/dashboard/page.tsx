@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
+import { Input } from "@/components/ui/Input";
 
 interface User {
   username: string;
@@ -16,6 +17,14 @@ export default function DashboardOverview() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [verifyModalOpen, setVerifyModalOpen] = useState(false);
+  const [otp, setOtp] = useState("");
+  const [otpLoading, setOtpLoading] = useState(false);
+  const [otpError, setOtpError] = useState("");
+  
+  const [setupMode, setSetupMode] = useState(false);
+  const [setupLoading, setSetupLoading] = useState(false);
+  const [setupError, setSetupError] = useState("");
 
   useEffect(() => {
     fetch("/api/v1/auth/me")
@@ -31,6 +40,78 @@ export default function DashboardOverview() {
         router.push("/login");
       });
   }, [router]);
+
+
+  const handleRequestOtp = async () => {
+    try {
+      setOtpLoading(true);
+      const res = await fetch("/api/v1/auth/verify/request-otp", { method: "POST" });
+      if (!res.ok) {
+        const text = await res.text();
+        let errMsg = text || "Failed to send OTP";
+        try { errMsg = JSON.parse(text).error || text; } catch (e) {}
+        throw new Error(errMsg);
+      }
+      setVerifyModalOpen(true);
+      setOtpError("");
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setOtpLoading(false);
+    }
+  };
+
+  const handleSubmitOtp = async () => {
+    try {
+      setOtpLoading(true);
+      setOtpError("");
+      const res = await fetch("/api/v1/auth/verify/submit-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ otp }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        let errMsg = text || "Invalid OTP";
+        try { errMsg = JSON.parse(text).error || text; } catch (e) {}
+        throw new Error(errMsg);
+      }
+      setVerifyModalOpen(false);
+      setUser(prev => prev ? { ...prev, email_verified: true, phone_verified: true } : null);
+    } catch (err: any) {
+      setOtpError(err.message);
+    } finally {
+      setOtpLoading(false);
+    }
+  };
+
+  const handleSetupSchool = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    setSetupLoading(true);
+    setSetupError("");
+    const formData = new FormData(e.currentTarget);
+    const payload = Object.fromEntries(formData.entries());
+    
+    try {
+      const res = await fetch("/api/v1/auth/schools/setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        let errMsg = text || "Setup failed";
+        try { errMsg = JSON.parse(text).error || text; } catch (e) {}
+        throw new Error(errMsg);
+      }
+      setUser(prev => prev ? { ...prev, school_status: "ACTIVE" } : null);
+      setSetupMode(false);
+    } catch (err: any) {
+      setSetupError(err.message);
+    } finally {
+      setSetupLoading(false);
+    }
+  };
 
   if (loading) return null;
 
@@ -82,12 +163,12 @@ export default function DashboardOverview() {
                 : "Fill out your official school profile to unlock all core modules."}
             </p>
             <Button 
+              loading={otpLoading}
               onClick={() => {
                 if (!user?.email_verified || !user?.phone_verified) {
-                  window.scrollTo({ top: 0, behavior: 'smooth' });
-                  alert("Please use the verification banner at the top of the page first!");
+                  handleRequestOtp();
                 } else {
-                  router.push("/dashboard/schools/setup");
+                  setSetupMode(true);
                 }
               }}
               className="bg-[#3366FF] hover:bg-blue-600 text-white shadow-md shadow-blue-500/20 py-6 px-8 text-base rounded-2xl w-full"
@@ -114,6 +195,79 @@ export default function DashboardOverview() {
           </div>
         </div>
       )}
+
+      {/* Verify OTP Modal */}
+      {verifyModalOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200 p-6">
+            <h3 className="text-xl font-bold text-gray-900 mb-2">Verify your Account</h3>
+            <p className="text-gray-600 text-sm mb-4">
+              A 6-digit verification code has been sent to your email and WhatsApp (terminal).
+            </p>
+            <div className="mb-4">
+              <input
+                type="text"
+                className="w-full border-gray-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500 p-3 border text-gray-900 font-mono text-center tracking-widest text-xl"
+                placeholder="------"
+                maxLength={6}
+                value={otp}
+                onChange={(e) => setOtp(e.target.value.toUpperCase())}
+              />
+            </div>
+            {otpError && <p className="text-red-600 text-sm font-medium text-center mb-4">{otpError}</p>}
+            <div className="flex gap-3">
+              <Button variant="secondary" fullWidth onClick={() => setVerifyModalOpen(false)}>Cancel</Button>
+              <Button variant="primary" fullWidth loading={otpLoading} onClick={handleSubmitOtp}>Verify</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Setup Form Modal / View */}
+      {setupMode && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-sm overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-3xl overflow-hidden animate-in zoom-in-95 duration-200 p-8 my-8">
+            <div className="flex justify-between items-center mb-6">
+              <div>
+                <h2 className="text-2xl font-bold text-gray-900 mb-2">Complete School Profile</h2>
+                <p className="text-sm text-gray-500">Add the foundational details of your institution to unlock all modules.</p>
+              </div>
+              <button onClick={() => setSetupMode(false)} className="text-gray-400 hover:text-gray-600">✕</button>
+            </div>
+            
+            <form onSubmit={handleSetupSchool} className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <Input required name="short_name" type="text" label="Short Name (e.g. GWH)" />
+                <Input name="website" type="url" label="Website URL" placeholder="https://" />
+              </div>
+              
+              <h3 className="text-md font-medium text-gray-900 border-b pb-2 pt-4">Location Details</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="md:col-span-2">
+                  <Input required name="address_line_1" type="text" label="Address Line 1" />
+                </div>
+                <div className="md:col-span-2">
+                  <Input name="address_line_2" type="text" label="Address Line 2 (Optional)" />
+                </div>
+                <Input required name="city" type="text" label="City" />
+                <Input required name="district" type="text" label="District" />
+                <Input required name="state" type="text" label="State/Province" />
+                <Input required name="country" type="text" label="Country" />
+                <Input required name="postal_code" type="text" label="Postal/Zip Code" />
+                <Input required name="timezone" type="text" label="Timezone" defaultValue="UTC" />
+              </div>
+              
+              {setupError && <p className="text-red-600 text-sm font-medium mt-4">{setupError}</p>}
+              
+              <div className="pt-6 border-t flex justify-end gap-4">
+                <Button variant="secondary" onClick={() => setSetupMode(false)} type="button">Cancel</Button>
+                <Button variant="primary" type="submit" loading={setupLoading}>Save & Activate School</Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

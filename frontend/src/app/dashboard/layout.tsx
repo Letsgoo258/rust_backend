@@ -295,81 +295,10 @@ export default function DashboardLayout({
               </div>
             )}
 
-            {user?.school_status === 'PENDING_SETUP' && user?.email_verified && user?.phone_verified ? (
-              <div className="bg-white rounded-xl shadow-sm border border-gray-200/60 p-8 max-w-3xl mx-auto">
-                <h2 className="text-xl font-bold text-gray-900 mb-2">Complete School Profile</h2>
-                <p className="text-sm text-gray-500 mb-8">Before you can access your dashboard, please complete your school's profile.</p>
-                <form onSubmit={handleSetupSchool} className="space-y-6">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <Input required name="short_name" type="text" label="Short Name (e.g. GWH)" />
-                    <Input name="website" type="url" label="Website URL" placeholder="https://" />
-                  </div>
-                  
-                  <h3 className="text-md font-medium text-gray-900 border-b pb-2 pt-4">Location Details</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="md:col-span-2">
-                      <Input required name="address_line_1" type="text" label="Address Line 1" />
-                    </div>
-                    <div className="md:col-span-2">
-                      <Input name="address_line_2" type="text" label="Address Line 2 (Optional)" />
-                    </div>
-                    <Input required name="city" type="text" label="City" />
-                    <Input required name="district" type="text" label="District" />
-                    <Input required name="state" type="text" label="State/Province" />
-                    <Input required name="country" type="text" label="Country" />
-                    <Input required name="postal_code" type="text" label="Postal/Zip Code" />
-                    <Input required name="timezone" type="text" label="Timezone" defaultValue="UTC" />
-                  </div>
-                  
-                  <div className="pt-6">
-                    <Button type="submit" className="w-full">Save & Activate School</Button>
-                  </div>
-                </form>
-              </div>
-            ) : children}
+            {children}
           </div>
           
-          {/* Phone Verification Modal */}
-          {showPhoneModal && (
-            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-              <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6">
-                <h2 className="text-lg font-bold text-gray-900 mb-2">Verify Phone Number</h2>
-                <p className="text-sm text-gray-500 mb-6">Enter the 6-digit WhatsApp OTP sent to your registered number.</p>
-                
-                <form onSubmit={handleVerifyPhone}>
-                  <div className="space-y-4">
-                    <div>
-                      <input 
-                        type="text" 
-                        value={otp}
-                        onChange={(e) => setOtp(e.target.value)}
-                        placeholder="123456" 
-                        maxLength={6}
-                        className="w-full text-center text-2xl tracking-[0.5em] font-mono bg-gray-50 border border-gray-300 focus:border-[#3366FF] focus:ring-1 focus:ring-[#3366FF] outline-none rounded-lg px-4 py-3"
-                      />
-                      {phoneError && <p className="text-xs text-red-500 mt-2 text-center">{phoneError}</p>}
-                    </div>
-                    <div className="flex gap-3">
-                      <button 
-                        type="button" 
-                        onClick={() => setShowPhoneModal(false)}
-                        className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium py-2.5 rounded-lg text-sm transition-colors"
-                      >
-                        Cancel
-                      </button>
-                      <button 
-                        type="submit"
-                        disabled={verifyingPhone || otp.length < 6}
-                        className="flex-1 bg-[#3366FF] hover:bg-[#2B57D9] disabled:opacity-50 text-white font-medium py-2.5 rounded-lg text-sm transition-colors"
-                      >
-                        {verifyingPhone ? "Verifying..." : "Verify OTP"}
-                      </button>
-                    </div>
-                  </div>
-                </form>
-              </div>
-            </div>
-          )}
+          
 
         </main>
       </div>

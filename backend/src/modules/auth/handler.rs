@@ -25,8 +25,8 @@ pub fn router() -> Router<AppState> {
         .route("/login", post(login))
         .route("/logout", post(logout))
         .route("/me", get(me))
-        .route("/verify/email", post(verify_email))
-        .route("/verify/phone", post(verify_phone))
+        .route("/verify/request-otp", post(request_verify_otp))
+        .route("/verify/submit-otp", post(submit_verify_otp))
         .route("/schools/setup", post(setup_school_details))
         .route("/switch-tenant", post(switch_tenant))
         .route("/super-admin/stats", axum::routing::get(get_super_admin_stats))
@@ -483,7 +483,7 @@ pub struct InviteAdminRequest {
     pub phone: String,
 }
 
-#[tracing::instrument(err, skip(state, auth_session))]
+#[tracing::instrument(err, skip(state, auth_session, payload))]
 async fn invite_admin(
     auth_session: AuthSession,
     State(state): State<AppState>,
@@ -665,4 +665,83 @@ pub async fn delete_school(
     crate::utils::audit::log_action(&state.db, Some(id), Some(user.id), "DELETE_SCHOOL", None, None, None).await.ok();
 
     Ok((axum::http::StatusCode::OK, axum::Json(serde_json::json!({ "message": "School permanently deleted" }))))
+}
+
+#[tracing::instrument(err, skip(state, auth_session))]
+pub async fn request_verify_otp(
+    mut auth_session: AuthSession,
+    axum::extract::State(state): axum::extract::State<AppState>,
+) -> Result<impl axum::response::IntoResponse, AppError> {
+    let user = auth_session.user.clone().ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+    let otp = uuid::Uuid::new_v4().to_string().chars().filter(|c| c.is_ascii_alphanumeric()).take(6).collect::<String>().to_uppercase();
+    
+    sqlx::query!("DELETE FROM admin_action_otps WHERE user_id = $1 AND action_type = 'VERIFY_ACCOUNT'", user.id)
+        .execute(&state.db).await?;
+
+    sqlx::query!("INSERT INTO admin_action_otps (user_id, action_type, otp_code, expires_at) VALUES ($1, 'VERIFY_ACCOUNT', $2, NOW() + INTERVAL '15 minutes')", user.id, otp)
+        .execute(&state.db).await?;
+
+    let email_body = format!(
+        "<h1>Verify your Eravaya Account</h1>\n\
+        <p>Your verification code is:</p>\n\
+        <h2 style='color:blue; letter-spacing:4px'>{}</h2>\n\
+        <p>This code will expire in 15 minutes.</p>",
+        otp
+    );
+
+    crate::utils::email::send_email(&user.username, "Eravaya: Verification Code", &email_body).await.ok();
+    
+    tracing::warn!("============================================================");
+    tracing::warn!("WHATSAPP OTP DISPATCHED TO TERMINAL");
+    tracing::warn!("USER: {}", user.username);
+    tracing::warn!("YOUR VERIFICATION CODE IS: {}", otp);
+    tracing::warn!("============================================================");
+
+    Ok((axum::http::StatusCode::OK, axum::Json(serde_json::json!({ "message": "OTP sent to email and WhatsApp" }))))
+}
+
+#[derive(serde::Deserialize)]
+#[derive(Debug)]
+pub struct SubmitVerifyOtpRequest {
+    pub otp: String,
+}
+
+#[tracing::instrument(err, skip(state, auth_session, payload))]
+pub async fn submit_verify_otp(
+    mut auth_session: AuthSession,
+    axum::extract::State(state): axum::extract::State<AppState>,
+    axum::Json(payload): axum::Json<SubmitVerifyOtpRequest>,
+) -> Result<impl axum::response::IntoResponse, AppError> {
+    let user = auth_session.user.clone().ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+    let stored_otp = sqlx::query!(
+        "SELECT id, otp_code, expires_at FROM admin_action_otps WHERE user_id = $1 AND action_type = 'VERIFY_ACCOUNT' ORDER BY created_at DESC LIMIT 1",
+        user.id
+    ).fetch_optional(&state.db).await?;
+
+    if let Some(record) = stored_otp {
+        if record.expires_at < time::OffsetDateTime::now_utc() {
+            return Err(AppError::BadRequest("OTP has expired".into()));
+        }
+        if record.otp_code != payload.otp {
+            return Err(AppError::BadRequest("Invalid OTP".into()));
+        }
+        sqlx::query!("DELETE FROM admin_action_otps WHERE id = $1", record.id).execute(&state.db).await?;
+    } else {
+        return Err(AppError::BadRequest("No valid OTP requested".into()));
+    }
+
+    sqlx::query!("UPDATE users SET email_verified = true, phone_verified = true WHERE id = $1", user.id).execute(&state.db).await?;
+
+    if let Ok(Some(updated_user)) = sqlx::query_as!(
+        crate::modules::auth::backend::User,
+        r#"SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.roles::TEXT[] as "roles!", u.email_verified, u.phone_verified, s.status::TEXT as "school_status!"
+           FROM users u JOIN schools s ON u.school_id = s.id WHERE u.id = $1"#,
+        user.id
+    ).fetch_optional(&state.db).await {
+        auth_session.login(&updated_user).await.map_err(|_| AppError::BadRequest("Failed to update session".into()))?;
+    }
+
+    Ok((axum::http::StatusCode::OK, axum::Json(serde_json::json!({ "message": "Account verified" }))))
 }

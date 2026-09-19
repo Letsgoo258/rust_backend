@@ -27,8 +27,10 @@ export default function NewSchoolPage() {
       });
 
       if (!res.ok) {
-        const error = await res.json();
-        throw new Error(error.error || "Failed to create school");
+        const text = await res.text();
+        let errMsg = text || "Failed to create school";
+        try { errMsg = JSON.parse(text).error || text; } catch (e) {}
+        throw new Error(errMsg);
       }
       
       setSuccess(true);

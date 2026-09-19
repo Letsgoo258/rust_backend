@@ -51,7 +51,12 @@ export default function SuperAdminPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: newStatus }),
       });
-      if (!res.ok) throw new Error("Failed to update status");
+      if (!res.ok) {
+        const text = await res.text();
+        let errMsg = text || "Failed to update status";
+        try { errMsg = JSON.parse(text).error || text; } catch (e) {}
+        throw new Error(errMsg);
+      }
       
       setStats(prev => {
         if (!prev) return prev;
@@ -75,7 +80,12 @@ export default function SuperAdminPage() {
       const res = await fetch(`/api/v1/auth/super-admin/schools/${schoolId}/request-delete-otp`, {
         method: "POST"
       });
-      if (!res.ok) throw new Error("Failed to request OTP");
+      if (!res.ok) {
+        const text = await res.text();
+        let errMsg = text || "Failed to request OTP";
+        try { errMsg = JSON.parse(text).error || text; } catch (e) {}
+        throw new Error(errMsg);
+      }
     } catch (err) {
       console.error(err);
       setDeleteError("Failed to request OTP. Ensure backend is running.");
@@ -94,8 +104,10 @@ export default function SuperAdminPage() {
       });
       
       if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.error || "Invalid OTP or failure");
+        const text = await res.text();
+        let errMsg = text || "Invalid OTP or failure";
+        try { errMsg = JSON.parse(text).error || text; } catch (e) {}
+        throw new Error(errMsg);
       }
       
       setStats(prev => {

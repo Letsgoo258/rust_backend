@@ -2,11 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
-import { v4 as uuidv4 } from "uuid";
 
 let sessionId = "";
 if (typeof window !== "undefined") {
-  sessionId = sessionStorage.getItem("eravaya_session") || uuidv4();
+  sessionId = sessionStorage.getItem("eravaya_session") || crypto.randomUUID();
   sessionStorage.setItem("eravaya_session", sessionId);
 }
 

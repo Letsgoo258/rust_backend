@@ -300,70 +300,6 @@ async fn get_super_admin_stats(
     ))
 }
 
-#[derive(serde::Deserialize)]
-pub struct VerifyPhoneRequest {
-    pub otp: String,
-}
-
-#[tracing::instrument(err, skip(state, auth_session))]
-async fn verify_email(
-    mut auth_session: AuthSession,
-    State(state): State<AppState>,
-) -> Result<impl IntoResponse, AppError> {
-    let user = auth_session
-        .user
-        .clone()
-        .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
-
-    // Mark verified
-    sqlx::query!("UPDATE users SET email_verified = true WHERE id = $1", user.id)
-        .execute(&state.db)
-        .await?;
-
-    // Refresh session user (simplistic way)
-    if let Ok(Some(updated_user)) = sqlx::query_as!(
-        crate::modules::auth::backend::User,
-        r#"SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.roles::TEXT[] as "roles!", u.email_verified, u.phone_verified, s.status::TEXT as "school_status!"
-           FROM users u JOIN schools s ON u.school_id = s.id WHERE u.id = $1"#,
-        user.id
-    ).fetch_optional(&state.db).await {
-        // Log in again to update session
-        let _ = auth_session.login(&updated_user).await;
-    }
-
-    Ok((StatusCode::OK, Json(serde_json::json!({ "message": "Email verified successfully" }))))
-}
-
-#[tracing::instrument(err, skip(state, auth_session, payload))]
-async fn verify_phone(
-    mut auth_session: AuthSession,
-    State(state): State<AppState>,
-    Json(payload): Json<VerifyPhoneRequest>,
-) -> Result<impl IntoResponse, AppError> {
-    let user = auth_session
-        .user
-        .clone()
-        .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
-
-    if payload.otp != "123456" {
-        return Err(AppError::BadRequest("Invalid OTP".into()));
-    }
-
-    sqlx::query!("UPDATE users SET phone_verified = true WHERE id = $1", user.id)
-        .execute(&state.db)
-        .await?;
-        
-    if let Ok(Some(updated_user)) = sqlx::query_as!(
-        crate::modules::auth::backend::User,
-        r#"SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.roles::TEXT[] as "roles!", u.email_verified, u.phone_verified, s.status::TEXT as "school_status!"
-           FROM users u JOIN schools s ON u.school_id = s.id WHERE u.id = $1"#,
-        user.id
-    ).fetch_optional(&state.db).await {
-        let _ = auth_session.login(&updated_user).await;
-    }
-
-    Ok((StatusCode::OK, Json(serde_json::json!({ "message": "Phone verified successfully" }))))
-}
 
 #[derive(serde::Deserialize)]
 pub struct SchoolSetupRequest {
@@ -669,7 +605,7 @@ pub async fn delete_school(
 
 #[tracing::instrument(err, skip(state, auth_session))]
 pub async fn request_verify_otp(
-    mut auth_session: AuthSession,
+    auth_session: AuthSession,
     axum::extract::State(state): axum::extract::State<AppState>,
 ) -> Result<impl axum::response::IntoResponse, AppError> {
     let user = auth_session.user.clone().ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;

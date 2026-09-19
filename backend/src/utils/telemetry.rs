@@ -22,7 +22,7 @@ pub fn init_telemetry() -> Result<SdkTracerProvider, Box<dyn std::error::Error>>
         }
     }
 
-    let exporter = SpanExporter::builder()
+    println!("OTLP Endpoint: {}", endpoint); let exporter = SpanExporter::builder()
         .with_http()
         .with_endpoint(endpoint)
         .with_headers(headers)

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import FaroProvider from "@/components/FaroProvider";
+import { AnalyticsProvider } from "@/components/providers/AnalyticsProvider";
 
 export const metadata: Metadata = {
   title: "ERAVAYA ERP",
@@ -16,7 +17,9 @@ export default function RootLayout({
     <html lang="en">
       <body className="font-sans antialiased bg-[#F5F5F7] text-[#1D1D1F]">
         <FaroProvider>
-          {children}
+          <AnalyticsProvider>
+            {children}
+          </AnalyticsProvider>
         </FaroProvider>
       </body>
     </html>

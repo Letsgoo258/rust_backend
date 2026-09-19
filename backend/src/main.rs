@@ -72,6 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nest("/api/v1", routes::health::router())
         .nest("/api/v1/auth", modules::auth::router())
         .nest("/api/v1/sis", modules::sis::handler::router())
+        .nest("/api/v1/telemetry", modules::telemetry::handler::router())
         .layer(auth_layer)
         .layer(governor_layer)
         

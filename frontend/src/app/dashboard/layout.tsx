@@ -101,6 +101,7 @@ export default function DashboardLayout({
   const isSuperAdmin = user?.roles?.includes("SUPER_ADMIN");
 
   const isSuperAdminView = pathname.includes("/super-admin");
+  const isLocked = !isSuperAdminView && (!user?.email_verified || !user?.phone_verified || user?.school_status === "PENDING_SETUP");
 
   const topNavItems = isSuperAdminView
     ? [
@@ -212,12 +213,19 @@ export default function DashboardLayout({
                     return (
                       <Link 
                         key={item.path} 
-                        href={item.path}
+                        href={isLocked && item.path !== '/dashboard' ? '#' : item.path}
                         className={`flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium transition-all ${
-                          isActive 
-                            ? 'bg-[#EAEFFD] text-[#3366FF]' 
-                            : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+                          isLocked && item.path !== '/dashboard' 
+                            ? 'opacity-40 cursor-not-allowed pointer-events-none grayscale'
+                            : isActive 
+                              ? 'bg-[#EAEFFD] text-[#3366FF]' 
+                              : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
                         }`}
+                        onClick={(e) => {
+                          if (isLocked && item.path !== '/dashboard') {
+                            e.preventDefault();
+                          }
+                        }}
                       >
                         <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={isActive ? "2.5" : "2"} d={item.icon}></path>

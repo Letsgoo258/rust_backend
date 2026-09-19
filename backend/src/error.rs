@@ -25,6 +25,19 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, error_message) = match &self {
             AppError::Database(err) => {
+                if let Some(db_err) = err.as_database_error() {
+                    if let Some(constraint) = db_err.constraint() {
+                        if constraint == "schools_code_key" {
+                            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "A school with this code already exists." }))).into_response();
+                        }
+                        if constraint == "users_email_key" {
+                            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "A user with this email already exists." }))).into_response();
+                        }
+                        if constraint == "users_username_key" {
+                            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "This username is already taken." }))).into_response();
+                        }
+                    }
+                }
                 tracing::error!("Database error: {}", err);
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,

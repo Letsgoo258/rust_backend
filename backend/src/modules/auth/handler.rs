@@ -126,6 +126,7 @@ async fn setup_system(
 
 async fn login(
     mut auth_session: AuthSession,
+    axum::extract::State(state): axum::extract::State<crate::state::AppState>,
     Json(payload): Json<LoginRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let creds = Credentials {
@@ -153,6 +154,7 @@ async fn login(
         ));
     }
 
+    crate::utils::audit::log_action(&state.db, Some(user.school_id), Some(user.id), "LOGIN", None, None, None).await.ok();
     Ok(Json(json!({ "message": "Login successful", "user": user })))
 }
 
@@ -315,7 +317,7 @@ async fn verify_email(
         .await?;
 
     // Refresh session user (simplistic way)
-    if let Ok(Some(mut updated_user)) = sqlx::query_as!(
+    if let Ok(Some(updated_user)) = sqlx::query_as!(
         crate::modules::auth::backend::User,
         r#"SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.roles::TEXT[] as "roles!", u.email_verified, u.phone_verified, s.status::TEXT as "school_status!"
            FROM users u JOIN schools s ON u.school_id = s.id WHERE u.id = $1"#,
@@ -347,7 +349,7 @@ async fn verify_phone(
         .execute(&state.db)
         .await?;
         
-    if let Ok(Some(mut updated_user)) = sqlx::query_as!(
+    if let Ok(Some(updated_user)) = sqlx::query_as!(
         crate::modules::auth::backend::User,
         r#"SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.roles::TEXT[] as "roles!", u.email_verified, u.phone_verified, s.status::TEXT as "school_status!"
            FROM users u JOIN schools s ON u.school_id = s.id WHERE u.id = $1"#,
@@ -412,7 +414,7 @@ async fn setup_school_details(
     .await?;
 
     // Refresh session
-    if let Ok(Some(mut updated_user)) = sqlx::query_as!(
+    if let Ok(Some(updated_user)) = sqlx::query_as!(
         crate::modules::auth::backend::User,
         r#"SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.roles::TEXT[] as "roles!", u.email_verified, u.phone_verified, s.status::TEXT as "school_status!"
            FROM users u JOIN schools s ON u.school_id = s.id WHERE u.id = $1"#,

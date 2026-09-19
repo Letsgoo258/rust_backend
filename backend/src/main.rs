@@ -12,6 +12,7 @@ use config::AppConfig;
 use state::AppState;
 use std::net::SocketAddr;
 use std::panic;
+use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -52,12 +53,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create App State
     let state = AppState::new(pool, config.clone());
 
+
+    // IP-based Rate Limiting (5 requests per second, burst 20)
+    let governor_conf = Box::new(
+        GovernorConfigBuilder::default()
+            .per_second(2)
+            .burst_size(20)
+            .finish()
+            .unwrap()
+    );
+    let governor_layer = GovernorLayer {
+        config: Box::leak(governor_conf),
+    };
+
     // Build our application with routes
+
     let app = Router::new()
         .nest("/api/v1", routes::health::router())
         .nest("/api/v1/auth", modules::auth::router())
         .nest("/api/v1/sis", modules::sis::handler::router())
         .layer(auth_layer)
+        .layer(governor_layer)
         
         .layer(
             tower_http::trace::TraceLayer::new_for_http()

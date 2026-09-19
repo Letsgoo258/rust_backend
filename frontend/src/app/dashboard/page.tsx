@@ -18,7 +18,8 @@ export default function DashboardOverview() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [verifyModalOpen, setVerifyModalOpen] = useState(false);
-  const [otp, setOtp] = useState("");
+  const [emailOtp, setEmailOtp] = useState("");
+  const [phoneOtp, setPhoneOtp] = useState("");
   const [otpLoading, setOtpLoading] = useState(false);
   const [otpError, setOtpError] = useState("");
   
@@ -68,7 +69,7 @@ export default function DashboardOverview() {
       const res = await fetch("/api/v1/auth/verify/submit-otp", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ otp }),
+        body: JSON.stringify({ email_otp: emailOtp, phone_otp: phoneOtp }),
       });
       if (!res.ok) {
         const text = await res.text();
@@ -204,15 +205,29 @@ export default function DashboardOverview() {
             <p className="text-gray-600 text-sm mb-4">
               A 6-digit verification code has been sent to your email and WhatsApp (terminal).
             </p>
-            <div className="mb-4">
-              <input
-                type="text"
-                className="w-full border-gray-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500 p-3 border text-gray-900 font-mono text-center tracking-widest text-xl"
-                placeholder="------"
-                maxLength={6}
-                value={otp}
-                onChange={(e) => setOtp(e.target.value.toUpperCase())}
-              />
+            <div className="mb-4 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Email OTP</label>
+                <input
+                  type="text"
+                  className="w-full border-gray-300 rounded-lg shadow-sm focus:border-blue-500 focus:ring-blue-500 p-3 border text-gray-900 font-mono text-center tracking-widest text-xl"
+                  placeholder="------"
+                  maxLength={6}
+                  value={emailOtp}
+                  onChange={(e) => setEmailOtp(e.target.value.toUpperCase())}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">WhatsApp OTP</label>
+                <input
+                  type="text"
+                  className="w-full border-gray-300 rounded-lg shadow-sm focus:border-green-500 focus:ring-green-500 p-3 border text-gray-900 font-mono text-center tracking-widest text-xl"
+                  placeholder="------"
+                  maxLength={6}
+                  value={phoneOtp}
+                  onChange={(e) => setPhoneOtp(e.target.value.toUpperCase())}
+                />
+              </div>
             </div>
             {otpError && <p className="text-red-600 text-sm font-medium text-center mb-4">{otpError}</p>}
             <div className="flex gap-3">

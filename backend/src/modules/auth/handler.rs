@@ -610,62 +610,79 @@ pub async fn request_verify_otp(
 ) -> Result<impl axum::response::IntoResponse, AppError> {
     let user = auth_session.user.clone().ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
 
-    let otp = uuid::Uuid::new_v4().to_string().chars().filter(|c| c.is_ascii_alphanumeric()).take(6).collect::<String>().to_uppercase();
+    let email_otp = uuid::Uuid::new_v4().to_string().chars().filter(|c| c.is_ascii_alphanumeric()).take(6).collect::<String>().to_uppercase();
+    let phone_otp = uuid::Uuid::new_v4().to_string().chars().filter(|c| c.is_ascii_alphanumeric()).take(6).collect::<String>().to_uppercase();
     
-    sqlx::query!("DELETE FROM admin_action_otps WHERE user_id = $1 AND action_type = 'VERIFY_ACCOUNT'", user.id)
+    sqlx::query!("DELETE FROM admin_action_otps WHERE user_id = $1 AND action_type IN ('VERIFY_EMAIL', 'VERIFY_PHONE')", user.id)
         .execute(&state.db).await?;
 
-    sqlx::query!("INSERT INTO admin_action_otps (user_id, action_type, otp_code, expires_at) VALUES ($1, 'VERIFY_ACCOUNT', $2, NOW() + INTERVAL '15 minutes')", user.id, otp)
+    sqlx::query!("INSERT INTO admin_action_otps (user_id, action_type, otp_code, expires_at) VALUES ($1, 'VERIFY_EMAIL', $2, NOW() + INTERVAL '15 minutes')", user.id, email_otp)
+        .execute(&state.db).await?;
+        
+    sqlx::query!("INSERT INTO admin_action_otps (user_id, action_type, otp_code, expires_at) VALUES ($1, 'VERIFY_PHONE', $2, NOW() + INTERVAL '15 minutes')", user.id, phone_otp)
         .execute(&state.db).await?;
 
     let email_body = format!(
-        "<h1>Verify your Eravaya Account</h1>\n\
-        <p>Your verification code is:</p>\n\
-        <h2 style='color:blue; letter-spacing:4px'>{}</h2>\n\
+        "<h1>Verify your Eravaya Account</h1>
+\
+        <p>Your Email Verification Code is:</p>
+\
+        <h2 style='color:blue; letter-spacing:4px'>{}</h2>
+\
         <p>This code will expire in 15 minutes.</p>",
-        otp
+        email_otp
     );
 
-    crate::utils::email::send_email(&user.username, "Eravaya: Verification Code", &email_body).await.ok();
+    if let Err(e) = crate::utils::email::send_email(&user.username, "Eravaya: Email Verification Code", &email_body).await {
+        tracing::error!("Failed to send verification email to {}: {}", user.username, e);
+    } else {
+        tracing::info!("Verification email sent successfully to {}", user.username);
+    }
     
     tracing::warn!("============================================================");
     tracing::warn!("WHATSAPP OTP DISPATCHED TO TERMINAL");
     tracing::warn!("USER: {}", user.username);
-    tracing::warn!("YOUR VERIFICATION CODE IS: {}", otp);
+    tracing::warn!("YOUR WHATSAPP VERIFICATION CODE IS: {}", phone_otp);
+    
+    // For safety, also log the email one to the terminal in case email fails completely in dev
+    tracing::warn!("YOUR EMAIL VERIFICATION CODE IS: {}", email_otp);
     tracing::warn!("============================================================");
 
-    Ok((axum::http::StatusCode::OK, axum::Json(serde_json::json!({ "message": "OTP sent to email and WhatsApp" }))))
+    Ok((axum::http::StatusCode::OK, axum::Json(serde_json::json!({ "message": "OTPs sent to email and WhatsApp" }))))
 }
 
-#[derive(serde::Deserialize)]
-#[derive(Debug)]
+#[derive(Debug, serde::Deserialize)]
 pub struct SubmitVerifyOtpRequest {
-    pub otp: String,
+    pub email_otp: String,
+    pub phone_otp: String,
 }
 
-#[tracing::instrument(err, skip(state, auth_session, payload))]
+#[tracing::instrument(err, skip(state, auth_session))]
 pub async fn submit_verify_otp(
-    mut auth_session: AuthSession,
+    auth_session: AuthSession,
     axum::extract::State(state): axum::extract::State<AppState>,
     axum::Json(payload): axum::Json<SubmitVerifyOtpRequest>,
 ) -> Result<impl axum::response::IntoResponse, AppError> {
     let user = auth_session.user.clone().ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
 
-    let stored_otp = sqlx::query!(
-        "SELECT id, otp_code, expires_at FROM admin_action_otps WHERE user_id = $1 AND action_type = 'VERIFY_ACCOUNT' ORDER BY created_at DESC LIMIT 1",
-        user.id
-    ).fetch_optional(&state.db).await?;
-
-    if let Some(record) = stored_otp {
-        if record.expires_at < time::OffsetDateTime::now_utc() {
-            return Err(AppError::BadRequest("OTP has expired".into()));
-        }
-        if record.otp_code != payload.otp {
-            return Err(AppError::BadRequest("Invalid OTP".into()));
-        }
+    // Verify Email OTP
+    let stored_email = sqlx::query!("SELECT id, otp_code, expires_at FROM admin_action_otps WHERE user_id = $1 AND action_type = 'VERIFY_EMAIL' ORDER BY created_at DESC LIMIT 1", user.id).fetch_optional(&state.db).await?;
+    if let Some(record) = stored_email {
+        if record.expires_at < time::OffsetDateTime::now_utc() { return Err(AppError::BadRequest("Email OTP expired".into())); }
+        if record.otp_code != payload.email_otp { return Err(AppError::BadRequest("Invalid Email OTP".into())); }
         sqlx::query!("DELETE FROM admin_action_otps WHERE id = $1", record.id).execute(&state.db).await?;
     } else {
-        return Err(AppError::BadRequest("No valid OTP requested".into()));
+        return Err(AppError::BadRequest("No valid Email OTP requested".into()));
+    }
+    
+    // Verify Phone OTP
+    let stored_phone = sqlx::query!("SELECT id, otp_code, expires_at FROM admin_action_otps WHERE user_id = $1 AND action_type = 'VERIFY_PHONE' ORDER BY created_at DESC LIMIT 1", user.id).fetch_optional(&state.db).await?;
+    if let Some(record) = stored_phone {
+        if record.expires_at < time::OffsetDateTime::now_utc() { return Err(AppError::BadRequest("Phone OTP expired".into())); }
+        if record.otp_code != payload.phone_otp { return Err(AppError::BadRequest("Invalid WhatsApp OTP".into())); }
+        sqlx::query!("DELETE FROM admin_action_otps WHERE id = $1", record.id).execute(&state.db).await?;
+    } else {
+        return Err(AppError::BadRequest("No valid WhatsApp OTP requested".into()));
     }
 
     sqlx::query!("UPDATE users SET email_verified = true, phone_verified = true WHERE id = $1", user.id).execute(&state.db).await?;
@@ -676,7 +693,8 @@ pub async fn submit_verify_otp(
            FROM users u JOIN schools s ON u.school_id = s.id WHERE u.id = $1"#,
         user.id
     ).fetch_optional(&state.db).await {
-        auth_session.login(&updated_user).await.map_err(|_| AppError::BadRequest("Failed to update session".into()))?;
+        let mut session = auth_session;
+        session.login(&updated_user).await.map_err(|_| AppError::BadRequest("Failed to update session".into()))?;
     }
 
     Ok((axum::http::StatusCode::OK, axum::Json(serde_json::json!({ "message": "Account verified" }))))

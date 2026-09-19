@@ -34,7 +34,7 @@ export default function LoginPage() {
       }
       
       const userRes = await res.json();
-      if (userRes.user?.user_type === "SUPER_ADMIN") {
+      if (userRes.user?.roles?.includes("SUPER_ADMIN")) {
         router.push("/dashboard/super-admin");
       } else {
         router.push("/dashboard");

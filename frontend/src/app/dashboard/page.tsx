@@ -11,6 +11,7 @@ interface User {
   email_verified: boolean;
   phone_verified: boolean;
   school_status: string;
+  roles: string[];
 }
 
 export default function DashboardOverview() {
@@ -26,6 +27,15 @@ export default function DashboardOverview() {
   const [setupMode, setSetupMode] = useState(false);
   const [setupLoading, setSetupLoading] = useState(false);
   const [setupError, setSetupError] = useState("");
+  
+  const [onboardingStep, setOnboardingStep] = useState("");
+  
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const step = localStorage.getItem("eravaya_onboarding_step");
+      if (step) setOnboardingStep(step);
+    }
+  }, []);
 
   useEffect(() => {
     fetch("/api/v1/auth/me")
@@ -110,6 +120,10 @@ export default function DashboardOverview() {
       }
       setUser(prev => prev ? { ...prev, school_status: "ACTIVE" } : null);
       setSetupMode(false);
+      if (typeof window !== "undefined") {
+        localStorage.setItem("eravaya_onboarding_step", "admins");
+        setOnboardingStep("admins");
+      }
     } catch (err: any) {
       setSetupError(err.message);
     } finally {
@@ -183,20 +197,107 @@ export default function DashboardOverview() {
         </div>
       )}
 
-      {!needsOnboarding && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="bg-white/60 backdrop-blur-xl border border-white p-6 rounded-3xl shadow-sm hover:shadow-md transition-shadow">
-            <h3 className="text-sm font-medium text-gray-500 mb-1">Total Students</h3>
-            <p className="text-4xl font-semibold text-gray-900 tracking-tight">0</p>
+            {!needsOnboarding && (
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="bg-white/60 backdrop-blur-xl border border-white p-6 rounded-3xl shadow-sm hover:shadow-md transition-shadow">
+              <h3 className="text-sm font-medium text-gray-500 mb-1">Total Students</h3>
+              <p className="text-4xl font-semibold text-gray-900 tracking-tight">0</p>
+            </div>
+            <div className="bg-white/60 backdrop-blur-xl border border-white p-6 rounded-3xl shadow-sm hover:shadow-md transition-shadow">
+              <h3 className="text-sm font-medium text-gray-500 mb-1">Active Classes</h3>
+              <p className="text-4xl font-semibold text-gray-900 tracking-tight">0</p>
+            </div>
+            <div className="bg-white/60 backdrop-blur-xl border border-white p-6 rounded-3xl shadow-sm hover:shadow-md transition-shadow">
+              <h3 className="text-sm font-medium text-gray-500 mb-1">Pending Enrollments</h3>
+              <p className="text-4xl font-semibold text-gray-900 tracking-tight">0</p>
+            </div>
           </div>
-          <div className="bg-white/60 backdrop-blur-xl border border-white p-6 rounded-3xl shadow-sm hover:shadow-md transition-shadow">
-            <h3 className="text-sm font-medium text-gray-500 mb-1">Active Classes</h3>
-            <p className="text-4xl font-semibold text-gray-900 tracking-tight">0</p>
-          </div>
-          <div className="bg-white/60 backdrop-blur-xl border border-white p-6 rounded-3xl shadow-sm hover:shadow-md transition-shadow">
-            <h3 className="text-sm font-medium text-gray-500 mb-1">Pending Enrollments</h3>
-            <p className="text-4xl font-semibold text-gray-900 tracking-tight">0</p>
-          </div>
+          
+          {user?.roles?.includes("SCHOOL_ADMIN") && onboardingStep && (
+            <div className="bg-white rounded-3xl border border-gray-200 p-8 mt-8 shadow-sm">
+              <div className="mb-6">
+                <h2 className="text-2xl font-bold text-gray-900">School Enrichment Progress</h2>
+                <p className="text-gray-500 mt-1">Follow these steps to make your school fully functional (Phase 2 Roadmap)</p>
+              </div>
+              
+              <div className="space-y-4">
+                <div className="flex items-center gap-4 p-4 rounded-xl bg-green-50 border border-green-100">
+                  <div className="w-8 h-8 rounded-full bg-green-500 text-white flex items-center justify-center shrink-0">✓</div>
+                  <div className="flex-1">
+                    <h4 className="font-semibold text-green-900">1. Verify Contact Details</h4>
+                    <p className="text-sm text-green-700">Email and Phone have been verified.</p>
+                  </div>
+                </div>
+                
+                <div className="flex items-center gap-4 p-4 rounded-xl bg-green-50 border border-green-100">
+                  <div className="w-8 h-8 rounded-full bg-green-500 text-white flex items-center justify-center shrink-0">✓</div>
+                  <div className="flex-1">
+                    <h4 className="font-semibold text-green-900">2. School Profile & Location</h4>
+                    <p className="text-sm text-green-700">Database tenant initialized and active.</p>
+                  </div>
+                </div>
+
+                <div className={`flex items-center gap-4 p-4 rounded-xl border ${onboardingStep === 'admins' ? 'bg-blue-50 border-blue-200 shadow-sm' : 'bg-gray-50 border-gray-200 opacity-50'}`}>
+                  <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${onboardingStep === 'admins' ? 'bg-blue-600 text-white' : 'bg-gray-300 text-gray-600'}`}>3</div>
+                  <div className="flex-1">
+                    <h4 className={`font-semibold ${onboardingStep === 'admins' ? 'text-blue-900' : 'text-gray-700'}`}>3. Add Administrators & Staff</h4>
+                    <p className="text-sm text-gray-500">Invite principals, HR, and teachers into the system.</p>
+                  </div>
+                  {onboardingStep === 'admins' && (
+                    <Button onClick={() => {
+                      localStorage.setItem('eravaya_onboarding_step', 'students');
+                      setOnboardingStep('students');
+                    }}>Mark Complete</Button>
+                  )}
+                </div>
+
+                <div className={`flex items-center gap-4 p-4 rounded-xl border ${onboardingStep === 'students' ? 'bg-blue-50 border-blue-200 shadow-sm' : 'bg-gray-50 border-gray-200 opacity-50'}`}>
+                  <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${onboardingStep === 'students' ? 'bg-blue-600 text-white' : 'bg-gray-300 text-gray-600'}`}>4</div>
+                  <div className="flex-1">
+                    <h4 className={`font-semibold ${onboardingStep === 'students' ? 'text-blue-900' : 'text-gray-700'}`}>4. Enroll Students</h4>
+                    <p className="text-sm text-gray-500">Import student directories and parent contacts.</p>
+                  </div>
+                  {onboardingStep === 'students' && (
+                    <Button onClick={() => {
+                      localStorage.setItem('eravaya_onboarding_step', 'batches');
+                      setOnboardingStep('batches');
+                    }}>Mark Complete</Button>
+                  )}
+                </div>
+
+                <div className={`flex items-center gap-4 p-4 rounded-xl border ${onboardingStep === 'batches' ? 'bg-blue-50 border-blue-200 shadow-sm' : 'bg-gray-50 border-gray-200 opacity-50'}`}>
+                  <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${onboardingStep === 'batches' ? 'bg-blue-600 text-white' : 'bg-gray-300 text-gray-600'}`}>5</div>
+                  <div className="flex-1">
+                    <h4 className={`font-semibold ${onboardingStep === 'batches' ? 'text-blue-900' : 'text-gray-700'}`}>5. Create Classes & Batches</h4>
+                    <p className="text-sm text-gray-500">Define academic structure and section divisions.</p>
+                  </div>
+                  {onboardingStep === 'batches' && (
+                    <Button onClick={() => {
+                      localStorage.setItem('eravaya_onboarding_step', 'timetable');
+                      setOnboardingStep('timetable');
+                    }}>Mark Complete</Button>
+                  )}
+                </div>
+                
+                <div className={`flex items-center gap-4 p-4 rounded-xl border ${onboardingStep === 'timetable' ? 'bg-blue-50 border-blue-200 shadow-sm' : 'bg-gray-50 border-gray-200 opacity-50'}`}>
+                  <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${onboardingStep === 'timetable' ? 'bg-blue-600 text-white' : 'bg-gray-300 text-gray-600'}`}>6</div>
+                  <div className="flex-1">
+                    <h4 className={`font-semibold ${onboardingStep === 'timetable' ? 'text-blue-900' : 'text-gray-700'}`}>6. Generate Timetable</h4>
+                    <p className="text-sm text-gray-500">Configure scheduling rules and dispatch final timetable.</p>
+                  </div>
+                  {onboardingStep === 'timetable' && (
+                    <Button onClick={() => {
+                      localStorage.removeItem('eravaya_onboarding_step');
+                      setOnboardingStep('');
+                      alert('Phase 1 Onboarding Complete!');
+                    }}>Finish Setup</Button>
+                  )}
+                </div>
+                
+              </div>
+            </div>
+          )}
         </div>
       )}
 

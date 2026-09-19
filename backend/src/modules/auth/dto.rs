@@ -73,3 +73,13 @@ pub struct SuperAdminStatsResponse {
     pub active_tenants: i64,
     pub schools: Vec<SchoolDto>,
 }
+
+#[derive(Debug, serde::Deserialize)]
+pub struct UpdateSchoolStatusRequest {
+    pub status: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct DeleteSchoolRequest {
+    pub otp: String,
+}

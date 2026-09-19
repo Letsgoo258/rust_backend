@@ -30,6 +30,9 @@ pub fn router() -> Router<AppState> {
         .route("/schools/setup", post(setup_school_details))
         .route("/switch-tenant", post(switch_tenant))
         .route("/super-admin/stats", axum::routing::get(get_super_admin_stats))
+        .route("/super-admin/schools/:id/status", axum::routing::patch(update_school_status))
+        .route("/super-admin/schools/:id/request-delete-otp", axum::routing::post(request_delete_otp))
+        .route("/super-admin/schools/:id/delete", axum::routing::post(delete_school))
 }
 
 /// Idempotent setup endpoint to create the very first School and Super Admin.
@@ -524,4 +527,125 @@ async fn invite_admin(
             "user_id": new_user_id
         })),
     ))
+}
+
+
+pub async fn update_school_status(
+    auth_session: AuthSession,
+    axum::extract::State(state): axum::extract::State<crate::state::AppState>,
+    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+    axum::Json(payload): axum::Json<crate::modules::auth::dto::UpdateSchoolStatusRequest>,
+) -> Result<impl axum::response::IntoResponse, crate::error::AppError> {
+    let user = auth_session.user.ok_or_else(|| crate::error::AppError::Unauthorized("Not logged in".into()))?;
+    
+    let roles = sqlx::query_scalar!("SELECT roles::TEXT[] as \"roles!\" FROM users WHERE id = $1", user.id)
+        .fetch_one(&state.db).await?;
+        
+    if !roles.contains(&"SUPER_ADMIN".to_string()) {
+        return Err(crate::error::AppError::Forbidden("Only Super Admins can update school status".into()));
+    }
+
+    if payload.status != "ACTIVE" && payload.status != "INACTIVE" {
+        return Err(crate::error::AppError::BadRequest("Invalid status".into()));
+    }
+
+    let rows_affected = sqlx::query("UPDATE schools SET status = $1::school_status WHERE id = $2")
+        .bind(payload.status)
+        .bind(id)
+        .execute(&state.db).await?.rows_affected();
+        
+    if rows_affected == 0 {
+        return Err(crate::error::AppError::NotFound("School not found".into()));
+    }
+
+    Ok((axum::http::StatusCode::OK, axum::Json(serde_json::json!({ "message": "Status updated successfully" }))))
+}
+
+pub async fn request_delete_otp(
+    auth_session: AuthSession,
+    axum::extract::State(state): axum::extract::State<crate::state::AppState>,
+    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+) -> Result<impl axum::response::IntoResponse, crate::error::AppError> {
+    let user = auth_session.user.ok_or_else(|| crate::error::AppError::Unauthorized("Not logged in".into()))?;
+    
+    let roles = sqlx::query_scalar!("SELECT roles::TEXT[] as \"roles!\" FROM users WHERE id = $1", user.id)
+        .fetch_one(&state.db).await?;
+        
+    if !roles.contains(&"SUPER_ADMIN".to_string()) {
+        return Err(crate::error::AppError::Forbidden("Only Super Admins can request deletion".into()));
+    }
+
+    // Verify school exists
+    let exists = sqlx::query_scalar!("SELECT EXISTS(SELECT 1 FROM schools WHERE id = $1)", id).fetch_one(&state.db).await?.unwrap_or(false);
+    if !exists {
+        return Err(crate::error::AppError::NotFound("School not found".into()));
+    }
+
+    // Generate a secure 6-character OTP from UUID
+    let otp = uuid::Uuid::new_v4().to_string().chars().filter(|c| c.is_ascii_alphanumeric()).take(6).collect::<String>().to_uppercase();
+    
+    // Invalidate existing OTPs for this action and target
+    sqlx::query!("DELETE FROM admin_action_otps WHERE user_id = $1 AND action_type = 'DELETE_SCHOOL' AND target_id = $2", user.id, id)
+        .execute(&state.db).await?;
+
+    // Save OTP
+    sqlx::query!("INSERT INTO admin_action_otps (user_id, action_type, target_id, otp_code, expires_at) VALUES ($1, 'DELETE_SCHOOL', $2, $3, NOW() + INTERVAL '10 minutes')", user.id, id, otp)
+        .execute(&state.db).await?;
+
+    tracing::warn!("============================================================");
+    tracing::warn!("OTP DISPATCHED FOR SUPER ADMIN: {}", user.email_verified); // We can just print the OTP safely in dev
+    tracing::warn!("ACTION: DELETE_SCHOOL");
+    tracing::warn!("TARGET: {}", id);
+    tracing::warn!("YOUR OTP CODE IS: {}", otp);
+    tracing::warn!("============================================================");
+
+    Ok((axum::http::StatusCode::OK, axum::Json(serde_json::json!({ "message": "OTP generated and printed to server console" }))))
+}
+
+pub async fn delete_school(
+    auth_session: AuthSession,
+    axum::extract::State(state): axum::extract::State<crate::state::AppState>,
+    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+    axum::Json(payload): axum::Json<crate::modules::auth::dto::DeleteSchoolRequest>,
+) -> Result<impl axum::response::IntoResponse, crate::error::AppError> {
+    let user = auth_session.user.ok_or_else(|| crate::error::AppError::Unauthorized("Not logged in".into()))?;
+    
+    let roles = sqlx::query_scalar!("SELECT roles::TEXT[] as \"roles!\" FROM users WHERE id = $1", user.id)
+        .fetch_one(&state.db).await?;
+        
+    if !roles.contains(&"SUPER_ADMIN".to_string()) {
+        return Err(crate::error::AppError::Forbidden("Only Super Admins can delete schools".into()));
+    }
+
+    // Verify OTP
+    let stored_otp = sqlx::query!(
+        "SELECT id, otp_code, expires_at FROM admin_action_otps WHERE user_id = $1 AND action_type = 'DELETE_SCHOOL' AND target_id = $2 ORDER BY created_at DESC LIMIT 1",
+        user.id, id
+    ).fetch_optional(&state.db).await?;
+
+    if let Some(record) = stored_otp {
+        if record.expires_at < time::OffsetDateTime::now_utc() {
+            return Err(crate::error::AppError::BadRequest("OTP has expired".into()));
+        }
+        if record.otp_code != payload.otp {
+            return Err(crate::error::AppError::BadRequest("Invalid OTP".into()));
+        }
+        
+        // OTP is valid. Delete it so it can't be reused.
+        sqlx::query!("DELETE FROM admin_action_otps WHERE id = $1", record.id).execute(&state.db).await?;
+    } else {
+        return Err(crate::error::AppError::BadRequest("No valid OTP requested for this action".into()));
+    }
+
+    // Nuke the school
+    let rows_affected = sqlx::query!("DELETE FROM schools WHERE id = $1", id)
+        .execute(&state.db).await?.rows_affected();
+        
+    if rows_affected == 0 {
+        return Err(crate::error::AppError::NotFound("School not found".into()));
+    }
+
+    crate::utils::audit::log_action(&state.db, Some(id), Some(user.id), "DELETE_SCHOOL", None, None, None).await.ok();
+
+    Ok((axum::http::StatusCode::OK, axum::Json(serde_json::json!({ "message": "School permanently deleted" }))))
 }

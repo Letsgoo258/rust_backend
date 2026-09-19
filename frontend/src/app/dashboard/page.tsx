@@ -79,6 +79,9 @@ export default function DashboardOverview() {
       }
       setVerifyModalOpen(false);
       setUser(prev => prev ? { ...prev, email_verified: true, phone_verified: true } : null);
+      if (user?.school_status === "PENDING_SETUP") {
+        setSetupMode(true);
+      }
     } catch (err: any) {
       setOtpError(err.message);
     } finally {

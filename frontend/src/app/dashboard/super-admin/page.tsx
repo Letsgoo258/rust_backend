@@ -172,7 +172,8 @@ export default function SuperAdminPage() {
                   <th className="px-6 py-3 font-medium">School Name</th>
                   <th className="px-6 py-3 font-medium">Code</th>
                   <th className="px-6 py-3 font-medium">Status</th>
-                  <th className="px-6 py-3 font-medium">Created</th>\n                  <th className="px-6 py-3 font-medium text-right">Actions</th>
+                  <th className="px-6 py-3 font-medium">Created</th>
+                  <th className="px-6 py-3 font-medium text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">

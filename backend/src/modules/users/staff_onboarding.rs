@@ -122,3 +122,57 @@ pub async fn bulk_upload_staff(
         }))
     ))
 }
+
+
+#[derive(Deserialize)]
+pub struct StaffSingleQuery {
+    pub role: String,
+}
+
+pub async fn single_add_staff(
+    auth_session: AuthSession,
+    State(state): State<AppState>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    Query(query): Query<StaffSingleQuery>,
+    Json(payload): Json<std::collections::HashMap<String, String>>,
+) -> Result<impl IntoResponse, AppError> {
+    let user = auth_session.user.ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+    
+    let first_name = payload.get("First Name").cloned().unwrap_or_default();
+    let last_name = payload.get("Last Name").cloned().unwrap_or_default();
+    let email = payload.get("Email").cloned().unwrap_or_default();
+    let phone = payload.get("Phone").cloned().unwrap_or_default();
+    let emp_id = payload.get("Employee ID").cloned().unwrap_or_default();
+    let joining_date_str = payload.get("Joining Date (YYYY-MM-DD)").cloned().unwrap_or_default();
+    let department = payload.get("Department").cloned();
+    
+    let format = time::format_description::parse_borrowed::<2>("[year]-[month]-[day]").unwrap();
+    let joining_date = time::Date::parse(&joining_date_str, &format)
+        .map_err(|_| AppError::BadRequest("Invalid joining date format".into()))?;
+    
+    let default_pass = crate::utils::password::hash_password("Welcome123!").unwrap();
+    let username = format!("{}{}", first_name.to_lowercase(), emp_id);
+    
+    let mut tx = state.db.begin().await?;
+    
+    let user_id: uuid::Uuid = sqlx::query_scalar(
+        r#"INSERT INTO users (school_id, first_name, last_name, email, phone, username, password_hash, status, roles, updated_by_user_id) 
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACTIVE', ARRAY[$8::system_role_type], $9) 
+           RETURNING id"#
+    )
+    .bind(user.school_id).bind(&first_name).bind(&last_name).bind(&email).bind(&phone)
+    .bind(&username).bind(&default_pass).bind(&query.role).bind(user.id)
+    .fetch_one(&mut *tx).await?;
+    
+    sqlx::query(
+        "INSERT INTO staff (school_id, user_id, employee_id, department, joining_date)
+         VALUES ($1, $2, $3, $4, $5)"
+    )
+    .bind(user.school_id).bind(user_id).bind(&emp_id).bind(department).bind(joining_date)
+    .execute(&mut *tx).await?;
+    
+    tx.commit().await?;
+    crate::utils::audit::log_action(&state.db, Some(user.school_id), Some(user.id), "SINGLE_ADD_STAFF", None, None, None, Some(addr.to_string())).await.ok();
+    
+    Ok((StatusCode::OK, Json(serde_json::json!({"message": "Staff added successfully"}))))
+}

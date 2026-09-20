@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import Image from "next/image";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -117,12 +118,19 @@ export default function LoginPage() {
               placeholder="Enter your email or username" 
             />
 
-            <Input 
-              required 
-              name="password" 
-              type="password" 
-              placeholder="Password" 
-            />
+            <div>
+              <Input 
+                required 
+                name="password" 
+                type="password" 
+                placeholder="Password" 
+              />
+              <div className="flex justify-end mt-1.5">
+                <Link href="/reset-password" className="text-xs text-[#3366FF] hover:underline font-medium">
+                  Forgot password?
+                </Link>
+              </div>
+            </div>
 
             <Button type="submit" loading={loading} loadingText="Continuing..." fullWidth className="mt-2">
               Continue

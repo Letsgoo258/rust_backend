@@ -27,6 +27,8 @@ pub fn router() -> Router<AppState> {
         .route("/me", get(me))
         .route("/verify/request-otp", post(request_verify_otp))
         .route("/verify/submit-otp", post(submit_verify_otp))
+        .route("/password-reset/request", post(request_password_reset))
+        .route("/password-reset/confirm", post(confirm_password_reset))
         .route("/schools/setup", post(setup_school_details))
         .route("/switch-tenant", post(switch_tenant))
         .route("/super-admin/stats", axum::routing::get(get_super_admin_stats))
@@ -699,4 +701,142 @@ pub async fn submit_verify_otp(
     }
 
     Ok((axum::http::StatusCode::OK, axum::Json(serde_json::json!({ "message": "Account verified" }))))
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct RequestPasswordResetPayload {
+    pub email: String,
+}
+
+#[tracing::instrument(err, skip(state))]
+pub async fn request_password_reset(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    axum::Json(payload): axum::Json<RequestPasswordResetPayload>,
+) -> Result<impl axum::response::IntoResponse, AppError> {
+    let email = payload.email.trim().to_lowercase();
+    
+    let user = sqlx::query!("SELECT id, username FROM users WHERE LOWER(email) = LOWER($1) AND status = 'ACTIVE' LIMIT 1", email)
+        .fetch_optional(&state.db)
+        .await?;
+
+    if let Some(user_record) = user {
+        use argon2::password_hash::rand_core::{OsRng, RngCore};
+        let code = format!("{:06}", OsRng.next_u32() % 1_000_000);
+        let token = uuid::Uuid::new_v4().to_string();
+        let token_hash = crate::utils::password::hash_password(&token).unwrap_or(token.clone());
+        let expires_at = time::OffsetDateTime::now_utc() + time::Duration::minutes(15);
+
+        sqlx::query!(
+            "INSERT INTO password_resets (user_id, email, token_hash, code, expires_at) VALUES ($1, $2, $3, $4, $5)",
+            user_record.id,
+            email,
+            token_hash,
+            code,
+            expires_at
+        )
+        .execute(&state.db)
+        .await?;
+
+        let reset_url = format!("http://localhost:3000/reset-password?token={}&email={}", token, email);
+        let email_body = format!(
+            "<h3>Eravaya Password Reset Request</h3>\
+             <p>Hello {},</p>\
+             <p>Your verification code is: <strong>{}</strong></p>\
+             <p>Or click this link to reset your password: <a href=\"{}\">Reset Password</a></p>\
+             <p>This code will expire in 15 minutes.</p>",
+            user_record.username, code, reset_url
+        );
+
+        let email_to_send = email.clone();
+        tokio::spawn(async move {
+            if let Err(e) = crate::utils::email::send_email(&email_to_send, "Reset Your Eravaya Password", &email_body).await {
+                tracing::warn!("Failed to send reset email: {}", e);
+            }
+        });
+
+        tracing::info!("================ PASSWORD RESET CREATED ================");
+        tracing::info!("Target Email: {}", email);
+        tracing::info!("Verification Code: {}", code);
+        tracing::info!("Signed Reset URL: {}", reset_url);
+        tracing::info!("========================================================");
+    }
+
+    Ok((
+        axum::http::StatusCode::OK,
+        axum::Json(serde_json::json!({
+            "message": "If an active account exists with that email, a password reset link and verification code have been sent."
+        }))
+    ))
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct ConfirmPasswordResetPayload {
+    pub email: String,
+    pub code: String,
+    pub token: Option<String>,
+    pub new_password: String,
+}
+
+#[tracing::instrument(err, skip(state))]
+pub async fn confirm_password_reset(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    axum::Json(payload): axum::Json<ConfirmPasswordResetPayload>,
+) -> Result<impl axum::response::IntoResponse, AppError> {
+    if payload.new_password.len() < 8 {
+        return Err(AppError::BadRequest("New password must be at least 8 characters long".into()));
+    }
+
+    let email = payload.email.trim().to_lowercase();
+    let code = payload.code.trim();
+
+    let record = sqlx::query!(
+        "SELECT id, user_id, expires_at FROM password_resets \
+         WHERE LOWER(email) = LOWER($1) AND code = $2 AND used_at IS NULL \
+         ORDER BY created_at DESC LIMIT 1",
+        email,
+        code
+    )
+    .fetch_optional(&state.db)
+    .await?;
+
+    let reset_record = match record {
+        Some(r) => r,
+        None => return Err(AppError::BadRequest("Invalid verification code or email".into())),
+    };
+
+    if reset_record.expires_at < time::OffsetDateTime::now_utc() {
+        return Err(AppError::BadRequest("Password reset code has expired. Please request a new one.".into()));
+    }
+
+    let new_password_hash = hash_password(&payload.new_password)?;
+
+    let mut tx = state.db.begin().await?;
+
+    sqlx::query!("UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2", new_password_hash, reset_record.user_id)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query!("UPDATE password_resets SET used_at = now() WHERE id = $1", reset_record.id)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+
+    crate::utils::audit::log_action(
+        &state.db,
+        None,
+        Some(reset_record.user_id),
+        "PASSWORD_RESET_SUCCESS",
+        None,
+        None,
+        None,
+        None,
+    ).await.ok();
+
+    Ok((
+        axum::http::StatusCode::OK,
+        axum::Json(serde_json::json!({
+            "message": "Password successfully reset. You can now log in with your new password."
+        }))
+    ))
 }

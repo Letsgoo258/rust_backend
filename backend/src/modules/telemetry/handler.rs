@@ -22,7 +22,7 @@ pub fn router() -> Router<AppState> {
 
 async fn record_event(
     auth_session: AuthSession,
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Json(payload): Json<TelemetryEventRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let (school_id, user_id) = if let Some(user) = auth_session.user {

@@ -1,6 +1,6 @@
 use sqlx::PgPool;
-use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::fs;
+use std::io::{BufRead, BufReader};
 use time::{OffsetDateTime, Duration, Time};
 use super::handler::TelemetryRecord;
 

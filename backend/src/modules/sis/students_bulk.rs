@@ -45,7 +45,7 @@ pub async fn bulk_upload_students(
     let mut final_success = 0;
     
     let mut failed_records_extra = Vec::new();
-    let mut err_headers = vec![
+    let err_headers = vec![
         "First Name", "Last Name", "Admission Number", "Date of Birth (YYYY-MM-DD)", 
         "Guardian First Name", "Guardian Last Name", "Guardian Email", "Guardian Phone", "Error_Reason"
     ];
@@ -62,7 +62,7 @@ pub async fn bulk_upload_students(
         let s_phone_raw = row.get("Student Phone").unwrap_or(&String::new()).clone();
         let s_phone = if s_phone_raw.is_empty() { None } else { Some(s_phone_raw.clone()) };
         
-        let format = time::format_description::parse("[year]-[month]-[day]").unwrap();
+        let format = time::format_description::parse_borrowed::<2>("[year]-[month]-[day]").unwrap();
         let dob = match time::Date::parse(dob_str, &format) {
             Ok(d) => d,
             Err(_) => {

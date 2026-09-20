@@ -1,7 +1,7 @@
 use std::collections::HashMap;
-use serde_json::Value;
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub enum ColumnType {
     String,
     Email,
@@ -23,6 +23,7 @@ pub struct CsvSchema {
     pub columns: Vec<ColumnSchema>,
 }
 
+#[allow(dead_code)]
 pub struct CsvParseResult {
     pub valid_rows: Vec<HashMap<String, String>>,
     pub failed_csv: Option<String>, // Base64 encoded CSV string

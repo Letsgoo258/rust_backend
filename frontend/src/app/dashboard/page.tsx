@@ -30,6 +30,15 @@ export default function DashboardOverview() {
   
   const [onboardingStep, setOnboardingStep] = useState("");
   
+  const [adminModalOpen, setAdminModalOpen] = useState(false);
+  const [adminLoading, setAdminLoading] = useState(false);
+  
+  const [studentModalOpen, setStudentModalOpen] = useState(false);
+  const [studentCsvFile, setStudentCsvFile] = useState<File | null>(null);
+  const [studentLoading, setStudentLoading] = useState(false);
+  const [studentFailedCsv, setStudentFailedCsv] = useState<string | null>(null);
+
+  
   useEffect(() => {
     if (typeof window !== "undefined") {
       const step = localStorage.getItem("eravaya_onboarding_step");
@@ -70,6 +79,68 @@ export default function DashboardOverview() {
     } finally {
       setOtpLoading(false);
     }
+  };
+
+
+  const handleAddAdmin = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    setAdminLoading(true);
+    const formData = new FormData(e.currentTarget);
+    const payload = Object.fromEntries(formData.entries());
+    try {
+      const res = await fetch("/api/v1/sis/admins", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) throw new Error(await res.text());
+      setAdminModalOpen(false);
+      localStorage.setItem('eravaya_onboarding_step', 'students');
+      setOnboardingStep('students');
+    } catch(err) {
+      alert(err);
+    } finally {
+      setAdminLoading(false);
+    }
+  };
+
+  const handleUploadStudents = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!studentCsvFile) return alert("Please select a file");
+    setStudentLoading(true);
+    setStudentFailedCsv(null);
+    const formData = new FormData();
+    formData.append("file", studentCsvFile);
+    
+    try {
+      const res = await fetch("/api/v1/sis/students/bulk-upload", {
+        method: "POST",
+        body: formData
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Upload failed");
+      
+      alert(`Successfully added ${data.success_count} students! Failed rows: ${data.failed_count}`);
+      if (data.failed_csv) {
+        setStudentFailedCsv(data.failed_csv);
+      } else {
+        setStudentModalOpen(false);
+        localStorage.setItem('eravaya_onboarding_step', 'batches');
+        setOnboardingStep('batches');
+      }
+    } catch(err) {
+      alert(err);
+    } finally {
+      setStudentLoading(false);
+    }
+  };
+  
+  const downloadFailedCsv = () => {
+    if (!studentFailedCsv) return;
+    const link = document.createElement("a");
+    link.href = `data:text/csv;base64,${studentFailedCsv}`;
+    link.download = "failed_student_records.csv";
+    link.click();
   };
 
   const handleSubmitOtp = async () => {
@@ -245,10 +316,13 @@ export default function DashboardOverview() {
                     <p className="text-sm text-gray-500">Invite principals, HR, and teachers into the system.</p>
                   </div>
                   {onboardingStep === 'admins' && (
-                    <Button onClick={() => {
-                      localStorage.setItem('eravaya_onboarding_step', 'students');
-                      setOnboardingStep('students');
-                    }}>Mark Complete</Button>
+                    <div className="flex gap-2">
+                      <Button variant="secondary" onClick={() => {
+                        localStorage.setItem('eravaya_onboarding_step', 'students');
+                        setOnboardingStep('students');
+                      }}>Skip</Button>
+                      <Button onClick={() => setAdminModalOpen(true)}>Add Admin</Button>
+                    </div>
                   )}
                 </div>
 
@@ -259,10 +333,7 @@ export default function DashboardOverview() {
                     <p className="text-sm text-gray-500">Import student directories and parent contacts.</p>
                   </div>
                   {onboardingStep === 'students' && (
-                    <Button onClick={() => {
-                      localStorage.setItem('eravaya_onboarding_step', 'batches');
-                      setOnboardingStep('batches');
-                    }}>Mark Complete</Button>
+                    <Button onClick={() => setStudentModalOpen(true)}>Upload CSV</Button>
                   )}
                 </div>
 
@@ -381,6 +452,68 @@ export default function DashboardOverview() {
               <div className="pt-6 border-t flex justify-end gap-4">
                 <Button variant="secondary" onClick={() => setSetupMode(false)} type="button">Cancel</Button>
                 <Button variant="primary" type="submit" loading={setupLoading}>Save & Activate School</Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+
+      {/* Admin Modal */}
+      {adminModalOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden p-6">
+            <h3 className="text-xl font-bold mb-4">Add Administrator</h3>
+            <form onSubmit={handleAddAdmin} className="space-y-4">
+              <Input required name="first_name" label="First Name" />
+              <Input required name="last_name" label="Last Name" />
+              <Input required name="email" type="email" label="Email" />
+              <Input required name="phone" type="tel" label="Phone" />
+              <div className="flex justify-end gap-3 pt-4">
+                <Button variant="secondary" type="button" onClick={() => setAdminModalOpen(false)}>Cancel</Button>
+                <Button variant="primary" type="submit" loading={adminLoading}>Add Admin</Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Student CSV Modal */}
+      {studentModalOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden p-6">
+            <h3 className="text-xl font-bold mb-2">Bulk Enroll Students</h3>
+            <p className="text-sm text-gray-500 mb-6">Upload a CSV containing student and guardian data.</p>
+            
+            <div className="mb-6 p-4 bg-blue-50 text-blue-800 rounded-lg text-sm border border-blue-100">
+              <p className="font-semibold mb-2">Required CSV Headers:</p>
+              <ul className="list-disc pl-5 space-y-1">
+                <li>First Name</li>
+                <li>Last Name</li>
+                <li>Admission Number</li>
+                <li>Date of Birth (YYYY-MM-DD)</li>
+                <li>Guardian First Name</li>
+                <li>Guardian Last Name</li>
+                <li>Guardian Email</li>
+                <li>Guardian Phone</li>
+              </ul>
+            </div>
+            
+            <form onSubmit={handleUploadStudents} className="space-y-4">
+              <input type="file" accept=".csv" onChange={(e) => setStudentCsvFile(e.target.files?.[0] || null)} className="w-full border p-2 rounded" />
+              
+              {studentFailedCsv && (
+                <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
+                  <p className="text-red-700 text-sm font-semibold mb-2">Some rows failed validation!</p>
+                  <Button variant="secondary" type="button" onClick={downloadFailedCsv} className="w-full border-red-300 text-red-700 hover:bg-red-100">
+                    Download Incomplete Data (CSV)
+                  </Button>
+                </div>
+              )}
+              
+              <div className="flex justify-end gap-3 pt-4">
+                <Button variant="secondary" type="button" onClick={() => setStudentModalOpen(false)}>Cancel</Button>
+                <Button variant="primary" type="submit" loading={studentLoading}>Upload & Process</Button>
               </div>
             </form>
           </div>

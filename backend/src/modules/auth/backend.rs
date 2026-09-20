@@ -3,11 +3,12 @@ use axum_login::{AuthUser, AuthnBackend, UserId};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-#[derive(Clone, Debug, sqlx::FromRow, serde::Serialize)]
+#[derive(Clone, Debug, sqlx::FromRow, serde::Serialize, serde::Deserialize)]
 pub struct User {
     pub id: Uuid,
     pub school_id: Uuid,
     pub username: String,
+    #[serde(skip_serializing, default)]
     pub password_hash: String,
     pub display_name: Option<String>,
     pub roles: Vec<String>,

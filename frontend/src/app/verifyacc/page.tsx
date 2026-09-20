@@ -21,15 +21,16 @@ export default function VerifyAccountPage() {
         return res.json();
       })
       .then(data => {
-        if (!data.user) {
+        const u = data.user || data;
+        if (!u || !u.id) {
           router.push("/login");
           return;
         }
-        if (data.user.email_verified && data.user.phone_verified) {
+        if (u.email_verified && u.phone_verified) {
           router.push("/dashboard");
           return;
         }
-        setUser(data.user);
+        setUser(u);
       })
       .catch(() => router.push("/login"));
   }, [router]);

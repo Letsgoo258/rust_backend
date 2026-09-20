@@ -60,17 +60,19 @@ export function AnalyticsProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  // Track clicks globally
+  // Track clicks globally on buttons and links
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
-      // Only track interactive elements
-      if (target.closest('button') || target.closest('a') || target.closest('input')) {
-        let name = target.innerText || target.getAttribute('aria-label') || target.tagName;
-        if (name.length > 50) name = name.substring(0, 50);
+      const buttonOrLink = target.closest('button') || target.closest('a');
+      
+      // Only track buttons and links
+      if (buttonOrLink) {
+        let name = buttonOrLink.innerText || buttonOrLink.getAttribute('aria-label') || buttonOrLink.tagName;
+        if (name.length > 50) name = name.substring(0, 50) + "...";
         
-        // // Click telemetry disabled to prevent DB connection exhaustion
-        // sendTelemetry("CLICK", { component: name });
+        // Safe to enable now since backend uses a file buffer instead of live DB writes!
+        sendTelemetry("USERCLICK", { component: name });
       }
     };
 

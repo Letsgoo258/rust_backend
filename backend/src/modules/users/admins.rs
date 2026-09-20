@@ -16,6 +16,11 @@ pub async fn add_admin(
     Json(payload): Json<AddAdminRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let user = auth_session.user.ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+    if !user.roles.contains(&"SUPER_ADMIN".to_string()) {
+        return Err(AppError::Forbidden("Only Super Admins can add new School Admins".into()));
+    }
+
     
     // Check if email or phone already exists
     let existing = sqlx::query!("SELECT id FROM users WHERE email = $1 OR phone = $2", payload.email, payload.phone)

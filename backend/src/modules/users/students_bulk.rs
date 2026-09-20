@@ -15,7 +15,7 @@ pub async fn bulk_upload_students(
 ) -> Result<impl IntoResponse, AppError> {
     let user = auth_session.user.ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
 
-    if !user.roles.contains(&"SCHOOL_ADMIN".to_string()) && !user.roles.contains(&"SUPER_ADMIN".to_string()) {
+    if !user.roles.contains(&"SCHOOL_ADMIN".to_string()) {
         return Err(AppError::Forbidden("Only School Admins can perform bulk student uploads".into()));
     }
 

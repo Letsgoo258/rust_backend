@@ -334,7 +334,14 @@ export default function DashboardOverview() {
                     <p className="text-sm text-gray-500">Import student directories and parent contacts.</p>
                   </div>
                   {onboardingStep === 'students' && (
-                    <Button onClick={() => setStudentModalOpen(true)}>Upload CSV</Button>
+                    <Button onClick={() => {
+                      if (user?.school_status === "PENDING_SETUP") {
+                        alert("Please complete your school's location and contact details first before enrolling students.");
+                        setSetupMode(true);
+                      } else {
+                        setStudentModalOpen(true);
+                      }
+                    }}>Upload CSV</Button>
                   )}
                 </div>
 

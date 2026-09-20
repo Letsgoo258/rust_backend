@@ -496,6 +496,7 @@ export default function DashboardOverview() {
                 <li>Guardian Last Name</li>
                 <li>Guardian Email</li>
                 <li>Guardian Phone</li>
+                <li>Student Phone <span className="text-gray-500 font-normal">(Optional)</span></li>
               </ul>
             </div>
             

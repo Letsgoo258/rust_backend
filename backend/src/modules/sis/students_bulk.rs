@@ -24,6 +24,7 @@ pub async fn bulk_upload_students(
             ColumnSchema { header: "Guardian Last Name", col_type: ColumnType::String, required: true, min_length: Some(1), max_length: Some(100) },
             ColumnSchema { header: "Guardian Email", col_type: ColumnType::Email, required: true, min_length: None, max_length: None },
             ColumnSchema { header: "Guardian Phone", col_type: ColumnType::Phone, required: true, min_length: None, max_length: None },
+            ColumnSchema { header: "Student Phone", col_type: ColumnType::Phone, required: false, min_length: None, max_length: None },
         ]
     };
     
@@ -57,12 +58,14 @@ pub async fn bulk_upload_students(
         let g_last = row.get("Guardian Last Name").unwrap();
         let g_email = row.get("Guardian Email").unwrap();
         let g_phone = row.get("Guardian Phone").unwrap();
+        let s_phone_raw = row.get("Student Phone").unwrap_or(&String::new()).clone();
+        let s_phone = if s_phone_raw.is_empty() { None } else { Some(s_phone_raw.clone()) };
         
         let format = time::format_description::parse("[year]-[month]-[day]").unwrap();
         let dob = match time::Date::parse(dob_str, &format) {
             Ok(d) => d,
             Err(_) => {
-                failed_records_extra.push(vec![first.clone(), last.clone(), adm.clone(), dob_str.clone(), g_first.clone(), g_last.clone(), g_email.clone(), g_phone.clone(), "Invalid Date format (Use YYYY-MM-DD)".to_string()]);
+                failed_records_extra.push(vec![first.clone(), last.clone(), adm.clone(), dob_str.clone(), g_first.clone(), g_last.clone(), g_email.clone(), g_phone.clone(), s_phone_raw.clone(), "Invalid Date format (Use YYYY-MM-DD)".to_string()]);
                 continue;
             }
         };
@@ -72,7 +75,7 @@ pub async fn bulk_upload_students(
             .fetch_optional(&state.db).await?;
             
         if existing.is_some() {
-            failed_records_extra.push(vec![first.clone(), last.clone(), adm.clone(), dob_str.clone(), g_first.clone(), g_last.clone(), g_email.clone(), g_phone.clone(), "Duplicate Admission Number".to_string()]);
+            failed_records_extra.push(vec![first.clone(), last.clone(), adm.clone(), dob_str.clone(), g_first.clone(), g_last.clone(), g_email.clone(), g_phone.clone(), s_phone_raw.clone(), "Duplicate Admission Number".to_string()]);
             continue;
         }
         
@@ -80,7 +83,7 @@ pub async fn bulk_upload_students(
         let mut tx = match state.db.begin().await {
             Ok(tx) => tx,
             Err(_) => {
-                failed_records_extra.push(vec![first.clone(), last.clone(), adm.clone(), dob_str.clone(), g_first.clone(), g_last.clone(), g_email.clone(), g_phone.clone(), "DB Transaction Error".to_string()]);
+                failed_records_extra.push(vec![first.clone(), last.clone(), adm.clone(), dob_str.clone(), g_first.clone(), g_last.clone(), g_email.clone(), g_phone.clone(), s_phone_raw.clone(), "DB Transaction Error".to_string()]);
                 continue;
             }
         };
@@ -89,9 +92,9 @@ pub async fn bulk_upload_students(
         let s_username = format!("{}{}", adm.to_lowercase(), user.school_id.to_string().chars().take(4).collect::<String>());
         
         let s_user = sqlx::query!(
-            r#"INSERT INTO users (school_id, first_name, last_name, username, password_hash, status, roles, imported_via_csv, updated_by_user_id)
-               VALUES ($1, $2, $3, $4, $5, 'INACTIVE', ARRAY['STUDENT']::system_role_type[], true, $6) RETURNING id"#,
-            user.school_id, first, last, s_username, default_pass, user.id
+            r#"INSERT INTO users (school_id, first_name, last_name, username, password_hash, status, roles, imported_via_csv, updated_by_user_id, phone)
+               VALUES ($1, $2, $3, $4, $5, 'INACTIVE', ARRAY['STUDENT']::system_role_type[], true, $6, $7) RETURNING id"#,
+            user.school_id, first, last, s_username, default_pass, user.id, s_phone
         ).fetch_one(&mut *tx).await.unwrap();
         
         let s_record = sqlx::query!(
@@ -121,7 +124,7 @@ pub async fn bulk_upload_students(
         if tx.commit().await.is_ok() {
             final_success += 1;
         } else {
-            failed_records_extra.push(vec![first.clone(), last.clone(), adm.clone(), dob_str.clone(), g_first.clone(), g_last.clone(), g_email.clone(), g_phone.clone(), "DB Commit Error".to_string()]);
+            failed_records_extra.push(vec![first.clone(), last.clone(), adm.clone(), dob_str.clone(), g_first.clone(), g_last.clone(), g_email.clone(), g_phone.clone(), s_phone_raw.clone(), "DB Commit Error".to_string()]);
         }
     }
     
@@ -140,8 +143,8 @@ pub async fn bulk_upload_students(
         };
         
         let mut wtr = csv::Writer::from_writer(current_bytes);
-        for fr in failed_records_extra {
-            let _ = wtr.write_record(&fr);
+        for fr in &failed_records_extra {
+            let _ = wtr.write_record(fr);
         }
         
         if let Ok(bytes) = wtr.into_inner() {

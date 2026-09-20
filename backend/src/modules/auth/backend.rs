@@ -11,10 +11,40 @@ pub struct User {
     #[serde(skip_serializing, default)]
     pub password_hash: String,
     pub display_name: Option<String>,
+    #[serde(skip_serializing, default)]
     pub roles: Vec<String>,
     pub email_verified: bool,
     pub phone_verified: bool,
     pub school_status: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct UserMeResponse {
+    pub id: Uuid,
+    pub school_id: Uuid,
+    pub username: String,
+    pub display_name: Option<String>,
+    pub is_platform_admin: bool,
+    pub is_tenant_admin: bool,
+    pub email_verified: bool,
+    pub phone_verified: bool,
+    pub school_status: String,
+}
+
+impl User {
+    pub fn to_me_response(&self) -> UserMeResponse {
+        UserMeResponse {
+            id: self.id,
+            school_id: self.school_id,
+            username: self.username.clone(),
+            display_name: self.display_name.clone(),
+            is_platform_admin: self.roles.contains(&"SUPER_ADMIN".to_string()),
+            is_tenant_admin: self.roles.contains(&"SCHOOL_ADMIN".to_string()),
+            email_verified: self.email_verified,
+            phone_verified: self.phone_verified,
+            school_status: self.school_status.clone(),
+        }
+    }
 }
 
 impl AuthUser for User {

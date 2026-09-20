@@ -214,7 +214,7 @@ async fn login(
     .ok();
 
     crate::utils::audit::log_action(&state.db, Some(user.school_id), Some(user.id), "LOGIN", None, None, None, Some(addr.to_string())).await.ok();
-    Ok(Json(json!({ "message": "Login successful", "user": user })))
+    Ok(Json(json!({ "message": "Login successful", "user": user.to_me_response() })))
 }
 
 async fn logout(mut auth_session: AuthSession) -> Result<impl IntoResponse, AppError> {
@@ -226,7 +226,7 @@ async fn logout(mut auth_session: AuthSession) -> Result<impl IntoResponse, AppE
 
 async fn me(auth_session: AuthSession) -> Result<impl IntoResponse, AppError> {
     match auth_session.user {
-        Some(user) => Ok(Json(user)),
+        Some(user) => Ok(Json(user.to_me_response())),
         None => Err(AppError::Unauthorized("Not logged in".into())),
     }
 }

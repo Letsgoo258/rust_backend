@@ -13,8 +13,7 @@ export default function DashboardLayout({
 }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [user, setUser] = useState<{ display_name?: string; username: string; school_id?: string; roles?: string[]; email_verified?: boolean; phone_verified?: boolean; school_status?: string } | null>(null);
-  
+  const [user, setUser] = useState<{ display_name?: string; username: string; school_id?: string; roles?: string[]; is_platform_admin?: boolean; is_tenant_admin?: boolean; email_verified?: boolean; phone_verified?: boolean; school_status?: string } | null>(null);
   const [verifyingEmail, setVerifyingEmail] = useState(false);
   const [verifyingPhone, setVerifyingPhone] = useState(false);
   const [showPhoneModal, setShowPhoneModal] = useState(false);
@@ -98,7 +97,7 @@ export default function DashboardLayout({
     );
   }
 
-  const isSuperAdmin = user?.roles?.includes("SUPER_ADMIN");
+  const isSuperAdmin = user?.is_platform_admin || user?.roles?.includes("SUPER_ADMIN");
 
   const isSuperAdminView = pathname.includes("/super-admin");
   const isLocked = !isSuperAdminView && (!user?.email_verified || !user?.phone_verified || user?.school_status === "PENDING_SETUP");

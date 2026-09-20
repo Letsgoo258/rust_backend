@@ -32,6 +32,7 @@ pub fn router() -> Router<AppState> {
         .route("/schools/setup", post(setup_school_details))
         .route("/switch-tenant", post(switch_tenant))
         .route("/super-admin/stats", axum::routing::get(get_super_admin_stats))
+        .route("/super-admin/login-history", axum::routing::get(get_super_admin_login_history))
         .route("/super-admin/schools/:id/status", axum::routing::patch(update_school_status))
         .route("/super-admin/schools/:id/request-delete-otp", axum::routing::post(request_delete_otp))
         .route("/super-admin/schools/:id/delete", axum::routing::post(delete_school))
@@ -160,6 +161,57 @@ async fn login(
             "Failed to create session".into(),
         ));
     }
+
+    let ip_str = addr.ip().to_string();
+    let location_str = if addr.ip().is_loopback() {
+        "Localhost / Private Network".to_string()
+    } else {
+        format!("IP: {}", ip_str)
+    };
+
+    // Check for far-apart logins for this user in the last 1 hour from a different IP
+    let recent_different_ip_login = sqlx::query!(
+        r#"
+        SELECT id, ip_address FROM login_history 
+        WHERE user_id = $1 AND ip_address <> $2 AND created_at >= NOW() - INTERVAL '1 hour' 
+        LIMIT 1
+        "#,
+        user.id,
+        ip_str
+    )
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+
+    let (is_suspicious, suspicious_reason) = if let Some(prev) = recent_different_ip_login {
+        sqlx::query!(
+            "UPDATE login_history SET is_suspicious = true, suspicious_reason = $1 WHERE id = $2",
+            format!("Far-apart login: switched from IP {} to {}", prev.ip_address, ip_str),
+            prev.id
+        ).execute(&state.db).await.ok();
+
+        (true, Some(format!("Far-apart login: logged in from IP {} within 1 hour of IP {}", ip_str, prev.ip_address)))
+    } else {
+        (false, None)
+    };
+
+    sqlx::query!(
+        r#"
+        INSERT INTO login_history (user_id, school_id, username, ip_address, location, status, is_suspicious, suspicious_reason) 
+        VALUES ($1, $2, $3, $4, $5, 'SUCCESS', $6, $7)
+        "#,
+        user.id,
+        user.school_id,
+        user.username,
+        ip_str,
+        location_str,
+        is_suspicious,
+        suspicious_reason
+    )
+    .execute(&state.db)
+    .await
+    .ok();
 
     crate::utils::audit::log_action(&state.db, Some(user.school_id), Some(user.id), "LOGIN", None, None, None, Some(addr.to_string())).await.ok();
     Ok(Json(json!({ "message": "Login successful", "user": user })))
@@ -839,4 +891,55 @@ pub async fn confirm_password_reset(
             "message": "Password successfully reset. You can now log in with your new password."
         }))
     ))
+}
+
+#[derive(serde::Serialize)]
+pub struct LoginHistoryRecordDto {
+    pub id: uuid::Uuid,
+    pub username: String,
+    pub ip_address: String,
+    pub location: Option<String>,
+    pub status: String,
+    pub is_suspicious: Option<bool>,
+    pub suspicious_reason: Option<String>,
+    pub created_at: String,
+}
+
+#[tracing::instrument(err, skip(state, auth_session))]
+pub async fn get_super_admin_login_history(
+    auth_session: AuthSession,
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, AppError> {
+    let user = auth_session.user.ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+    if !user.roles.contains(&"SUPER_ADMIN".to_string()) {
+        return Err(AppError::Forbidden("Only Super Admins can view security login history".into()));
+    }
+
+    let records = sqlx::query!(
+        r#"
+        SELECT id, username, ip_address, location, status, is_suspicious, suspicious_reason, created_at
+        FROM login_history
+        ORDER BY created_at DESC
+        LIMIT 100
+        "#
+    )
+    .fetch_all(&state.db)
+    .await?;
+
+    let dtos: Vec<LoginHistoryRecordDto> = records
+        .into_iter()
+        .map(|r| LoginHistoryRecordDto {
+            id: r.id,
+            username: r.username,
+            ip_address: r.ip_address,
+            location: r.location,
+            status: r.status,
+            is_suspicious: r.is_suspicious,
+            suspicious_reason: r.suspicious_reason,
+            created_at: r.created_at.to_string(),
+        })
+        .collect();
+
+    Ok((StatusCode::OK, Json(serde_json::json!({ "login_history": dtos }))))
 }

@@ -1,6 +1,5 @@
 use sqlx::PgPool;
 use tokio::sync::mpsc::{Sender, Receiver};
-use uuid::Uuid;
 use sysinfo::System;
 use std::time::Duration;
 
@@ -12,7 +11,7 @@ pub async fn run_manager(
     mut rx_result: Receiver<SendResult>
 ) {
     tracing::info!("Notification Manager Worker started");
-    let mut sys = System::new_all();
+    let mut sys = System::new();
     
     loop {
         // Process any results from the Sender

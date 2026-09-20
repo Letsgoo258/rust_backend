@@ -43,6 +43,7 @@ export default function DashboardOverview() {
     if (typeof window !== "undefined") {
       const step = localStorage.getItem("eravaya_onboarding_step");
       if (step) setOnboardingStep(step);
+      else setOnboardingStep("students");
     }
   }, []);
 
@@ -53,7 +54,7 @@ export default function DashboardOverview() {
         return res.json();
       })
       .then(data => {
-        setUser(data.user);
+        setUser(data.user || data);
         setLoading(false);
       })
       .catch(() => {
@@ -486,7 +487,26 @@ export default function DashboardOverview() {
             <p className="text-sm text-gray-500 mb-6">Upload a CSV containing student and guardian data.</p>
             
             <div className="mb-6 p-4 bg-blue-50 text-blue-800 rounded-lg text-sm border border-blue-100">
-              <p className="font-semibold mb-2">Required CSV Headers:</p>
+              <div className="flex items-center justify-between mb-2">
+                <p className="font-semibold">Required CSV Headers:</p>
+                <button 
+                  type="button"
+                  onClick={() => {
+                    const headers = "First Name,Last Name,Admission Number,Date of Birth,Guardian First Name,Guardian Last Name,Guardian Email,Guardian Phone,Student Phone\nRahul,Sharma,ADM-2026-001,2012-05-15,Vikram,Sharma,vikram@example.com,9876543210,9876543211";
+                    const blob = new Blob([headers], { type: 'text/csv' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = "student_onboarding_template.csv";
+                    a.click();
+                    URL.revokeObjectURL(url);
+                  }}
+                  className="text-xs px-3 py-1.5 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition flex items-center gap-1 shadow-sm"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                  Download CSV Template
+                </button>
+              </div>
               <ul className="list-disc pl-5 space-y-1">
                 <li>First Name</li>
                 <li>Last Name</li>

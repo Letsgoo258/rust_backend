@@ -720,24 +720,27 @@ pub async fn submit_verify_otp(
 ) -> Result<impl axum::response::IntoResponse, AppError> {
     let user = auth_session.user.clone().ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
 
+    let input_email_otp = payload.email_otp.trim().to_uppercase();
+    let input_phone_otp = payload.phone_otp.trim().to_uppercase();
+
     // Verify Email OTP
     let stored_email = sqlx::query!("SELECT id, otp_code, expires_at FROM admin_action_otps WHERE user_id = $1 AND action_type = 'VERIFY_EMAIL' ORDER BY created_at DESC LIMIT 1", user.id).fetch_optional(&state.db).await?;
     if let Some(record) = stored_email {
-        if record.expires_at < time::OffsetDateTime::now_utc() { return Err(AppError::BadRequest("Email OTP expired".into())); }
-        if record.otp_code != payload.email_otp { return Err(AppError::BadRequest("Invalid Email OTP".into())); }
+        if record.expires_at < time::OffsetDateTime::now_utc() { return Err(AppError::BadRequest("Email verification code has expired. Please request a new code.".into())); }
+        if record.otp_code.trim().to_uppercase() != input_email_otp { return Err(AppError::BadRequest("Invalid Email verification code".into())); }
         sqlx::query!("DELETE FROM admin_action_otps WHERE id = $1", record.id).execute(&state.db).await?;
     } else {
-        return Err(AppError::BadRequest("No valid Email OTP requested".into()));
+        return Err(AppError::BadRequest("No active Email verification code found. Please click 'Send Verification Codes' first.".into()));
     }
     
     // Verify Phone OTP
     let stored_phone = sqlx::query!("SELECT id, otp_code, expires_at FROM admin_action_otps WHERE user_id = $1 AND action_type = 'VERIFY_PHONE' ORDER BY created_at DESC LIMIT 1", user.id).fetch_optional(&state.db).await?;
     if let Some(record) = stored_phone {
-        if record.expires_at < time::OffsetDateTime::now_utc() { return Err(AppError::BadRequest("Phone OTP expired".into())); }
-        if record.otp_code != payload.phone_otp { return Err(AppError::BadRequest("Invalid WhatsApp OTP".into())); }
+        if record.expires_at < time::OffsetDateTime::now_utc() { return Err(AppError::BadRequest("WhatsApp verification code has expired. Please request a new code.".into())); }
+        if record.otp_code.trim().to_uppercase() != input_phone_otp { return Err(AppError::BadRequest("Invalid WhatsApp verification code".into())); }
         sqlx::query!("DELETE FROM admin_action_otps WHERE id = $1", record.id).execute(&state.db).await?;
     } else {
-        return Err(AppError::BadRequest("No valid WhatsApp OTP requested".into()));
+        return Err(AppError::BadRequest("No active WhatsApp verification code found. Please click 'Send Verification Codes' first.".into()));
     }
 
     sqlx::query!("UPDATE users SET email_verified = true, phone_verified = true, status = 'ACTIVE' WHERE id = $1", user.id).execute(&state.db).await?;

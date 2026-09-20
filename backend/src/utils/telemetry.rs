@@ -56,7 +56,7 @@ pub fn init_telemetry() -> Result<SdkTracerProvider, Box<dyn std::error::Error>>
         .with_thread_ids(true);
 
     let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "info,eravaya=debug,tower_http=info".into());
+        .unwrap_or_else(|_| "info,eravaya=debug,tower_http=info,opentelemetry=off,opentelemetry_sdk=off,opentelemetry_otlp=off,reqwest=off,hyper=off,h2=off".into());
 
     tracing_subscriber::registry()
         .with(filter)

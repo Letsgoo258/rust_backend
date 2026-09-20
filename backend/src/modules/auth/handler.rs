@@ -131,6 +131,7 @@ async fn setup_system(
 async fn login(
     mut auth_session: AuthSession,
     axum::extract::State(state): axum::extract::State<crate::state::AppState>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
     Json(payload): Json<LoginRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let creds = Credentials {
@@ -158,7 +159,7 @@ async fn login(
         ));
     }
 
-    crate::utils::audit::log_action(&state.db, Some(user.school_id), Some(user.id), "LOGIN", None, None, None).await.ok();
+    crate::utils::audit::log_action(&state.db, Some(user.school_id), Some(user.id), "LOGIN", None, None, None, Some(addr.to_string())).await.ok();
     Ok(Json(json!({ "message": "Login successful", "user": user })))
 }
 
@@ -598,7 +599,7 @@ pub async fn delete_school(
         return Err(crate::error::AppError::NotFound("School not found".into()));
     }
 
-    crate::utils::audit::log_action(&state.db, Some(id), Some(user.id), "DELETE_SCHOOL", None, None, None).await.ok();
+    crate::utils::audit::log_action(&state.db, Some(id), Some(user.id), "DELETE_SCHOOL", None, None, None, None).await.ok();
 
     Ok((axum::http::StatusCode::OK, axum::Json(serde_json::json!({ "message": "School permanently deleted" }))))
 }

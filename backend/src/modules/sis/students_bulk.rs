@@ -10,6 +10,7 @@ use crate::utils::csv_engine::{ColumnSchema, ColumnType, CsvSchema};
 pub async fn bulk_upload_students(
     auth_session: AuthSession,
     State(state): State<AppState>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
     mut multipart: Multipart,
 ) -> Result<impl IntoResponse, AppError> {
     let user = auth_session.user.ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
@@ -151,6 +152,18 @@ pub async fn bulk_upload_students(
             final_failed_csv = Some(STANDARD.encode(&bytes));
         }
     }
+    
+    // Log this critical action
+    crate::utils::audit::log_action(
+        &state.db, 
+        Some(user.school_id), 
+        Some(user.id), 
+        "BULK_CSV_UPLOAD", 
+        Some("STUDENTS"), 
+        None, 
+        Some(serde_json::json!({"success": final_success, "failed": parse_result.failed_count + failed_records_extra.len()})), 
+        Some(addr.to_string())
+    ).await.ok();
     
     Ok((StatusCode::OK, Json(serde_json::json!({
         "success_count": final_success,

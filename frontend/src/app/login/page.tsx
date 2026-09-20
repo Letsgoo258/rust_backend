@@ -34,7 +34,10 @@ export default function LoginPage() {
       }
       
       const userRes = await res.json();
-      if (userRes.user?.roles?.includes("SUPER_ADMIN")) {
+      const user = userRes.user;
+      if (!user.email_verified || !user.phone_verified) {
+        router.push("/verifyacc");
+      } else if (user.roles?.includes("SUPER_ADMIN")) {
         router.push("/dashboard/super-admin");
       } else {
         router.push("/dashboard");

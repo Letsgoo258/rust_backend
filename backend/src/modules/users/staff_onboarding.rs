@@ -21,6 +21,16 @@ pub async fn bulk_upload_staff(
     mut multipart: Multipart,
 ) -> Result<impl IntoResponse, AppError> {
     let user = auth_session.user.ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+    if !user.roles.contains(&"SCHOOL_ADMIN".to_string()) && !user.roles.contains(&"SUPER_ADMIN".to_string()) {
+        return Err(AppError::Forbidden("Only School Admins can add staff".into()));
+    }
+
+
+    if !user.roles.contains(&"SCHOOL_ADMIN".to_string()) && !user.roles.contains(&"SUPER_ADMIN".to_string()) {
+        return Err(AppError::Forbidden("Only School Admins can perform bulk staff uploads".into()));
+    }
+
     
     // Dynamic Schema Selection
     let mut columns = vec![
@@ -137,6 +147,16 @@ pub async fn single_add_staff(
     Json(payload): Json<std::collections::HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
     let user = auth_session.user.ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+    if !user.roles.contains(&"SCHOOL_ADMIN".to_string()) && !user.roles.contains(&"SUPER_ADMIN".to_string()) {
+        return Err(AppError::Forbidden("Only School Admins can add staff".into()));
+    }
+
+
+    if !user.roles.contains(&"SCHOOL_ADMIN".to_string()) && !user.roles.contains(&"SUPER_ADMIN".to_string()) {
+        return Err(AppError::Forbidden("Only School Admins can perform bulk staff uploads".into()));
+    }
+
     
     let first_name = payload.get("First Name").cloned().unwrap_or_default();
     let last_name = payload.get("Last Name").cloned().unwrap_or_default();

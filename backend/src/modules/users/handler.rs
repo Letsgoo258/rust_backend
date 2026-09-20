@@ -3,6 +3,7 @@ use crate::state::AppState;
 use super::admins::add_admin;
 use super::students_bulk::bulk_upload_students;
 use super::staff_onboarding::{bulk_upload_staff, single_add_staff};
+use super::admissions::{create_admission, enroll_admission};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -10,4 +11,6 @@ pub fn router() -> Router<AppState> {
         .route("/students/bulk-upload", post(bulk_upload_students))
         .route("/staff/bulk", post(bulk_upload_staff))
         .route("/staff/single", post(single_add_staff))
+        .route("/admissions", post(create_admission))
+        .route("/admissions/:id/enroll", post(enroll_admission))
 }

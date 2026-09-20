@@ -16,6 +16,8 @@ pub struct User {
     pub email_verified: bool,
     pub phone_verified: bool,
     pub school_status: String,
+    pub school_operable: bool,
+    pub school_onboarding_step: i32,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -29,6 +31,8 @@ pub struct UserMeResponse {
     pub email_verified: bool,
     pub phone_verified: bool,
     pub school_status: String,
+    pub school_operable: bool,
+    pub school_onboarding_step: i32,
 }
 
 impl User {
@@ -43,6 +47,8 @@ impl User {
             email_verified: self.email_verified,
             phone_verified: self.phone_verified,
             school_status: self.school_status.clone(),
+            school_operable: self.school_operable,
+            school_onboarding_step: self.school_onboarding_step,
         }
     }
 }
@@ -91,7 +97,7 @@ impl AuthnBackend for Backend {
         let user = sqlx::query_as!(
             User,
             r#"
-            SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.roles::TEXT[] as "roles!", u.email_verified, u.phone_verified, s.status::TEXT as "school_status!"
+            SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.roles::TEXT[] as "roles!", u.email_verified, u.phone_verified, s.status::TEXT as "school_status!", COALESCE(s.operable, false) as "school_operable!", COALESCE(s.onboarding_step, 1) as "school_onboarding_step!"
             FROM users u
             JOIN schools s ON u.school_id = s.id
             WHERE (u.username = $1 OR u.email = $1) AND u.status = 'ACTIVE' AND s.status IN ('ACTIVE', 'PENDING_SETUP')
@@ -118,7 +124,7 @@ impl AuthnBackend for Backend {
         let user = sqlx::query_as!(
             User,
             r#"
-            SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.roles::TEXT[] as "roles!", u.email_verified, u.phone_verified, s.status::TEXT as "school_status!"
+            SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.roles::TEXT[] as "roles!", u.email_verified, u.phone_verified, s.status::TEXT as "school_status!", COALESCE(s.operable, false) as "school_operable!", COALESCE(s.onboarding_step, 1) as "school_onboarding_step!"
             FROM users u
             JOIN schools s ON u.school_id = s.id
             WHERE u.id = $1 AND u.status = 'ACTIVE'

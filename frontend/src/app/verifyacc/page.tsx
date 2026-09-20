@@ -27,7 +27,11 @@ export default function VerifyAccountPage() {
           return;
         }
         if (u.email_verified && u.phone_verified) {
-          router.push("/dashboard");
+          if (u.is_tenant_admin && !u.school_operable) {
+            router.push("/dataenrich");
+          } else {
+            router.push("/dashboard");
+          }
           return;
         }
         setUser(u);
@@ -76,8 +80,12 @@ export default function VerifyAccountPage() {
         throw new Error(errMsg);
       }
       
-      // Success, route to dashboard
-      router.push("/dashboard");
+      // Success, route to dataenrich or dashboard
+      if (user?.is_tenant_admin && !user?.school_operable) {
+        router.push("/dataenrich");
+      } else {
+        router.push("/dashboard");
+      }
     } catch (err: any) {
       setErrorMsg(err.message);
     } finally {

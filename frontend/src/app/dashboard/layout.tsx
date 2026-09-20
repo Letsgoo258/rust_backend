@@ -81,7 +81,12 @@ export default function DashboardLayout({
         throw new Error("Not logged in");
       })
       .then((data) => {
-        setUser(data);
+        const u = data.user || data;
+        if (u.is_tenant_admin && !u.school_operable) {
+          router.push("/dataenrich");
+          return;
+        }
+        setUser(u);
         setLoading(false);
       })
       .catch(() => {

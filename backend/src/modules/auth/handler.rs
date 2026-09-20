@@ -30,6 +30,8 @@ pub fn router() -> Router<AppState> {
         .route("/password-reset/request", post(request_password_reset))
         .route("/password-reset/confirm", post(confirm_password_reset))
         .route("/schools/setup", post(setup_school_details))
+        .route("/schools/onboarding-step", axum::routing::patch(update_onboarding_step))
+        .route("/schools/complete-onboarding", axum::routing::post(complete_school_onboarding))
         .route("/switch-tenant", post(switch_tenant))
         .route("/super-admin/stats", axum::routing::get(get_super_admin_stats))
         .route("/super-admin/login-history", axum::routing::get(get_super_admin_login_history))
@@ -392,7 +394,7 @@ async fn setup_school_details(
     }
 
     sqlx::query!(
-        "UPDATE schools SET short_name = $1, website = $2, address_line_1 = $3, address_line_2 = $4, city = $5, district = $6, state = $7, country = $8, postal_code = $9, timezone = $10, status = 'ACTIVE' WHERE id = $11",
+        "UPDATE schools SET short_name = $1, website = $2, address_line_1 = $3, address_line_2 = $4, city = $5, district = $6, state = $7, country = $8, postal_code = $9, timezone = $10, onboarding_step = 3 WHERE id = $11",
         payload.short_name,
         payload.website,
         payload.address_line_1,
@@ -411,7 +413,7 @@ async fn setup_school_details(
     // Refresh session
     if let Ok(Some(updated_user)) = sqlx::query_as!(
         crate::modules::auth::backend::User,
-        r#"SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.roles::TEXT[] as "roles!", u.email_verified, u.phone_verified, s.status::TEXT as "school_status!"
+        r#"SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.roles::TEXT[] as "roles!", u.email_verified, u.phone_verified, s.status::TEXT as "school_status!", COALESCE(s.operable, false) as "school_operable!", COALESCE(s.onboarding_step, 1) as "school_onboarding_step!"
            FROM users u JOIN schools s ON u.school_id = s.id WHERE u.id = $1"#,
         user.id
     ).fetch_optional(&state.db).await {
@@ -419,6 +421,79 @@ async fn setup_school_details(
     }
 
     Ok((StatusCode::OK, Json(serde_json::json!({ "message": "School setup completed" }))))
+}
+
+#[derive(serde::Deserialize)]
+pub struct UpdateOnboardingStepRequest {
+    pub step: i32,
+}
+
+#[tracing::instrument(err, skip(state, auth_session, payload))]
+async fn update_onboarding_step(
+    mut auth_session: AuthSession,
+    State(state): State<AppState>,
+    Json(payload): Json<UpdateOnboardingStepRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let user = auth_session
+        .user
+        .clone()
+        .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+    if !user.roles.contains(&"SCHOOL_ADMIN".to_string()) {
+        return Err(AppError::Forbidden("Only School Admins can update onboarding step".into()));
+    }
+
+    sqlx::query!(
+        "UPDATE schools SET onboarding_step = $1 WHERE id = $2",
+        payload.step,
+        user.school_id
+    )
+    .execute(&state.db)
+    .await?;
+
+    if let Ok(Some(updated_user)) = sqlx::query_as!(
+        crate::modules::auth::backend::User,
+        r#"SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.roles::TEXT[] as "roles!", u.email_verified, u.phone_verified, s.status::TEXT as "school_status!", COALESCE(s.operable, false) as "school_operable!", COALESCE(s.onboarding_step, 1) as "school_onboarding_step!"
+           FROM users u JOIN schools s ON u.school_id = s.id WHERE u.id = $1"#,
+        user.id
+    ).fetch_optional(&state.db).await {
+        let _ = auth_session.login(&updated_user).await;
+    }
+
+    Ok((StatusCode::OK, Json(serde_json::json!({ "message": "Onboarding step updated", "step": payload.step }))))
+}
+
+#[tracing::instrument(err, skip(state, auth_session))]
+async fn complete_school_onboarding(
+    mut auth_session: AuthSession,
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, AppError> {
+    let user = auth_session
+        .user
+        .clone()
+        .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+    if !user.roles.contains(&"SCHOOL_ADMIN".to_string()) {
+        return Err(AppError::Forbidden("Only School Admins can complete onboarding".into()));
+    }
+
+    sqlx::query!(
+        "UPDATE schools SET operable = true, status = 'ACTIVE', onboarding_step = 3 WHERE id = $1",
+        user.school_id
+    )
+    .execute(&state.db)
+    .await?;
+
+    if let Ok(Some(updated_user)) = sqlx::query_as!(
+        crate::modules::auth::backend::User,
+        r#"SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.roles::TEXT[] as "roles!", u.email_verified, u.phone_verified, s.status::TEXT as "school_status!", COALESCE(s.operable, false) as "school_operable!", COALESCE(s.onboarding_step, 1) as "school_onboarding_step!"
+           FROM users u JOIN schools s ON u.school_id = s.id WHERE u.id = $1"#,
+        user.id
+    ).fetch_optional(&state.db).await {
+        let _ = auth_session.login(&updated_user).await;
+    }
+
+    Ok((StatusCode::OK, Json(serde_json::json!({ "message": "School onboarding completed and unlocked!" }))))
 }
 
 
@@ -747,7 +822,7 @@ pub async fn submit_verify_otp(
 
     if let Ok(Some(updated_user)) = sqlx::query_as!(
         crate::modules::auth::backend::User,
-        r#"SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.roles::TEXT[] as "roles!", u.email_verified, u.phone_verified, s.status::TEXT as "school_status!"
+        r#"SELECT u.id, u.school_id, u.username, u.password_hash, u.display_name, u.roles::TEXT[] as "roles!", u.email_verified, u.phone_verified, s.status::TEXT as "school_status!", COALESCE(s.operable, false) as "school_operable!", COALESCE(s.onboarding_step, 1) as "school_onboarding_step!"
            FROM users u JOIN schools s ON u.school_id = s.id WHERE u.id = $1"#,
         user.id
     ).fetch_optional(&state.db).await {

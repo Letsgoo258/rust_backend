@@ -38,8 +38,10 @@ export default function LoginPage() {
       const user = userRes.user || userRes;
       if (!user.email_verified || !user.phone_verified) {
         router.push("/verifyacc");
-      } else if (user.roles?.includes("SUPER_ADMIN")) {
+      } else if (user.is_platform_admin || user.roles?.includes("SUPER_ADMIN")) {
         router.push("/dashboard/super-admin");
+      } else if (user.is_tenant_admin && !user.school_operable) {
+        router.push("/dataenrich");
       } else {
         router.push("/dashboard");
       }

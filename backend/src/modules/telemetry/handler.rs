@@ -2,6 +2,20 @@ use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::po
 use crate::{error::AppError, modules::auth::backend::AuthSession, state::AppState};
 use super::dto::TelemetryEventRequest;
 
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct TelemetryRecord {
+    pub school_id: Option<uuid::Uuid>,
+    pub user_id: Option<uuid::Uuid>,
+    pub session_id: String,
+    pub event_type: String,
+    pub url: Option<String>,
+    pub component: Option<String>,
+    pub error_message: Option<String>,
+    pub error_stack: Option<String>,
+    pub duration_ms: Option<i32>,
+    pub metadata: Option<serde_json::Value>,
+}
+
 pub fn router() -> Router<AppState> {
     Router::new().route("/event", post(record_event))
 }
@@ -17,25 +31,25 @@ async fn record_event(
         (None, None)
     };
 
-    sqlx::query!(
-        r#"
-        INSERT INTO frontend_telemetry 
-        (school_id, user_id, session_id, event_type, url, component, error_message, error_stack, duration_ms, metadata)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-        "#,
+    let record = TelemetryRecord {
         school_id,
         user_id,
-        payload.session_id,
-        payload.event_type,
-        payload.url,
-        payload.component,
-        payload.error_message,
-        payload.error_stack,
-        payload.duration_ms,
-        payload.metadata
-    )
-    .execute(&state.db)
-    .await?;
+        session_id: payload.session_id,
+        event_type: payload.event_type,
+        url: payload.url,
+        component: payload.component,
+        error_message: payload.error_message,
+        error_stack: payload.error_stack,
+        duration_ms: payload.duration_ms,
+        metadata: payload.metadata,
+    };
+    
+    if let Ok(json_line) = serde_json::to_string(&record) {
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("telemetry_buffer.jsonl") {
+            use std::io::Write;
+            let _ = writeln!(file, "{}", json_line);
+        }
+    }
 
     Ok(StatusCode::CREATED)
 }

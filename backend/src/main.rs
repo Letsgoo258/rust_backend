@@ -50,6 +50,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Auth Layer
     let auth_layer = middleware::auth::build_auth_layer(pool.clone()).await;
 
+    // Spawn the daily 11:50 PM telemetry batch worker
+    tokio::spawn(modules::telemetry::worker::run_telemetry_batch_worker(pool.clone()));
+
     // Create App State
     let state = AppState::new(pool, config.clone());
 

@@ -828,7 +828,7 @@ pub async fn request_password_reset(
 pub struct ConfirmPasswordResetPayload {
     pub email: String,
     pub code: String,
-    pub token: Option<String>,
+    pub _token: Option<String>,
     pub new_password: String,
 }
 

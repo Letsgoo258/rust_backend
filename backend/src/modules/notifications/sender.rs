@@ -1,6 +1,7 @@
 use tokio::sync::mpsc::{Receiver, Sender};
 use uuid::Uuid;
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct SendTask {
     pub notification_id: Uuid,
@@ -9,6 +10,7 @@ pub struct SendTask {
     pub priority: i32,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct SendResult {
     pub notification_id: Uuid,
@@ -16,6 +18,7 @@ pub struct SendResult {
     pub retryable: bool,
 }
 
+#[allow(dead_code)]
 pub async fn run_sender(mut rx: Receiver<SendTask>, tx_result: Sender<SendResult>) {
     tracing::info!("Notification Sender Worker started");
     while let Some(task) = rx.recv().await {

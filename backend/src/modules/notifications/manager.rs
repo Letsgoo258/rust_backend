@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use super::sender::{SendTask, SendResult};
 
+#[allow(dead_code)]
 pub async fn run_manager(
     pool: PgPool, 
     tx_sender: Sender<SendTask>, 

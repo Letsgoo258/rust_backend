@@ -9,7 +9,14 @@ use std::time::Duration;
 pub async fn init_pool(config: &AppConfig) -> Result<PgPool, sqlx::Error> {
     let mut db_url = config.database_url.clone();
     if !db_url.contains("sslrootcert") {
-        db_url = format!("{}&sslrootcert=ca.pem", db_url);
+        let cert_path = if std::path::Path::new("ca.pem").exists() {
+            "ca.pem"
+        } else if std::path::Path::new("backend/ca.pem").exists() {
+            "backend/ca.pem"
+        } else {
+            "ca.pem"
+        };
+        db_url = format!("{}&sslrootcert={}", db_url, cert_path);
     }
 
     let connect_options = PgConnectOptions::from_str(&db_url)?.statement_cache_capacity(0); // Fix for PgBouncer/Supabase introspection overhead
@@ -18,14 +25,20 @@ pub async fn init_pool(config: &AppConfig) -> Result<PgPool, sqlx::Error> {
         .log_slow_statements(tracing::log::LevelFilter::Warn, Duration::from_secs(5));
 
     let pool = PgPoolOptions::new()
-        .max_connections(100)
-        .acquire_timeout(Duration::from_secs(10))
+        .max_connections(50)
+        .acquire_timeout(Duration::from_secs(30))
         .connect_with(connect_options)
         .await?;
 
     tracing::info!("Running database migrations...");
-    sqlx::migrate!("./migrations").run(&pool).await?;
-    tracing::info!("Database migrations applied successfully.");
+    if let Err(e) = sqlx::migrate!("./migrations").run(&pool).await {
+        tracing::warn!(
+            "Migration check warning: {:?}. Proceeding with connected database pool.",
+            e
+        );
+    } else {
+        tracing::info!("Database migrations applied successfully.");
+    }
 
     // Direct fallback ensure for enrollments foreign key cascades
     let _ = sqlx::query(

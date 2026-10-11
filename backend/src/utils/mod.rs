@@ -1,7 +1,19 @@
-pub mod password;
-pub mod shutdown;
-pub mod telemetry;
 pub mod audit;
-
-pub mod email;
+pub mod capabilities;
+pub mod concurrency;
 pub mod csv_engine;
+pub mod datetime;
+pub mod edit_history;
+pub mod email;
+pub mod filter_engine;
+pub mod jobs;
+pub mod password;
+pub mod permissions;
+pub mod phone;
+pub mod rbac_matrix;
+pub mod roles;
+pub mod shutdown;
+pub mod student_lifecycle;
+pub mod telemetry;
+pub mod url_signer;
+pub mod write_controller;

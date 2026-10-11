@@ -56,12 +56,17 @@ CREATE TABLE users (
     first_name VARCHAR(100) NOT NULL,
     last_name VARCHAR(100) NOT NULL,
     display_name VARCHAR(255),
+    admission_number VARCHAR(50),
+    date_of_birth DATE,
+    gender VARCHAR(20),
+    blood_group VARCHAR(10),
     status user_status DEFAULT 'ACTIVE',
     last_login_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE(school_id, username),
-    UNIQUE(school_id, email)
+    UNIQUE(school_id, email),
+    UNIQUE(school_id, admission_number)
 );
 
 -- 5. ROLES (RBAC)
@@ -234,6 +239,20 @@ CREATE TABLE class_sections (
     UNIQUE(academic_year_id, class_id, section_id)
 );
 
+CREATE TABLE subject_types (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+    name VARCHAR(100) NOT NULL,
+    code VARCHAR(50) NOT NULL,
+    system_subject_type VARCHAR(50) NOT NULL DEFAULT 'Core', -- 'Core', 'Practical', 'Vocational', 'Non-Core'
+    is_elective BOOLEAN NOT NULL DEFAULT FALSE,
+    is_mandatory BOOLEAN NOT NULL DEFAULT TRUE,
+    description TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(school_id, code)
+);
+
 -- 8. SUBJECTS
 CREATE TABLE subjects (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -241,6 +260,8 @@ CREATE TABLE subjects (
     name VARCHAR(100) NOT NULL,
     code VARCHAR(50) NOT NULL,
     subject_type VARCHAR(50), -- e.g., CORE, ELECTIVE
+    system_subject_type VARCHAR(50) NOT NULL DEFAULT 'Core', -- 'Core', 'Practical', 'Vocational', 'Non-Core'
+    subject_type_id UUID REFERENCES subject_types(id) ON DELETE SET NULL,
     description TEXT,
     status VARCHAR(50) DEFAULT 'ACTIVE',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -287,22 +308,6 @@ ON CONFLICT (code) DO NOTHING;
 
 
 -- 20260918000005_core_sis.sql
-CREATE TABLE students (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
-    user_id UUID UNIQUE REFERENCES users(id) ON DELETE SET NULL,
-    admission_number VARCHAR(50) NOT NULL,
-    first_name VARCHAR(100) NOT NULL,
-    last_name VARCHAR(100) NOT NULL,
-    date_of_birth DATE NOT NULL,
-    gender VARCHAR(20),
-    blood_group VARCHAR(10),
-    status VARCHAR(20) DEFAULT 'ACTIVE',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE(school_id, admission_number)
-);
-
 CREATE TABLE guardians (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
@@ -316,7 +321,7 @@ CREATE TABLE guardians (
 );
 
 CREATE TABLE student_guardians (
-    student_id UUID NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    student_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     guardian_id UUID NOT NULL REFERENCES guardians(id) ON DELETE CASCADE,
     relationship VARCHAR(50) NOT NULL,
     is_primary BOOLEAN DEFAULT false,
@@ -326,7 +331,7 @@ CREATE TABLE student_guardians (
 
 CREATE TABLE enrollments (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    student_id UUID NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    student_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     academic_year_id UUID NOT NULL REFERENCES academic_years(id) ON DELETE RESTRICT,
     class_section_id UUID NOT NULL REFERENCES class_sections(id) ON DELETE RESTRICT,
     roll_number VARCHAR(50),
@@ -353,12 +358,12 @@ ALTER TYPE school_status ADD VALUE 'PENDING_SETUP';
 
 -- 20260919000004_multiple_roles_and_indexes.sql
 -- 1. Indexing on school_id for hard segregation performance
-CREATE INDEX IF NOT EXISTS idx_users_school_id ON users(school_id);
-CREATE INDEX IF NOT EXISTS idx_students_school_id ON students(school_id);
+-- CREATE INDEX IF NOT EXISTS idx_users_school_id ON users(school_id); -- Redundant: covered by users_school_id_email_key
+-- CREATE INDEX IF NOT EXISTS idx_students_school_id ON students(school_id); -- Redundant: covered by students_school_id_admission_number_key
 CREATE INDEX IF NOT EXISTS idx_guardians_school_id ON guardians(school_id);
 
 -- 2. Convert user_type to an array of roles to support multiple roles per person
-ALTER TABLE users 
+ALTER TABLE users
   ALTER COLUMN user_type DROP DEFAULT,
   ALTER COLUMN user_type TYPE system_role_type[] USING ARRAY[user_type]::system_role_type[],
   ALTER COLUMN user_type SET DEFAULT '{STUDENT}';
@@ -504,23 +509,23 @@ CREATE TYPE admission_status AS ENUM ('PENDING', 'APPROVED', 'REJECTED', 'ENROLL
 CREATE TABLE admissions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
-    
+
     -- Student Details
     student_first_name VARCHAR(100) NOT NULL,
     student_last_name VARCHAR(100) NOT NULL,
     date_of_birth DATE NOT NULL,
-    
+
     -- Guardian Details
     guardian_first_name VARCHAR(100) NOT NULL,
     guardian_last_name VARCHAR(100) NOT NULL,
     guardian_email VARCHAR(255) NOT NULL,
     guardian_phone VARCHAR(50) NOT NULL,
-    
+
     -- Workflow
     status admission_status DEFAULT 'PENDING',
     created_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
     enrolled_student_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-    
+
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -651,3 +656,196 @@ CREATE INDEX IF NOT EXISTS idx_login_history_created_at ON login_history(created
 CREATE INDEX IF NOT EXISTS idx_login_history_is_suspicious ON login_history(is_suspicious);
 
 
+-- 20260920000009_add_school_operable_and_onboarding_step.sql
+-- ERAVAYA ERP - School Operable Flag & Onboarding Step Tracker
+
+ALTER TABLE schools
+  ADD COLUMN IF NOT EXISTS operable BOOLEAN DEFAULT false,
+  ADD COLUMN IF NOT EXISTS onboarding_step INT DEFAULT 1;
+
+CREATE INDEX IF NOT EXISTS idx_schools_operable ON schools(operable);
+
+
+-- 20260920000010_default_school_timezone_kolkata.sql
+-- Default timezone for schools table to Asia/Kolkata
+ALTER TABLE schools ALTER COLUMN timezone SET DEFAULT 'Asia/Kolkata';
+
+UPDATE schools SET timezone = 'Asia/Kolkata' WHERE timezone IS NULL OR timezone = 'UTC';
+
+
+-- 20260921000001_seed_all_school_roles.sql
+-- Seed all 29 system roles into the roles table for every school
+INSERT INTO roles (school_id, name, code, description, is_system_role)
+SELECT
+    s.id,
+    r.name,
+    r.code,
+    r.description,
+    true
+FROM schools s
+CROSS JOIN (
+    VALUES
+        ('Super Admin', 'SUPER_ADMIN', 'Full system access across all school settings'),
+        ('School Admin', 'SCHOOL_ADMIN', 'School level administrator'),
+        ('Teacher', 'TEACHER', 'Academic faculty member'),
+        ('Student', 'STUDENT', 'Enrolled student'),
+        ('Parent', 'PARENT', 'Guardian or parent of a student'),
+        ('Vice Principal', 'VICE_PRINCIPAL', 'Deputy head of school'),
+        ('Headmaster', 'HEADMASTER', 'Headmaster or principal'),
+        ('Class Teacher', 'CLASS_TEACHER', 'Assigned class teacher'),
+        ('Subject Coordinator', 'SUBJECT_COORDINATOR', 'Head of subject department'),
+        ('Exam Coordinator', 'EXAM_COORDINATOR', 'Controller of examinations'),
+        ('Librarian', 'Librarian', 'Library supervisor'),
+        ('Lab Assistant', 'Lab Assistant', 'Laboratory assistant'),
+        ('Counselor', 'Counselor', 'Student guidance counselor'),
+        ('PT Teacher', 'PT Teacher', 'Physical education teacher'),
+        ('Receptionist', 'Receptionist', 'Front desk officer'),
+        ('HR Manager', 'HR Manager', 'Human resources manager'),
+        ('Accountant', 'Accountant', 'Finance and fee manager'),
+        ('Clerk', 'Clerk', 'Administrative clerk'),
+        ('Transport Manager', 'Transport Manager', 'School transport supervisor'),
+        ('Driver', 'Driver', 'School bus driver'),
+        ('Bus Attendant', 'Bus Attendant', 'Bus attendant/conductor'),
+        ('Canteen Manager', 'Canteen Manager', 'Cafeteria supervisor'),
+        ('Canteen Staff', 'Canteen Staff', 'Cafeteria staff'),
+        ('Security Head', 'Security Head', 'Chief security officer'),
+        ('Security Guard', 'Security Guard', 'Campus security guard'),
+        ('Peon', 'Peon', 'Office assistant/peon'),
+        ('Housekeeping', 'Housekeeping', 'Maintenance and cleaning staff'),
+        ('Support Staff', 'Support Staff', 'General support staff'),
+        ('Alumni', 'Alumni', 'Former student alumni')
+) AS r(name, code, description)
+ON CONFLICT (school_id, code) DO NOTHING;
+
+
+-- 20260921000002_add_class_sections_updated_by_and_history.sql
+ALTER TABLE class_sections
+ADD COLUMN IF NOT EXISTS updated_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL;
+
+CREATE TABLE IF NOT EXISTS class_section_history (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+    class_section_id UUID NOT NULL REFERENCES class_sections(id) ON DELETE CASCADE,
+    updated_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    change_type VARCHAR(100) NOT NULL,
+    old_value TEXT,
+    new_value TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_class_section_history_cs_id ON class_section_history(class_section_id);
+CREATE INDEX IF NOT EXISTS idx_class_section_history_created_at ON class_section_history(created_at);
+
+
+-- 20260921000003_fix_school_admin_role_code_typo.sql
+UPDATE roles
+SET code = TRIM(BOTH '{}' FROM code)
+WHERE code LIKE '{%}';
+
+
+-- 20260921000004_sync_all_users_to_user_roles_ids.sql
+INSERT INTO user_roles (user_id, role_id)
+SELECT DISTINCT u.id AS user_id, r.id AS role_id
+FROM users u
+CROSS JOIN LATERAL unnest(u.roles) AS r_code
+JOIN roles r ON r.school_id = u.school_id AND r.code = r_code::TEXT
+ON CONFLICT (user_id, role_id) DO NOTHING;
+
+
+-- 20260921000005_user_sessions_and_entity_change_history.sql
+CREATE TABLE IF NOT EXISTS entity_change_history (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+    entity_type VARCHAR(100) NOT NULL,
+    entity_id UUID NOT NULL,
+    action VARCHAR(50) NOT NULL,
+    updated_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    before_state JSONB,
+    after_state JSONB,
+    ip_address VARCHAR(45),
+    user_agent TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_entity_change_history_entity ON entity_change_history(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_entity_change_history_school ON entity_change_history(school_id);
+CREATE INDEX IF NOT EXISTS idx_entity_change_history_created_at ON entity_change_history(created_at);
+
+ALTER TABLE schools
+ADD COLUMN IF NOT EXISTS last_history_id UUID REFERENCES entity_change_history(id) ON DELETE SET NULL,
+ADD COLUMN IF NOT EXISTS updated_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL;
+
+ALTER TABLE users
+ADD COLUMN IF NOT EXISTS last_history_id UUID REFERENCES entity_change_history(id) ON DELETE SET NULL;
+
+ALTER TABLE class_sections
+ADD COLUMN IF NOT EXISTS last_history_id UUID REFERENCES entity_change_history(id) ON DELETE SET NULL;
+
+ALTER TABLE academic_years
+ADD COLUMN IF NOT EXISTS last_history_id UUID REFERENCES entity_change_history(id) ON DELETE SET NULL,
+ADD COLUMN IF NOT EXISTS updated_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL;
+
+ALTER TABLE subjects
+ADD COLUMN IF NOT EXISTS last_history_id UUID REFERENCES entity_change_history(id) ON DELETE SET NULL,
+ADD COLUMN IF NOT EXISTS updated_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL;
+
+
+-- 20260921000006_fix_enrollments_fkey_cascade.sql
+ALTER TABLE enrollments
+    DROP CONSTRAINT IF EXISTS enrollments_academic_year_id_fkey,
+    ADD CONSTRAINT enrollments_academic_year_id_fkey
+    FOREIGN KEY (academic_year_id) REFERENCES academic_years(id) ON DELETE CASCADE ON UPDATE CASCADE;
+
+ALTER TABLE enrollments
+    DROP CONSTRAINT IF EXISTS enrollments_class_section_id_fkey,
+    ADD CONSTRAINT enrollments_class_section_id_fkey
+    FOREIGN KEY (class_section_id) REFERENCES class_sections(id) ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- Assets Management
+CREATE TABLE assets (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+    name VARCHAR(255) NOT NULL,
+    category VARCHAR(100),
+    asset_code VARCHAR(100),
+    purchase_date DATE,
+    status VARCHAR(50) DEFAULT 'ACTIVE',
+    room_id UUID REFERENCES rooms(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- School Timings
+CREATE TABLE school_timings (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+    shift_name VARCHAR(100) NOT NULL,
+    start_time TIME NOT NULL,
+    end_time TIME NOT NULL,
+    late_mark_time TIME,
+    half_day_time TIME,
+    is_default BOOLEAN DEFAULT false,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Background Jobs Persistent Queue (Auto-purged, Zero-clutter)
+CREATE TABLE IF NOT EXISTS background_jobs (
+    id UUID PRIMARY KEY,
+    school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL,
+    job_type VARCHAR(100) NOT NULL,
+    status VARCHAR(50) NOT NULL DEFAULT 'PROCESSING',
+    total_rows INT NOT NULL DEFAULT 0,
+    processed_rows INT NOT NULL DEFAULT 0,
+    success_count INT NOT NULL DEFAULT 0,
+    failed_count INT NOT NULL DEFAULT 0,
+    failed_csv TEXT,
+    error TEXT,
+    payload_json JSONB,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Directly link class_section_id on users table (so class & section are linked directly to student users)
+ALTER TABLE users ADD COLUMN IF NOT EXISTS class_section_id UUID REFERENCES class_sections(id) ON DELETE SET NULL;

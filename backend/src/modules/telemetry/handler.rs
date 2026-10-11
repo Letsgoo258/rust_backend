@@ -1,6 +1,6 @@
-use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Json, Router};
-use crate::{error::AppError, modules::auth::backend::AuthSession, state::AppState};
 use super::dto::TelemetryEventRequest;
+use crate::{error::AppError, modules::auth::backend::AuthSession, state::AppState};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct TelemetryRecord {
@@ -16,13 +16,9 @@ pub struct TelemetryRecord {
     pub metadata: Option<serde_json::Value>,
 }
 
-pub fn router() -> Router<AppState> {
-    Router::new().route("/event", post(record_event))
-}
-
-async fn record_event(
+pub async fn record_event(
     auth_session: AuthSession,
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Json(payload): Json<TelemetryEventRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let (school_id, user_id) = if let Some(user) = auth_session.user {
@@ -31,25 +27,24 @@ async fn record_event(
         (None, None)
     };
 
-    let record = TelemetryRecord {
+    let telemetry_payload = crate::utils::telemetry::TelemetryPayload {
         school_id,
         user_id,
         session_id: payload.session_id,
         event_type: payload.event_type,
+        severity: "INFO".into(),
         url: payload.url,
         component: payload.component,
         error_message: payload.error_message,
         error_stack: payload.error_stack,
         duration_ms: payload.duration_ms,
         metadata: payload.metadata,
+        timestamp: time::OffsetDateTime::now_utc().to_string(),
     };
-    
-    if let Ok(json_line) = serde_json::to_string(&record) {
-        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("telemetry_buffer.jsonl") {
-            use std::io::Write;
-            let _ = writeln!(file, "{}", json_line);
-        }
-    }
+
+    let dispatcher =
+        crate::utils::telemetry::TelemetryDispatcher::with_default_adapters(Some(state.db.clone()));
+    dispatcher.dispatch(telemetry_payload).await;
 
     Ok(StatusCode::CREATED)
 }

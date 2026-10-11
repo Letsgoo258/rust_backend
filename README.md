@@ -6,3 +6,9 @@ A full-stack multi-tenant school ERP.
 - **Infrastructure:** Docker, Render (Planned)
 
 See the `docs/` folder for complete technical architecture and schema details.
+
+# Start in Development Mode (Live reload):
+docker compose -f docker-compose.dev.yml up
+
+# Start in Production Mode:
+docker compose up --build -d

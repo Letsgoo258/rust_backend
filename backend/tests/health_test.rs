@@ -48,6 +48,11 @@ async fn send_alert_email(error_message: &str) {
 async fn test_live_database_connection() {
     dotenvy::dotenv().ok();
 
+    if std::env::var("DATABASE_URL").is_err() {
+        println!("DATABASE_URL is not set. Skipping live DB test.");
+        return;
+    }
+
     let config = AppConfig::from_env();
 
     println!(
@@ -79,4 +84,10 @@ async fn test_live_database_connection() {
             panic!("{}", err_msg);
         }
     }
+}
+
+#[tokio::test]
+async fn test_health_check_handler() {
+    let result = eravaya::routes::health::health_check().await;
+    assert_eq!(result, "OK", "Health check endpoint must return 'OK'");
 }

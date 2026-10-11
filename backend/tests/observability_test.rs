@@ -57,3 +57,24 @@ async fn test_grafana_otlp_connectivity() {
         }
     }
 }
+
+#[tokio::test]
+async fn test_telemetry_tracer_provider_lifecycle_and_spans() {
+    use opentelemetry::trace::{Tracer, TracerProvider as _};
+    use opentelemetry_sdk::trace::SdkTracerProvider;
+
+    // Verify SdkTracerProvider creates and emits spans without premature shutdown
+    let provider = SdkTracerProvider::builder().build();
+    let tracer = provider.tracer("test-tracer");
+
+    let span = tracer.start("test-lifecycle-span");
+    // Verify span completes without panicking
+    drop(span);
+
+    // Explicit shutdown at the end of lifecycle
+    let shutdown_res = provider.shutdown();
+    assert!(
+        shutdown_res.is_ok(),
+        "TracerProvider should shutdown cleanly"
+    );
+}

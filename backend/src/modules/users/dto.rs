@@ -52,3 +52,11 @@ pub struct EnrollStudentRequest {
     pub class_section_id: Uuid,
     pub roll_number: Option<String>,
 }
+
+pub use crate::utils::student_lifecycle::StudentLifecycleStatus;
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct UpdateStudentStatusRequest {
+    pub status: StudentLifecycleStatus,
+    pub reason: Option<String>,
+}

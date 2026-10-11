@@ -1,2 +1,5 @@
 rust_learning/
 .DS_Store
+agent_patch_scripts/
+frontend/
+docs/

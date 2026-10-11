@@ -30,6 +30,8 @@ pub struct SetupRequest {
     pub admin_password: String,
     pub first_name: String,
     pub last_name: String,
+    pub phone: Option<String>,
+    pub admin_phone: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -50,6 +52,7 @@ pub struct CreateSchoolRequest {
     pub admin_password: String,
     pub admin_first_name: String,
     pub admin_last_name: String,
+    pub admin_phone: Option<String>,
 }
 
 #[derive(serde::Serialize)]

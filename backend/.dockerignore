@@ -1,0 +1,9 @@
+target/
+.env
+.git
+.gitignore
+*.log
+logs/
+audit_buffer.jsonl
+telemetry_buffer.jsonl
+frontend/

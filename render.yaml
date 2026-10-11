@@ -1,0 +1,45 @@
+# Render Blueprint Configuration (Infrastructure-as-Code)
+# Documentation: https://render.com/docs/blueprint-spec
+services:
+  # -------------------------------------------------------------
+  # 1. Rust Backend Web Service
+  # -------------------------------------------------------------
+  - type: web
+    name: eravaya-backend
+    runtime: docker
+    dockerContext: backend
+    dockerfilePath: backend/Dockerfile
+    plan: standard # Or 'starter' / 'free'
+    region: singapore # Options: oregon, frankfurt, singapore, ohio, virginia
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: 8089
+      - key: RUST_LOG
+        value: info
+      - key: TZ
+        value: Asia/Kolkata
+      - key: RUN_TESTS_ON_STARTUP
+        value: "false"
+      - key: STRICT_TESTS
+        value: "false"
+      - key: DATABASE_URL
+        sync: false # Set in Render dashboard or link to Render Postgres
+      - key: ALERT_ADMIN_EMAIL
+        value: kabhiram67@gmail.com
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+      - key: OTEL_EXPORTER_OTLP_ENDPOINT
+        sync: false
+      - key: OTEL_EXPORTER_OTLP_HEADERS
+        sync: false
+

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM admin_action_otps WHERE user_id = $1 AND action_type IN ('VERIFY_EMAIL', 'VERIFY_PHONE')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e7d3364ef83323515a44c87215a9b81ab396aac3a60fcd4658dad58a3e3cdbc1"
+}

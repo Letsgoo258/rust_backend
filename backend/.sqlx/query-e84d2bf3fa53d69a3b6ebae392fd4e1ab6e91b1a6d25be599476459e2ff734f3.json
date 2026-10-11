@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO roles (school_id, name, code, description, is_system_role)\n        SELECT\n            $1,\n            r.name,\n            r.code,\n            r.description,\n            true\n        FROM (\n            VALUES\n                ('Super Admin', 'SUPER_ADMIN', 'Full system access across all school settings'),\n                ('School Admin', 'SCHOOL_ADMIN', 'School level administrator'),\n                ('Teacher', 'TEACHER', 'Academic faculty member'),\n                ('Student', 'STUDENT', 'Enrolled student'),\n                ('Parent', 'PARENT', 'Guardian or parent of a student'),\n                ('Vice Principal', 'VICE_PRINCIPAL', 'Deputy head of school'),\n                ('Headmaster', 'HEADMASTER', 'Headmaster or principal'),\n                ('Class Teacher', 'CLASS_TEACHER', 'Assigned class teacher'),\n                ('Subject Coordinator', 'SUBJECT_COORDINATOR', 'Head of subject department'),\n                ('Exam Coordinator', 'EXAM_COORDINATOR', 'Controller of examinations'),\n                ('Librarian', 'Librarian', 'Library supervisor'),\n                ('Lab Assistant', 'Lab Assistant', 'Laboratory assistant'),\n                ('Counselor', 'Counselor', 'Student guidance counselor'),\n                ('PT Teacher', 'PT Teacher', 'Physical education teacher'),\n                ('Receptionist', 'Receptionist', 'Front desk officer'),\n                ('HR Manager', 'HR Manager', 'Human resources manager'),\n                ('Accountant', 'Accountant', 'Finance and fee manager'),\n                ('Clerk', 'Clerk', 'Administrative clerk'),\n                ('Transport Manager', 'Transport Manager', 'School transport supervisor'),\n                ('Driver', 'Driver', 'School bus driver'),\n                ('Bus Attendant', 'Bus Attendant', 'Bus attendant/conductor'),\n                ('Canteen Manager', 'Canteen Manager', 'Cafeteria supervisor'),\n                ('Canteen Staff', 'Canteen Staff', 'Cafeteria staff'),\n                ('Security Head', 'Security Head', 'Chief security officer'),\n                ('Security Guard', 'Security Guard', 'Campus security guard'),\n                ('Peon', 'Peon', 'Office assistant/peon'),\n                ('Housekeeping', 'Housekeeping', 'Maintenance and cleaning staff'),\n                ('Support Staff', 'Support Staff', 'General support staff'),\n                ('Alumni', 'Alumni', 'Former student alumni')\n        ) AS r(name, code, description)\n        ON CONFLICT (school_id, code) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e84d2bf3fa53d69a3b6ebae392fd4e1ab6e91b1a6d25be599476459e2ff734f3"
+}

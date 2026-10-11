@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE schools SET operable = true, status = 'ACTIVE', onboarding_step = 6 WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "dec6851cecdf7de05af1c6545c6999433f6147873acbc3f4bcfc6d4a5fe2cea1"
+}

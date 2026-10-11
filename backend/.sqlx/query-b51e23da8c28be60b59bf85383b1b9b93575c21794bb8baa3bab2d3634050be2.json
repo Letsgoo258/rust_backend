@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO enrollments (student_id, academic_year_id, class_section_id)\n                VALUES ($1, $2, $3)\n                ON CONFLICT (student_id, academic_year_id)\n                DO UPDATE SET\n                    class_section_id = EXCLUDED.class_section_id,\n                    updated_at = now()\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b51e23da8c28be60b59bf85383b1b9b93575c21794bb8baa3bab2d3634050be2"
+}

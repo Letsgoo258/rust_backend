@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO admin_action_otps (user_id, action_type, otp_code, expires_at) VALUES ($1, 'VERIFY_PHONE', $2, NOW() + INTERVAL '15 minutes')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Varchar"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fcc3f975aa90a7a1b6bf1be8f55c2d3d4d4092d7e9dc1a653318233e9bbe4141"
+}

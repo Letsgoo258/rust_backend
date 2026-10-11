@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE login_history SET is_suspicious = true, suspicious_reason = $1 WHERE id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f468e2598cf2dd3600a123e31b0454437a34bd5ef75acb4e15e1753fc23214e5"
+}

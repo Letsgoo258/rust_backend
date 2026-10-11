@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO login_history (user_id, school_id, username, ip_address, location, status, is_suspicious, suspicious_reason)\n        VALUES ($1, $2, $3, $4, $5, 'SUCCESS', $6, $7)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Varchar",
+        "Varchar",
+        "Varchar",
+        "Bool",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c205a51f6b1d7b1d42bf45c7595d76361de3ccf98cb322ad0f5ca60742d95cc3"
+}

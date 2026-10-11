@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            DELETE FROM login_history\n            WHERE created_at < NOW() - INTERVAL '30 days'\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "641380abeaea226a8b473bccb02748a3547f8059895b68a87703306449699931"
+}

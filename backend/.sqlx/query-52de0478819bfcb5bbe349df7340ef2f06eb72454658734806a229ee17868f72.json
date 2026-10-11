@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE login_history lh\n            SET is_suspicious = true,\n                suspicious_reason = 'Flagged by 1-Hour Security Engine: Multiple logins from different IPs within 1 hour'\n            WHERE id IN (\n                SELECT l1.id\n                FROM login_history l1\n                JOIN login_history l2 ON l1.user_id = l2.user_id\n                    AND l1.id <> l2.id\n                    AND l1.ip_address <> l2.ip_address\n                    AND ABS(EXTRACT(EPOCH FROM (l1.created_at - l2.created_at))) <= 3600\n                WHERE l1.created_at >= NOW() - INTERVAL '24 hours'\n            )\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "52de0478819bfcb5bbe349df7340ef2f06eb72454658734806a229ee17868f72"
+}

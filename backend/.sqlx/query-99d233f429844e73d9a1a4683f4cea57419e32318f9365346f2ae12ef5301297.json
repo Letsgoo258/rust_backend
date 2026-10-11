@@ -1,0 +1,82 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                u.id,\n                u.school_id,\n                u.username,\n                u.password_hash,\n                u.display_name,\n                COALESCE(array_agg(DISTINCT r.code::TEXT) FILTER (WHERE r.code IS NOT NULL), ARRAY[]::TEXT[]) as \"roles!\",\n                u.email_verified,\n                u.phone_verified,\n                s.status::TEXT as \"school_status!\",\n                COALESCE(s.operable, false) as \"school_operable!\",\n                COALESCE(s.onboarding_step, 1) as \"school_onboarding_step!\"\n            FROM users u\n            JOIN schools s ON u.school_id = s.id\n            LEFT JOIN user_roles ur ON ur.user_id = u.id\n            LEFT JOIN roles r ON ur.role_id = r.id\n            WHERE (u.username = $1 OR u.email = $1) AND u.status = 'ACTIVE' AND s.status IN ('ACTIVE', 'PENDING_SETUP')\n            GROUP BY u.id, u.school_id, u.username, u.password_hash, u.display_name, u.email_verified, u.phone_verified, s.status, s.operable, s.onboarding_step\n            LIMIT 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "school_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "username",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "password_hash",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "display_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "roles!",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 6,
+        "name": "email_verified",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 7,
+        "name": "phone_verified",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 8,
+        "name": "school_status!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "school_operable!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 10,
+        "name": "school_onboarding_step!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      null,
+      false,
+      false,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "99d233f429844e73d9a1a4683f4cea57419e32318f9365346f2ae12ef5301297"
+}

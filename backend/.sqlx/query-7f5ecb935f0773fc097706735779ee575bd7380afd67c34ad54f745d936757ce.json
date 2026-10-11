@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM admin_action_otps WHERE user_id = $1 AND action_type = 'ASSIGN_USER_ROLE'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7f5ecb935f0773fc097706735779ee575bd7380afd67c34ad54f745d936757ce"
+}

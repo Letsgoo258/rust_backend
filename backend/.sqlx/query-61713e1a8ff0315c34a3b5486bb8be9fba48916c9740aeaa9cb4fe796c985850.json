@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT DISTINCT r.code\n        FROM user_roles ur\n        JOIN roles r ON ur.role_id = r.id\n        WHERE ur.user_id = $1 AND r.school_id = $2\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "code",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "61713e1a8ff0315c34a3b5486bb8be9fba48916c9740aeaa9cb4fe796c985850"
+}

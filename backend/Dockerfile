@@ -69,7 +69,8 @@ COPY --from=builder /usr/src/app/target/release/eravaya /app/eravaya
 COPY --from=builder /usr/src/app/target/release/test_runner /app/test_runner
 COPY --from=builder /usr/src/app/migrations /app/migrations
 COPY --from=builder /usr/src/app/scripts /app/scripts
-COPY entrypoint.sh /app/entrypoint.sh
+COPY --from=builder /usr/src/app/entrypoint.sh /app/entrypoint.sh
+COPY --from=builder /usr/src/app/ca.pem /app/ca.pem
 
 RUN chmod +x /app/entrypoint.sh /app/eravaya /app/test_runner
 

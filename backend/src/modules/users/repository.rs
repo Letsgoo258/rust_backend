@@ -319,7 +319,7 @@ impl UserRepository {
     ) -> Result<Uuid, AppError> {
         let user_id: Uuid = sqlx::query_scalar(
             r#"INSERT INTO users (school_id, first_name, last_name, email, phone, username, password_hash, status, imported_via_csv, updated_by_user_id, updated_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACTIVE', $8, $9, NOW())
+               VALUES ($1, $2, $3, $4, $5, $6, $7, 'INACTIVE', $8, $9, NOW())
                RETURNING id"#
         )
         .bind(school_id)

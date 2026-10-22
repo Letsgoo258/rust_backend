@@ -37,6 +37,13 @@ fn parse_flexible_date(date_str: &str) -> Result<time::Date, String> {
     crate::utils::datetime::DateUtils::parse_iso_date(date_str)
 }
 
+fn normalize_cs_key(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect::<String>()
+        .to_uppercase()
+}
+
 pub async fn preview_bulk_students(
     auth_session: AuthSession,
     State(state): State<AppState>,
@@ -129,7 +136,7 @@ pub async fn preview_bulk_students(
                 max_length: None,
             },
             ColumnSchema {
-                header: "Class Section ID",
+                header: "Class Section Code",
                 col_type: ColumnType::String,
                 required: false,
                 min_length: None,
@@ -195,18 +202,39 @@ pub async fn preview_bulk_students(
     for (cs_id, cname, ccode, sname, scode) in &class_sections_db {
         let val = (*cs_id, cname.clone(), sname.clone());
         cs_lookup_map.insert(cs_id.to_string().to_lowercase(), val.clone());
+        cs_lookup_map.insert(cs_id.to_string().to_uppercase(), val.clone());
 
         let ccode_upper = ccode.trim().to_uppercase();
         let scode_upper = scode.trim().to_uppercase();
         let cname_upper = cname.trim().to_uppercase();
         let sname_upper = sname.trim().to_uppercase();
 
+        cs_lookup_map.insert(format!("{}{}", ccode_upper, scode_upper), val.clone());
         cs_lookup_map.insert(format!("{}-{}", ccode_upper, scode_upper), val.clone());
         cs_lookup_map.insert(format!("{}:{}", ccode_upper, scode_upper), val.clone());
-        cs_lookup_map.insert(format!("{}{}", ccode_upper, scode_upper), val.clone());
+        cs_lookup_map.insert(format!("{}_{}", ccode_upper, scode_upper), val.clone());
+        cs_lookup_map.insert(format!("{} {}", ccode_upper, scode_upper), val.clone());
+
         cs_lookup_map.insert(format!("{}-{}", cname_upper, sname_upper), val.clone());
         cs_lookup_map.insert(format!("{}:{}", cname_upper, sname_upper), val.clone());
         cs_lookup_map.insert(format!("{} {}", cname_upper, sname_upper), val.clone());
+        cs_lookup_map.insert(format!("{}{}", cname_upper, sname_upper), val.clone());
+
+        let alpha_code = normalize_cs_key(&format!("{}{}", ccode_upper, scode_upper));
+        if !alpha_code.is_empty() {
+            cs_lookup_map.insert(alpha_code, val.clone());
+        }
+        let alpha_name = normalize_cs_key(&format!("{}{}", cname_upper, sname_upper));
+        if !alpha_name.is_empty() {
+            cs_lookup_map.insert(alpha_name, val.clone());
+        }
+
+        cs_lookup_map
+            .entry(ccode_upper.clone())
+            .or_insert_with(|| val.clone());
+        cs_lookup_map
+            .entry(normalize_cs_key(&ccode_upper))
+            .or_insert_with(|| val.clone());
     }
 
     let mut preview_items = Vec::new();
@@ -259,10 +287,12 @@ pub async fn preview_bulk_students(
             if !trimmed.is_empty() {
                 let key_lower = trimmed.to_lowercase();
                 let key_upper = trimmed.to_uppercase();
+                let key_alpha = normalize_cs_key(trimmed);
 
                 if let Some((_cs_id, cname, sname)) = cs_lookup_map
                     .get(&key_lower)
                     .or_else(|| cs_lookup_map.get(&key_upper))
+                    .or_else(|| cs_lookup_map.get(&key_alpha))
                 {
                     resolved_cls_name = Some(cname.clone());
                     resolved_sec_name = Some(sname.clone());
@@ -417,18 +447,11 @@ pub async fn bulk_upload_students(
                 max_length: None,
             },
             ColumnSchema {
-                header: "Class",
+                header: "Class Section Code",
                 col_type: ColumnType::String,
                 required: false,
                 min_length: None,
                 max_length: Some(100),
-            },
-            ColumnSchema {
-                header: "Section",
-                col_type: ColumnType::String,
-                required: false,
-                min_length: None,
-                max_length: Some(50),
             },
         ],
     };
@@ -575,19 +598,39 @@ async fn process_bulk_students_background(
     let mut cs_lookup_map: std::collections::HashMap<String, uuid::Uuid> =
         std::collections::HashMap::new();
     for (cs_id, cname, ccode, sname, scode) in &class_sections_db {
-        cs_lookup_map.insert(cs_id.to_string().to_lowercase(), *cs_id);
+        let cs_uuid = *cs_id;
+        cs_lookup_map.insert(cs_id.to_string().to_lowercase(), cs_uuid);
+        cs_lookup_map.insert(cs_id.to_string().to_uppercase(), cs_uuid);
 
         let ccode_upper = ccode.trim().to_uppercase();
         let scode_upper = scode.trim().to_uppercase();
         let cname_upper = cname.trim().to_uppercase();
         let sname_upper = sname.trim().to_uppercase();
 
-        cs_lookup_map.insert(format!("{}-{}", ccode_upper, scode_upper), *cs_id);
-        cs_lookup_map.insert(format!("{}:{}", ccode_upper, scode_upper), *cs_id);
-        cs_lookup_map.insert(format!("{}{}", ccode_upper, scode_upper), *cs_id);
-        cs_lookup_map.insert(format!("{}-{}", cname_upper, sname_upper), *cs_id);
-        cs_lookup_map.insert(format!("{}:{}", cname_upper, sname_upper), *cs_id);
-        cs_lookup_map.insert(format!("{} {}", cname_upper, sname_upper), *cs_id);
+        cs_lookup_map.insert(format!("{}{}", ccode_upper, scode_upper), cs_uuid);
+        cs_lookup_map.insert(format!("{}-{}", ccode_upper, scode_upper), cs_uuid);
+        cs_lookup_map.insert(format!("{}:{}", ccode_upper, scode_upper), cs_uuid);
+        cs_lookup_map.insert(format!("{}_{}", ccode_upper, scode_upper), cs_uuid);
+        cs_lookup_map.insert(format!("{} {}", ccode_upper, scode_upper), cs_uuid);
+
+        cs_lookup_map.insert(format!("{}-{}", cname_upper, sname_upper), cs_uuid);
+        cs_lookup_map.insert(format!("{}:{}", cname_upper, sname_upper), cs_uuid);
+        cs_lookup_map.insert(format!("{} {}", cname_upper, sname_upper), cs_uuid);
+        cs_lookup_map.insert(format!("{}{}", cname_upper, sname_upper), cs_uuid);
+
+        let alpha_code = normalize_cs_key(&format!("{}{}", ccode_upper, scode_upper));
+        if !alpha_code.is_empty() {
+            cs_lookup_map.insert(alpha_code, cs_uuid);
+        }
+        let alpha_name = normalize_cs_key(&format!("{}{}", cname_upper, sname_upper));
+        if !alpha_name.is_empty() {
+            cs_lookup_map.insert(alpha_name, cs_uuid);
+        }
+
+        cs_lookup_map.entry(ccode_upper.clone()).or_insert(cs_uuid);
+        cs_lookup_map
+            .entry(normalize_cs_key(&ccode_upper))
+            .or_insert(cs_uuid);
     }
 
     let default_pass = crate::utils::password::hash_password("Welcome123!").unwrap_or_default();
@@ -603,7 +646,7 @@ async fn process_bulk_students_background(
         "Guardian Email",
         "Guardian Phone",
         "Student Phone",
-        "Class Section ID",
+        "Class Section Code",
         "Error_Reason",
     ];
 
@@ -718,10 +761,12 @@ async fn process_bulk_students_background(
             if !trimmed.is_empty() {
                 let key_lower = trimmed.to_lowercase();
                 let key_upper = trimmed.to_uppercase();
+                let key_alpha = normalize_cs_key(trimmed);
 
                 if let Some(&found_cs_id) = cs_lookup_map
                     .get(&key_lower)
                     .or_else(|| cs_lookup_map.get(&key_upper))
+                    .or_else(|| cs_lookup_map.get(&key_alpha))
                 {
                     pre_cs_id = Some(found_cs_id);
                 }
@@ -879,4 +924,199 @@ async fn process_bulk_students_background(
         final_success,
         parse_result.failed_count + failed_records_extra.len()
     );
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SingleStudentRequest {
+    pub first_name: String,
+    pub last_name: String,
+    pub admission_number: String,
+    pub date_of_birth: String,
+    pub guardian_first_name: String,
+    pub guardian_last_name: String,
+    pub guardian_email: String,
+    pub guardian_phone: String,
+    pub student_phone: Option<String>,
+    pub class_section_id: Option<String>,
+}
+
+pub async fn single_add_student(
+    auth_session: AuthSession,
+    State(state): State<AppState>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    Json(payload): Json<SingleStudentRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let user = auth_session
+        .user
+        .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+    if !user.roles.contains(&"SUPER_ADMIN".to_string()) && !user.is_school_admin() {
+        crate::utils::telemetry::dispatch_security_alert(
+            &state.db,
+            user.school_id,
+            user.id,
+            "SINGLE_ADD_STUDENT_ATTEMPT",
+            "single_add_student",
+            "Only School Admins can add students",
+            &user.roles,
+            Some(addr.to_string()),
+        )
+        .await;
+        return Err(AppError::Forbidden(
+            "Only School Admins can add students".into(),
+        ));
+    }
+
+    let first = payload.first_name.trim();
+    let last = payload.last_name.trim();
+    let adm = payload.admission_number.trim();
+    let g_first = payload.guardian_first_name.trim();
+    let g_last = payload.guardian_last_name.trim();
+    let g_email = payload.guardian_email.trim();
+    let g_phone_raw = payload.guardian_phone.trim();
+
+    if first.is_empty() || last.is_empty() {
+        return Err(AppError::BadRequest(
+            "Student first and last name are required".into(),
+        ));
+    }
+    if adm.is_empty() {
+        return Err(AppError::BadRequest("Admission number is required".into()));
+    }
+    if g_first.is_empty() || g_last.is_empty() {
+        return Err(AppError::BadRequest(
+            "Guardian first and last name are required".into(),
+        ));
+    }
+    if g_email.is_empty() || !g_email.contains('@') {
+        return Err(AppError::BadRequest(
+            "Valid guardian email is required".into(),
+        ));
+    }
+
+    let g_phone = crate::utils::phone::normalize_phone_number(g_phone_raw);
+    if g_phone.is_empty() || g_phone.len() < 10 {
+        return Err(AppError::BadRequest(
+            "Valid guardian phone number is required (+91<10_digits>)".into(),
+        ));
+    }
+
+    let dob = parse_flexible_date(&payload.date_of_birth)
+        .map_err(|e| AppError::BadRequest(format!("Invalid Date of Birth: {}", e)))?;
+
+    let s_phone = payload
+        .student_phone
+        .as_deref()
+        .map(|p| crate::utils::phone::normalize_phone_number(p))
+        .filter(|p| !p.is_empty() && p.len() >= 10);
+
+    // Check admission number duplicate in school
+    let existing_adms =
+        crate::modules::users::repository::UserRepository::get_existing_admission_numbers(
+            &state.db,
+            user.school_id,
+        )
+        .await
+        .unwrap_or_default();
+
+    let adm_upper = adm.to_uppercase();
+    if existing_adms.contains(&adm_upper) {
+        return Err(AppError::BadRequest(
+            "Admission number already exists in this school".into(),
+        ));
+    }
+
+    // Resolve class_section_id if provided
+    let mut resolved_cs_id: Option<uuid::Uuid> = None;
+    if let Some(ref cs_str) = payload.class_section_id {
+        let trimmed = cs_str.trim();
+        if !trimmed.is_empty() {
+            if let Ok(parsed_uuid) = uuid::Uuid::parse_str(trimmed) {
+                resolved_cs_id = Some(parsed_uuid);
+            } else {
+                let found: Option<uuid::Uuid> = sqlx::query_scalar(
+                    r#"SELECT cs.id FROM class_sections cs
+                       JOIN classes c ON cs.class_id = c.id
+                       JOIN sections s ON cs.section_id = s.id
+                       WHERE c.school_id = $1 AND (
+                           UPPER(c.code || s.code) = UPPER($2) OR
+                           UPPER(c.code || '-' || s.code) = UPPER($2) OR
+                           UPPER(c.name || ' ' || s.name) = UPPER($2) OR
+                           UPPER(REGEXP_REPLACE(c.code || s.code, '[^a-zA-Z0-9]', '', 'g')) = UPPER(REGEXP_REPLACE($2, '[^a-zA-Z0-9]', '', 'g')) OR
+                           UPPER(c.code) = UPPER($2)
+                       ) LIMIT 1"#
+                )
+                .bind(user.school_id)
+                .bind(trimmed)
+                .fetch_optional(&state.db)
+                .await
+                .ok()
+                .flatten();
+
+                resolved_cs_id = found;
+            }
+        }
+    }
+
+    let active_ay_id: Option<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT id FROM academic_years WHERE school_id = $1 AND status = 'ACTIVE' ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(user.school_id)
+    .fetch_optional(&state.db)
+    .await
+    .unwrap_or(None);
+
+    let default_pass = crate::utils::password::hash_password("Welcome123!").unwrap_or_default();
+
+    let mut tx_guard = crate::utils::write_controller::DbWriteController::begin(&state.db).await?;
+    let (s_user_id, _) =
+        crate::modules::users::repository::UserRepository::create_bulk_student_item(
+            tx_guard.conn(),
+            user.school_id,
+            user.id,
+            &default_pass,
+            first,
+            last,
+            adm,
+            dob,
+            g_first,
+            g_last,
+            g_email,
+            &g_phone,
+            s_phone.as_deref(),
+            None,
+            None,
+            active_ay_id,
+            resolved_cs_id,
+        )
+        .await?;
+
+    tx_guard.commit().await?;
+
+    crate::utils::audit::log_action(
+        &state.db,
+        Some(user.school_id),
+        Some(user.id),
+        "SINGLE_ADD_STUDENT",
+        Some("STUDENTS"),
+        Some(s_user_id),
+        Some(serde_json::json!({
+            "admission_number": adm,
+            "student_id": s_user_id,
+            "first_name": first,
+            "last_name": last
+        })),
+        Some(addr.to_string()),
+    )
+    .await
+    .ok();
+
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "message": "Student created successfully",
+            "student_id": s_user_id,
+            "admission_number": adm,
+        })),
+    ))
 }

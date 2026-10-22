@@ -62,6 +62,10 @@ pub async fn init_pool(config: &AppConfig) -> Result<PgPool, sqlx::Error> {
             -- Ensure class_section_id column exists on users table
             ALTER TABLE users ADD COLUMN IF NOT EXISTS class_section_id UUID REFERENCES class_sections(id) ON DELETE SET NULL;
 
+            -- Ensure users status supports full student lifecycle status strings (including TC_ISSUED)
+            ALTER TABLE users ALTER COLUMN status TYPE VARCHAR(50) USING status::TEXT;
+            ALTER TABLE users ALTER COLUMN status SET DEFAULT 'ACTIVE';
+
             -- Database safeguard: Ensure any existing users missing entries in user_roles get assigned appropriate roles
             INSERT INTO user_roles (user_id, role_id)
             SELECT u.id, r.id
@@ -141,7 +145,6 @@ pub async fn init_pool(config: &AppConfig) -> Result<PgPool, sqlx::Error> {
                 created_at TIMESTAMPTZ DEFAULT NOW(),
                 updated_at TIMESTAMPTZ DEFAULT NOW()
             );
-                FOREIGN KEY (class_section_id) REFERENCES class_sections(id) ON DELETE CASCADE ON UPDATE CASCADE;
         EXCEPTION WHEN OTHERS THEN
             NULL;
         END $$;

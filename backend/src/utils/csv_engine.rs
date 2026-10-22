@@ -147,6 +147,20 @@ impl CsvSchema {
                         }
                     }
                 }
+                "classsectioncode" | "classsectionid" | "classsection" => {
+                    for candidate in [
+                        "classsectioncode",
+                        "classsectionid",
+                        "classsection",
+                        "classcode",
+                        "sectioncode",
+                        "class",
+                    ] {
+                        if let Some(&idx) = col_indices.get(candidate) {
+                            return Some(idx);
+                        }
+                    }
+                }
                 _ => {}
             }
             None

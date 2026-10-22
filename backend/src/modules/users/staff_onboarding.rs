@@ -24,9 +24,7 @@ pub async fn bulk_upload_staff(
         .user
         .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
 
-    if !user.roles.contains(&"SCHOOL_ADMIN".to_string())
-        && !user.roles.contains(&"SUPER_ADMIN".to_string())
-    {
+    if !user.roles.contains(&"SUPER_ADMIN".to_string()) && !user.is_school_admin() {
         crate::utils::telemetry::dispatch_security_alert(
             &state.db,
             user.school_id,
@@ -481,9 +479,7 @@ pub async fn single_add_staff(
         .user
         .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
 
-    if !user.roles.contains(&"SCHOOL_ADMIN".to_string())
-        && !user.roles.contains(&"SUPER_ADMIN".to_string())
-    {
+    if !user.roles.contains(&"SUPER_ADMIN".to_string()) && !user.is_school_admin() {
         crate::utils::telemetry::dispatch_security_alert(
             &state.db,
             user.school_id,

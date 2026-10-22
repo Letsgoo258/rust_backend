@@ -20,20 +20,20 @@ pub async fn add_admin(
         .user
         .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
 
-    if !user.roles.contains(&"SUPER_ADMIN".to_string()) {
+    if !user.roles.contains(&"SUPER_ADMIN".to_string()) && !user.is_school_admin() {
         crate::utils::telemetry::dispatch_security_alert(
             &state.db,
             user.school_id,
             user.id,
             "ADD_SCHOOL_ADMIN_ATTEMPT",
             "users_admins_add",
-            "Only Super Admins can add new School Admins",
+            "Only School Admins or Super Admins can add new School Admins",
             &user.roles,
             None,
         )
         .await;
         return Err(AppError::Forbidden(
-            "Only Super Admins can add new School Admins".into(),
+            "Only School Admins or Super Admins can add new School Admins".into(),
         ));
     }
 

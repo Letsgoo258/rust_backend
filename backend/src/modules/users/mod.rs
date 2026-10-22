@@ -7,4 +7,6 @@ pub mod students_bulk;
 
 #[allow(unused_imports)]
 pub use repository::UserRepository;
+pub mod custom_fields;
 pub mod edit_controller;
+pub mod profile;

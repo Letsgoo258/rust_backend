@@ -265,6 +265,13 @@ impl NavigationConfig {
                     section: "MANAGEMENT & ACTIONS".into(),
                     items: vec![
                         NavigationItem {
+                            name: "Add user".into(),
+                            path: "/dashboard/users/add".into(),
+                            icon: "user_plus".into(),
+                            capability: Some("users:bulk_onboard".into()),
+                            badge: None,
+                        },
+                        NavigationItem {
                             name: "Export user data".into(),
                             path: "/dashboard/users?action=export".into(),
                             icon: "export".into(),

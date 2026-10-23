@@ -949,29 +949,52 @@ impl AcademicRepository {
         capacity: Option<i32>,
         room_id: Option<Uuid>,
         class_teacher_staff_id: Option<Uuid>,
+        clear_class_teacher: bool,
         status: Option<&str>,
         user_id: Uuid,
     ) -> Result<(), AppError> {
-        sqlx::query(
-            r#"
-            UPDATE class_sections
-            SET capacity = COALESCE($2, capacity),
-                room_id = COALESCE($3, room_id),
-                class_teacher_staff_id = COALESCE($4, class_teacher_staff_id),
-                status = COALESCE($5, status),
-                updated_by_user_id = $6,
-                updated_at = NOW()
-            WHERE id = $1
-            "#,
-        )
-        .bind(class_section_id)
-        .bind(capacity)
-        .bind(room_id)
-        .bind(class_teacher_staff_id)
-        .bind(status)
-        .bind(user_id)
-        .execute(&mut **tx)
-        .await?;
+        if clear_class_teacher {
+            sqlx::query(
+                r#"
+                UPDATE class_sections
+                SET capacity = COALESCE($2, capacity),
+                    room_id = COALESCE($3, room_id),
+                    class_teacher_staff_id = NULL,
+                    status = COALESCE($4, status),
+                    updated_by_user_id = $5,
+                    updated_at = NOW()
+                WHERE id = $1
+                "#,
+            )
+            .bind(class_section_id)
+            .bind(capacity)
+            .bind(room_id)
+            .bind(status)
+            .bind(user_id)
+            .execute(&mut **tx)
+            .await?;
+        } else {
+            sqlx::query(
+                r#"
+                UPDATE class_sections
+                SET capacity = COALESCE($2, capacity),
+                    room_id = COALESCE($3, room_id),
+                    class_teacher_staff_id = COALESCE($4, class_teacher_staff_id),
+                    status = COALESCE($5, status),
+                    updated_by_user_id = $6,
+                    updated_at = NOW()
+                WHERE id = $1
+                "#,
+            )
+            .bind(class_section_id)
+            .bind(capacity)
+            .bind(room_id)
+            .bind(class_teacher_staff_id)
+            .bind(status)
+            .bind(user_id)
+            .execute(&mut **tx)
+            .await?;
+        }
 
         Ok(())
     }

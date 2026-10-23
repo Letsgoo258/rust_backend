@@ -491,6 +491,7 @@ pub struct UpdateClassSectionPayload {
     pub capacity: Option<i32>,
     pub room_id: Option<uuid::Uuid>,
     pub class_teacher_staff_id: Option<uuid::Uuid>,
+    pub clear_class_teacher: Option<bool>,
     pub status: Option<String>,
 }
 
@@ -504,7 +505,13 @@ pub async fn update_class_section(
         .user
         .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
 
-    if !user.is_school_admin() && !user.has_capability("academics:manage_curriculum") {
+    let is_admin_or_curriculum =
+        user.is_school_admin() || user.has_capability("academics:manage_curriculum");
+    let has_any_teacher_cap = user.has_capability("academics:assign_class_teacher")
+        || user.has_capability("academics:edit_class_teacher")
+        || user.has_capability("academics:delete_class_teacher");
+
+    if !is_admin_or_curriculum && !has_any_teacher_cap {
         return Err(AppError::Forbidden(
             "Only School Admins or authorized staff can update class sections".into(),
         ));
@@ -518,6 +525,40 @@ pub async fn update_class_section(
     .await?
     .ok_or_else(|| AppError::NotFound("Class section not found".into()))?;
 
+    let is_clearing_teacher = payload.clear_class_teacher.unwrap_or(false);
+    let is_setting_teacher = payload.class_teacher_staff_id.is_some()
+        && payload.class_teacher_staff_id != current.class_teacher_staff_id;
+
+    if !is_admin_or_curriculum {
+        if payload.capacity.is_some() || payload.room_id.is_some() || payload.status.is_some() {
+            return Err(AppError::Forbidden(
+                "Permission denied: academics:manage_curriculum required to modify capacity, room, or status".into(),
+            ));
+        }
+
+        if is_clearing_teacher {
+            if !user.has_capability("academics:delete_class_teacher") {
+                return Err(AppError::Forbidden(
+                    "Permission denied: academics:delete_class_teacher required to remove class teacher".into(),
+                ));
+            }
+        } else if is_setting_teacher {
+            if current.class_teacher_staff_id.is_none() {
+                if !user.has_capability("academics:assign_class_teacher") {
+                    return Err(AppError::Forbidden(
+                        "Permission denied: academics:assign_class_teacher required to assign class teacher".into(),
+                    ));
+                }
+            } else if !user.has_capability("academics:edit_class_teacher")
+                && !user.has_capability("academics:assign_class_teacher")
+            {
+                return Err(AppError::Forbidden(
+                    "Permission denied: academics:edit_class_teacher required to change class teacher".into(),
+                ));
+            }
+        }
+    }
+
     let mut tx = state.db.begin().await?;
 
     AcademicRepository::update_class_section(
@@ -526,10 +567,48 @@ pub async fn update_class_section(
         payload.capacity,
         payload.room_id,
         payload.class_teacher_staff_id,
+        is_clearing_teacher,
         payload.status.as_deref(),
         user.id,
     )
     .await?;
+
+    // Synchronize CLASS_TEACHER internal system role
+    if is_clearing_teacher {
+        if let Some(old_staff_id) = current.class_teacher_staff_id {
+            crate::utils::roles::sync_class_teacher_role(
+                tx.as_mut(),
+                user.school_id,
+                old_staff_id,
+                payload.class_section_id,
+                false,
+            )
+            .await?;
+        }
+    } else if is_setting_teacher {
+        if let Some(new_staff_id) = payload.class_teacher_staff_id {
+            crate::utils::roles::sync_class_teacher_role(
+                tx.as_mut(),
+                user.school_id,
+                new_staff_id,
+                payload.class_section_id,
+                true,
+            )
+            .await?;
+        }
+        if let Some(old_staff_id) = current.class_teacher_staff_id {
+            if Some(old_staff_id) != payload.class_teacher_staff_id {
+                crate::utils::roles::sync_class_teacher_role(
+                    tx.as_mut(),
+                    user.school_id,
+                    old_staff_id,
+                    payload.class_section_id,
+                    false,
+                )
+                .await?;
+            }
+        }
+    }
 
     if let Some(new_cap) = payload.capacity {
         let old_val = current
@@ -587,9 +666,22 @@ pub async fn update_class_section(
         .await?;
     }
 
-    if payload.class_teacher_staff_id.is_some()
-        && payload.class_teacher_staff_id != current.class_teacher_staff_id
-    {
+    if is_clearing_teacher && current.class_teacher_staff_id.is_some() {
+        let old_val = current
+            .class_teacher_staff_id
+            .map(|t| t.to_string())
+            .unwrap_or_else(|| "None".into());
+        AcademicRepository::record_class_section_history(
+            &mut tx,
+            user.school_id,
+            payload.class_section_id,
+            user.id,
+            "TEACHER_CHANGE",
+            Some(&old_val),
+            Some("None"),
+        )
+        .await?;
+    } else if is_setting_teacher {
         let old_val = current
             .class_teacher_staff_id
             .map(|t| t.to_string())
@@ -617,10 +709,18 @@ pub async fn update_class_section(
         "status": current.status
     });
 
+    let final_teacher_id = if is_clearing_teacher {
+        None
+    } else {
+        payload
+            .class_teacher_staff_id
+            .or(current.class_teacher_staff_id)
+    };
+
     let after_json = serde_json::json!({
         "capacity": payload.capacity.or(current.capacity),
         "room_id": payload.room_id.or(current.room_id),
-        "class_teacher_staff_id": payload.class_teacher_staff_id.or(current.class_teacher_staff_id),
+        "class_teacher_staff_id": final_teacher_id,
         "status": payload.status.clone().or(current.status)
     });
 
@@ -828,6 +928,18 @@ pub async fn get_my_class(
     let user = auth_session
         .user
         .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+    let is_class_teacher = user
+        .roles
+        .iter()
+        .any(|r| r.eq_ignore_ascii_case("CLASS_TEACHER"));
+
+    if !is_class_teacher {
+        return Err(AppError::Forbidden(
+            "Access denied: My Class is strictly reserved for users with the CLASS_TEACHER role."
+                .into(),
+        ));
+    }
 
     let is_admin = user.is_school_admin()
         || user

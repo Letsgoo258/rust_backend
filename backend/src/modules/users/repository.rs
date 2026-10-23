@@ -380,6 +380,12 @@ impl UserRepository {
         creator_user_id: Uuid,
         imported_via_csv: bool,
     ) -> Result<Uuid, AppError> {
+        if role.trim().eq_ignore_ascii_case("CLASS_TEACHER") {
+            return Err(AppError::BadRequest(
+                "CLASS_TEACHER is an internal system role and cannot be assigned manually. It is automatically granted when designating a class teacher for a section.".into(),
+            ));
+        }
+
         let user_id: Uuid = sqlx::query_scalar(
             r#"INSERT INTO users (school_id, first_name, last_name, email, phone, username, password_hash, status, imported_via_csv, updated_by_user_id, updated_at)
                VALUES ($1, $2, $3, $4, $5, $6, $7, 'INACTIVE', $8, $9, NOW())

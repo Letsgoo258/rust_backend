@@ -533,6 +533,12 @@ pub async fn single_add_staff(
         ));
     }
 
+    if query.role.trim().eq_ignore_ascii_case("CLASS_TEACHER") {
+        return Err(AppError::BadRequest(
+            "CLASS_TEACHER is an internal system role and cannot be assigned manually. It is automatically granted when designating a class teacher for a section.".into(),
+        ));
+    }
+
     let first_name = payload.get("First Name").cloned().unwrap_or_default();
     let last_name = payload.get("Last Name").cloned().unwrap_or_default();
     let email = payload.get("Email").cloned().unwrap_or_default();

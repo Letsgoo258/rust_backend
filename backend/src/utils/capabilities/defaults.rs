@@ -24,6 +24,9 @@ pub fn default_enabled_keys(role_code: &str) -> HashSet<&'static str> {
             set.insert("academics:manage_curriculum");
             set.insert("academics:assign_students");
             set.insert("academics:manage_timetable");
+            set.insert("academics:assign_class_teacher");
+            set.insert("academics:edit_class_teacher");
+            set.insert("academics:delete_class_teacher");
             set.insert("exams:manage_schedules");
             set.insert("exams:enter_marks");
             set.insert("settings:view");

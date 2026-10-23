@@ -86,6 +86,24 @@ pub fn catalogue() -> Vec<(&'static str, &'static str, &'static str, &'static st
             "Academics",
             "Configure class scheduling rules, periods, and timetable dispatch",
         ),
+        (
+            "academics:assign_class_teacher",
+            "Assign Class Teacher",
+            "Academics",
+            "Designate faculty as class teachers for class divisions",
+        ),
+        (
+            "academics:edit_class_teacher",
+            "Change Class Teacher",
+            "Academics",
+            "Change or reassign class teachers for class divisions",
+        ),
+        (
+            "academics:delete_class_teacher",
+            "Remove Class Teacher",
+            "Academics",
+            "Remove or unassign class teachers from class divisions",
+        ),
 
         // 5. Examinations & Grading
         (

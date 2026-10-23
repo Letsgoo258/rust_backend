@@ -138,3 +138,116 @@ pub async fn get_user_roles(
 
     Ok(roles)
 }
+
+/// Helper function to remove a role from a user in `user_roles` table.
+pub async fn remove_user_role(
+    conn: &mut PgConnection,
+    school_id: Uuid,
+    user_id: Uuid,
+    role_code: &str,
+) -> Result<(), sqlx::Error> {
+    let code_upper = role_code.trim().to_uppercase();
+    sqlx::query(
+        r#"
+        DELETE FROM user_roles
+        WHERE user_id = $1
+          AND role_id IN (
+              SELECT id FROM roles WHERE school_id = $2 AND code = $3
+          )
+        "#,
+    )
+    .bind(user_id)
+    .bind(school_id)
+    .bind(code_upper)
+    .execute(&mut *conn)
+    .await?;
+
+    crate::modules::auth::backend::invalidate_user_cache(&user_id);
+
+    Ok(())
+}
+
+/// Helper function to resolve a staff or user ID to a `users.id`.
+pub async fn resolve_staff_to_user_id(
+    conn: &mut PgConnection,
+    school_id: Uuid,
+    staff_or_user_id: Uuid,
+) -> Result<Option<Uuid>, sqlx::Error> {
+    let user_id_from_staff: Option<Uuid> = sqlx::query_scalar(
+        r#"
+        SELECT user_id FROM staff WHERE id = $1 AND school_id = $2
+        "#,
+    )
+    .bind(staff_or_user_id)
+    .bind(school_id)
+    .fetch_optional(&mut *conn)
+    .await?;
+
+    if let Some(uid) = user_id_from_staff {
+        return Ok(Some(uid));
+    }
+
+    let direct_user_id: Option<Uuid> = sqlx::query_scalar(
+        r#"
+        SELECT id FROM users WHERE id = $1 AND school_id = $2
+        "#,
+    )
+    .bind(staff_or_user_id)
+    .bind(school_id)
+    .fetch_optional(&mut *conn)
+    .await?;
+
+    Ok(direct_user_id)
+}
+
+/// Automatically synchronizes the internal `CLASS_TEACHER` role for a staff member.
+/// - If `is_assigned == true`: assigns `CLASS_TEACHER` role to the user.
+/// - If `is_assigned == false`: checks if the user is a class teacher of any other active class section
+///   in this school; if not, revokes `CLASS_TEACHER` role.
+pub async fn sync_class_teacher_role(
+    conn: &mut PgConnection,
+    school_id: Uuid,
+    staff_or_user_id: Uuid,
+    section_id: Uuid,
+    is_assigned: bool,
+) -> Result<(), sqlx::Error> {
+    let user_id = match resolve_staff_to_user_id(&mut *conn, school_id, staff_or_user_id).await? {
+        Some(uid) => uid,
+        None => return Ok(()),
+    };
+
+    if is_assigned {
+        let _ = assign_user_role(&mut *conn, school_id, user_id, "CLASS_TEACHER").await?;
+    } else {
+        let has_other_sections: bool = sqlx::query_scalar(
+            r#"
+            SELECT EXISTS (
+                SELECT 1
+                FROM class_sections cs
+                JOIN classes c ON cs.class_id = c.id
+                WHERE c.school_id = $1
+                  AND cs.id != $2
+                  AND (cs.status IS NULL OR cs.status = 'ACTIVE')
+                  AND (
+                      cs.class_teacher_staff_id = $3
+                      OR cs.class_teacher_staff_id IN (
+                          SELECT id FROM staff WHERE user_id = $3 AND school_id = $1
+                      )
+                  )
+            )
+            "#,
+        )
+        .bind(school_id)
+        .bind(section_id)
+        .bind(user_id)
+        .fetch_one(&mut *conn)
+        .await
+        .unwrap_or(false);
+
+        if !has_other_sections {
+            let _ = remove_user_role(&mut *conn, school_id, user_id, "CLASS_TEACHER").await?;
+        }
+    }
+
+    Ok(())
+}

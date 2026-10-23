@@ -60,13 +60,27 @@ pub async fn update_user_profile(
         ));
     }
 
+    #[derive(sqlx::FromRow)]
+    #[allow(dead_code)]
+    struct TargetUserRow {
+        pub id: Uuid,
+        pub school_id: Uuid,
+        pub first_name: String,
+        pub last_name: Option<String>,
+        pub display_name: Option<String>,
+        pub email: Option<String>,
+        pub phone: Option<String>,
+        pub admission_number: Option<String>,
+        pub status: String,
+    }
+
     // Verify target user belongs to the same school (tenant isolation)
-    let target_user = sqlx::query!(
-        r#"SELECT id, school_id, first_name, last_name, display_name, email, phone, admission_number, status::TEXT as "status!"
+    let target_user = sqlx::query_as::<_, TargetUserRow>(
+        r#"SELECT id, school_id, first_name, last_name, display_name, email, phone, admission_number, status::TEXT as status
            FROM users
            WHERE id = $1"#,
-        target_user_id
     )
+    .bind(target_user_id)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::NotFound("User not found".into()))?;

@@ -81,6 +81,19 @@ pub struct LookupStudentRow {
     pub current_section_name: Option<String>,
 }
 
+#[derive(Debug, serde::Serialize, sqlx::FromRow, Clone)]
+pub struct SectionStudentRow {
+    pub id: Uuid,
+    pub username: String,
+    pub display_name: Option<String>,
+    pub admission_number: Option<String>,
+    pub roll_number: Option<String>,
+    pub status: Option<String>,
+    pub gender: Option<String>,
+    pub email: Option<String>,
+    pub phone: Option<String>,
+}
+
 impl AcademicRepository {
     #[allow(dead_code)]
     pub async fn upsert_class_conn(
@@ -974,5 +987,36 @@ impl AcademicRepository {
             .collect();
 
         Ok(list)
+    }
+
+    pub async fn get_class_section_students(
+        pool: &PgPool,
+        class_section_id: Uuid,
+        school_id: Uuid,
+    ) -> Result<Vec<SectionStudentRow>, AppError> {
+        let rows = sqlx::query_as::<_, SectionStudentRow>(
+            r#"
+            SELECT
+                u.id,
+                u.username,
+                COALESCE(NULLIF(u.display_name, ''), NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), ''), u.username) as display_name,
+                u.admission_number,
+                e.roll_number,
+                u.status::TEXT as status,
+                u.gender,
+                u.email,
+                u.phone
+            FROM enrollments e
+            JOIN users u ON u.id = e.student_id
+            WHERE e.class_section_id = $1 AND e.status = 'ACTIVE' AND u.school_id = $2
+            ORDER BY COALESCE(NULLIF(e.roll_number, ''), '999999'), u.first_name, u.last_name
+            "#,
+        )
+        .bind(class_section_id)
+        .bind(school_id)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(rows)
     }
 }

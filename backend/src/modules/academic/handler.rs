@@ -733,3 +733,23 @@ pub async fn bulk_assign_class(
 
     Ok((StatusCode::OK, Json(serde_json::json!({ "success": true }))))
 }
+
+#[tracing::instrument(err, skip(state, auth_session))]
+pub async fn get_class_section_students(
+    auth_session: AuthSession,
+    State(state): State<AppState>,
+    Path(class_section_id): Path<uuid::Uuid>,
+) -> Result<impl IntoResponse, AppError> {
+    let user = auth_session
+        .user
+        .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+    let students =
+        AcademicRepository::get_class_section_students(&state.db, class_section_id, user.school_id)
+            .await?;
+
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({ "students": students })),
+    ))
+}

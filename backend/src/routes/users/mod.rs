@@ -12,6 +12,7 @@ use crate::{
             bulk_upload_students, get_student_bulk_upload_status, preview_bulk_students,
             single_add_student,
         },
+        tickets::{create_change_ticket, list_school_tickets, list_user_tickets},
     },
     state::AppState,
 };
@@ -59,6 +60,9 @@ pub fn router() -> Router<AppState> {
             "/transfer-certificate/issue",
             post(issue_transfer_certificates),
         )
+        .route("/tickets", get(list_school_tickets))
         .route("/:id", patch(update_user_profile))
         .route("/:id/activate", post(activate_user))
+        .route("/:id/change-ticket", post(create_change_ticket))
+        .route("/:id/change-tickets", get(list_user_tickets))
 }

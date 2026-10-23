@@ -281,6 +281,28 @@ pub async fn preview_bulk_students(
             row_error = Some(date_err);
         }
 
+        // Validate required login credentials: Email and Phone are strictly required for login purpose
+        let has_email = !g_email.trim().is_empty();
+        let has_phone = !g_phone.trim().is_empty() || s_phone.is_some();
+        if !has_email || !has_phone {
+            let cred_err = if !has_email && !has_phone {
+                "Email and Phone are strictly required for student login credentials.".to_string()
+            } else if !has_email {
+                "Guardian/Student Email is strictly required for login credentials.".to_string()
+            } else {
+                "Guardian/Student Phone is strictly required for login credentials.".to_string()
+            };
+            errors.push(StudentPreviewError {
+                row: idx + 1,
+                admission_number: adm.clone(),
+                error_reason: cred_err.clone(),
+            });
+            row_error = Some(match row_error {
+                Some(existing) => format!("{}; {}", existing, cred_err),
+                None => cred_err,
+            });
+        }
+
         // Resolve Class Section ID / Code if exists
         if let Some(ref cs_id_str) = cls_section_id_raw {
             let trimmed = cs_id_str.trim();
@@ -724,6 +746,44 @@ async fn process_bulk_students_background(
                 continue;
             }
         };
+
+        // Validate required login credentials: Email and Phone are strictly required
+        let has_email = !g_email.trim().is_empty();
+        let has_phone = !g_phone.trim().is_empty() || s_phone.is_some();
+        if !has_email || !has_phone {
+            let err_reason = if !has_email && !has_phone {
+                "Omitted from upload: Email and Phone are strictly required for student login credentials.".to_string()
+            } else if !has_email {
+                "Omitted from upload: Guardian/Student Email is strictly required for login credentials.".to_string()
+            } else {
+                "Omitted from upload: Guardian/Student Phone is strictly required for login credentials.".to_string()
+            };
+            tracing::warn!(
+                "Row skipped: admission {} lacks login credentials: {}",
+                adm,
+                err_reason
+            );
+            failed_records_extra.push(vec![
+                first.clone(),
+                last.clone(),
+                adm.clone(),
+                dob_str.clone(),
+                g_first.clone(),
+                g_last.clone(),
+                g_email.clone(),
+                g_phone.clone(),
+                s_phone_raw.clone(),
+                cs_id_str,
+                err_reason,
+            ]);
+            if let Some(mut j) = state.jobs.get_mut(&job_id) {
+                j.processed_rows = idx + 1;
+                j.success_count = final_success;
+                j.failed_count = parse_result.failed_count + failed_records_extra.len();
+                j.updated_at = time::OffsetDateTime::now_utc().unix_timestamp();
+            }
+            continue;
+        }
 
         let adm_upper = adm.trim().to_uppercase();
 

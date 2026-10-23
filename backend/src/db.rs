@@ -145,6 +145,29 @@ pub async fn init_pool(config: &AppConfig) -> Result<PgPool, sqlx::Error> {
                 created_at TIMESTAMPTZ DEFAULT NOW(),
                 updated_at TIMESTAMPTZ DEFAULT NOW()
             );
+
+            CREATE TABLE IF NOT EXISTS data_change_tickets (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+                user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                requested_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+                ticket_number VARCHAR(50) NOT NULL,
+                ticket_type VARCHAR(50) NOT NULL DEFAULT 'CREDENTIAL_CHANGE',
+                status VARCHAR(50) NOT NULL DEFAULT 'PENDING',
+                field_name VARCHAR(100) NOT NULL,
+                old_value TEXT,
+                new_value TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                priority VARCHAR(20) NOT NULL DEFAULT 'STANDARD',
+                reviewer_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+                reviewer_notes TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_data_change_tickets_user ON data_change_tickets(user_id);
+            CREATE INDEX IF NOT EXISTS idx_data_change_tickets_school ON data_change_tickets(school_id);
+            CREATE INDEX IF NOT EXISTS idx_data_change_tickets_status ON data_change_tickets(status);
         EXCEPTION WHEN OTHERS THEN
             NULL;
         END $$;

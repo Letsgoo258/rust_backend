@@ -276,6 +276,43 @@ async fn process_bulk_staff_background(
 
         let email_lower = email.to_lowercase();
 
+        // Validate required login credentials: Email and Phone are strictly required
+        let has_email = !email.trim().is_empty();
+        let has_phone = !phone.trim().is_empty();
+        if !has_email || !has_phone {
+            let err_reason = if !has_email && !has_phone {
+                "Omitted from upload: Email and Phone are strictly required for staff login credentials.".to_string()
+            } else if !has_email {
+                "Omitted from upload: Email is strictly required for staff login credentials."
+                    .to_string()
+            } else {
+                "Omitted from upload: Phone is strictly required for staff login credentials."
+                    .to_string()
+            };
+            tracing::warn!(
+                "Row skipped: staff {} lacks login credentials: {}",
+                emp_id,
+                err_reason
+            );
+            failed_records_extra.push(vec![
+                first_name,
+                last_name,
+                email,
+                phone,
+                emp_id,
+                joining_date_str,
+                dep_str,
+                err_reason,
+            ]);
+            if let Some(mut j) = state.jobs.get_mut(&job_id) {
+                j.processed_rows = idx + 1;
+                j.success_count = final_success;
+                j.failed_count = parse_result.failed_count + failed_records_extra.len();
+                j.updated_at = time::OffsetDateTime::now_utc().unix_timestamp();
+            }
+            continue;
+        }
+
         if existing_emails.contains(&email_lower) {
             tracing::info!("Row skipped: email {} already registered in school", email);
             failed_records_extra.push(vec![

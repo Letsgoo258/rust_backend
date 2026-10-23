@@ -24,13 +24,12 @@ pub struct TenantContext {
 pub async fn build_auth_layer(pool: PgPool) -> SessionLayer {
     let session_store = PostgresStore::new(pool.clone());
 
-    // Avoid redundant advisory locks on every server boot if tower_sessions already exists
-    let table_exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'tower_sessions')"
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap_or(false);
+    // Avoid redundant DDL locks and slow statement warnings on every server boot if tower_sessions already exists
+    let table_exists: bool =
+        sqlx::query_scalar("SELECT to_regclass('tower_sessions.session') IS NOT NULL")
+            .fetch_one(&pool)
+            .await
+            .unwrap_or(false);
 
     if !table_exists {
         let _ = session_store.migrate().await;

@@ -119,6 +119,7 @@ async fn test_subject_type_and_subject_full_lifecycle() {
         Some(subj_color),
         Some(subj_dept),
         Some(subj_desc),
+        None,
     )
     .await;
 
@@ -170,6 +171,7 @@ async fn test_subject_type_and_subject_full_lifecycle() {
         Some(updated_color),
         Some(updated_dept),
         Some(updated_desc),
+        None,
     )
     .await
     .expect("Error executing update_subject");
@@ -296,6 +298,7 @@ async fn test_subject_type_and_subject_full_lifecycle() {
         Some("#7C3AED"),
         Some("Computer Science & IT"),
         Some("Deep learning with Python"),
+        None,
     )
     .await
     .unwrap();

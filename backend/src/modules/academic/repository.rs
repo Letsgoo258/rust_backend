@@ -35,6 +35,8 @@ pub struct SubjectRow {
     pub color: Option<String>,
     pub department: Option<String>,
     pub description: Option<String>,
+    pub class_id: Option<Uuid>,
+    pub class_name: Option<String>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -241,6 +243,7 @@ impl AcademicRepository {
                 Some(&color),
                 subj.department.as_deref(),
                 subj.description.as_deref(),
+                subj.class_id,
             )
             .await?;
             count += 1;
@@ -530,11 +533,12 @@ impl AcademicRepository {
         color: Option<&str>,
         department: Option<&str>,
         description: Option<&str>,
+        class_id: Option<Uuid>,
     ) -> Result<(), AppError> {
         sqlx::query(
             r#"
-            INSERT INTO subjects (school_id, name, code, subject_type, system_subject_type, subject_type_id, color, department, description, status)
-            VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, '#4F46E5'), $8, $9, 'ACTIVE')
+            INSERT INTO subjects (school_id, name, code, subject_type, system_subject_type, subject_type_id, color, department, description, class_id, status)
+            VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, '#4F46E5'), $8, $9, $10, 'ACTIVE')
             ON CONFLICT (school_id, code) DO UPDATE SET
                 name = EXCLUDED.name,
                 subject_type = EXCLUDED.subject_type,
@@ -543,6 +547,7 @@ impl AcademicRepository {
                 color = COALESCE(EXCLUDED.color, subjects.color, '#4F46E5'),
                 department = COALESCE(EXCLUDED.department, subjects.department),
                 description = COALESCE(EXCLUDED.description, subjects.description),
+                class_id = COALESCE(EXCLUDED.class_id, subjects.class_id),
                 status = 'ACTIVE'
             "#
         )
@@ -555,6 +560,7 @@ impl AcademicRepository {
         .bind(color)
         .bind(department)
         .bind(description)
+        .bind(class_id)
         .execute(pool)
         .await?;
 
@@ -695,7 +701,16 @@ impl AcademicRepository {
 
     pub async fn get_subjects(pool: &PgPool, school_id: Uuid) -> Result<Vec<SubjectRow>, AppError> {
         let rows = sqlx::query(
-            "SELECT id, name, code, subject_type, COALESCE(system_subject_type, 'Core') as system_subject_type, subject_type_id, color, department, description FROM subjects WHERE school_id = $1 AND status != 'DELETED' ORDER BY name ASC"
+            r#"
+            SELECT s.id, s.name, s.code, s.subject_type,
+                   COALESCE(s.system_subject_type, 'Core') as system_subject_type,
+                   s.subject_type_id, s.color, s.department, s.description,
+                   s.class_id, c.name as class_name
+            FROM subjects s
+            LEFT JOIN classes c ON s.class_id = c.id
+            WHERE s.school_id = $1 AND s.status != 'DELETED'
+            ORDER BY s.name ASC
+            "#,
         )
         .bind(school_id)
         .fetch_all(pool)
@@ -713,6 +728,8 @@ impl AcademicRepository {
                 color: r.get("color"),
                 department: r.get("department"),
                 description: r.get("description"),
+                class_id: r.get("class_id"),
+                class_name: r.get("class_name"),
             })
             .collect();
 
@@ -730,6 +747,7 @@ impl AcademicRepository {
         color: Option<&str>,
         department: Option<&str>,
         description: Option<&str>,
+        class_id: Option<Uuid>,
     ) -> Result<bool, AppError> {
         let res = sqlx::query(
             r#"
@@ -741,8 +759,9 @@ impl AcademicRepository {
                 color = COALESCE($5, color, '#4F46E5'),
                 department = $6,
                 description = $7,
+                class_id = $8,
                 updated_at = NOW()
-            WHERE id = $8 AND school_id = $9
+            WHERE id = $9 AND school_id = $10
             "#,
         )
         .bind(name)
@@ -752,6 +771,7 @@ impl AcademicRepository {
         .bind(color)
         .bind(department)
         .bind(description)
+        .bind(class_id)
         .bind(subject_id)
         .bind(school_id)
         .execute(pool)

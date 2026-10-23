@@ -40,6 +40,7 @@ pub struct SubjectInput {
     pub color: Option<String>,
     pub department: Option<String>,
     pub description: Option<String>,
+    pub class_id: Option<uuid::Uuid>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -261,6 +262,7 @@ pub struct UpdateSubjectPayload {
     pub color: Option<String>,
     pub department: Option<String>,
     pub description: Option<String>,
+    pub class_id: Option<uuid::Uuid>,
 }
 
 #[tracing::instrument(err, skip(state, auth_session, payload))]
@@ -295,6 +297,7 @@ pub async fn update_subject(
         payload.color.as_deref(),
         payload.department.as_deref(),
         payload.description.as_deref(),
+        payload.class_id,
     )
     .await?;
 

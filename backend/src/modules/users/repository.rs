@@ -146,7 +146,7 @@ impl UserRepository {
         }
 
         if !class_name.is_empty() {
-            qb.push(" AND EXISTS (SELECT 1 FROM enrollments e2 JOIN class_sections cs2 ON (cs2.id = e2.class_section_id OR (e2.class_section_id IS NULL AND cs2.id = u.class_section_id)) JOIN classes c2 ON cs2.class_id = c2.id WHERE (e2.student_id = u.id AND e2.status = 'ACTIVE' OR u.class_section_id IS NOT NULL) AND c2.name ILIKE ");
+            qb.push(" AND EXISTS (SELECT 1 FROM class_sections cs2 JOIN classes c2 ON cs2.class_id = c2.id WHERE (cs2.id = u.class_section_id OR EXISTS (SELECT 1 FROM enrollments e2 WHERE e2.student_id = u.id AND e2.status = 'ACTIVE' AND e2.class_section_id = cs2.id)) AND c2.name ILIKE ");
             qb.push_bind(format!("%{}%", class_name));
             qb.push(")");
         }
@@ -167,7 +167,7 @@ impl UserRepository {
             qb.push_bind(pat.clone());
             qb.push(" OR (u.admission_number IS NOT NULL AND u.admission_number ILIKE ");
             qb.push_bind(pat.clone());
-            qb.push(") OR EXISTS (SELECT 1 FROM enrollments e3 JOIN class_sections cs3 ON (cs3.id = e3.class_section_id OR (e3.class_section_id IS NULL AND cs3.id = u.class_section_id)) JOIN classes c3 ON cs3.class_id = c3.id WHERE (e3.student_id = u.id AND e3.status = 'ACTIVE' OR u.class_section_id IS NOT NULL) AND c3.name ILIKE ");
+            qb.push(") OR EXISTS (SELECT 1 FROM class_sections cs3 JOIN classes c3 ON cs3.class_id = c3.id WHERE (cs3.id = u.class_section_id OR EXISTS (SELECT 1 FROM enrollments e3 WHERE e3.student_id = u.id AND e3.status = 'ACTIVE' AND e3.class_section_id = cs3.id)) AND c3.name ILIKE ");
             qb.push_bind(pat);
             qb.push("))");
         }
@@ -190,28 +190,7 @@ impl UserRepository {
         let search = filters.get("search").map(|s| s.trim()).unwrap_or("");
 
         let mut qb = QueryBuilder::<sqlx::Postgres>::new(
-            "WITH filtered_users AS (
-                SELECT u.id, u.created_at
-                FROM users u
-                WHERE u.school_id = ",
-        );
-        qb.push_bind(school_id);
-        Self::append_user_filter_clauses(
-            &mut qb,
-            filter_role,
-            status,
-            admitted_from,
-            admitted_to,
-            admission_number,
-            class_name,
-            search,
-        );
-
-        qb.push(
-            " ORDER BY u.created_at DESC
-            LIMIT 300
-            )
-            SELECT
+            "SELECT
                 u.id,
                 u.username,
                 u.first_name,
@@ -237,23 +216,34 @@ impl UserRepository {
                 g.phone as guardian_phone,
                 sg.relationship as guardian_relationship,
                 u.created_at::TEXT as created_at
-            FROM filtered_users fu
-            JOIN users u ON u.id = fu.id
-            LEFT JOIN student_guardians sg ON sg.student_id = u.id
-            LEFT JOIN guardians g ON sg.guardian_id = g.id
+            FROM users u
             LEFT JOIN enrollments e ON e.student_id = u.id AND e.status = 'ACTIVE'
             LEFT JOIN class_sections cs ON (cs.id = e.class_section_id OR (e.class_section_id IS NULL AND cs.id = u.class_section_id))
             LEFT JOIN classes c ON cs.class_id = c.id
             LEFT JOIN sections sec ON cs.section_id = sec.id
             LEFT JOIN staff st ON st.user_id = u.id
+            LEFT JOIN student_guardians sg ON sg.student_id = u.id
+            LEFT JOIN guardians g ON sg.guardian_id = g.id
             LEFT JOIN LATERAL (
                 SELECT COALESCE(array_agg(DISTINCT roles.code::TEXT) FILTER (WHERE roles.code IS NOT NULL), ARRAY[]::TEXT[]) as roles
                 FROM user_roles ur2
                 JOIN roles ON roles.id = ur2.role_id
                 WHERE ur2.user_id = u.id
             ) r ON TRUE
-            ORDER BY u.created_at DESC"
+            WHERE u.school_id = ",
         );
+        qb.push_bind(school_id);
+        Self::append_user_filter_clauses(
+            &mut qb,
+            filter_role,
+            status,
+            admitted_from,
+            admitted_to,
+            admission_number,
+            class_name,
+            search,
+        );
+        qb.push(" ORDER BY u.created_at DESC LIMIT 300");
 
         let rows = qb.build().fetch_all(pool).await?;
 

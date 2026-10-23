@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 static USER_CACHE: LazyLock<DashMap<Uuid, (User, Instant)>> = LazyLock::new(DashMap::new);
-const USER_CACHE_TTL: Duration = Duration::from_secs(60);
+const USER_CACHE_TTL: Duration = Duration::from_secs(20 * 60); // 20 minutes
 
 pub fn invalidate_user_cache(user_id: &Uuid) {
     USER_CACHE.remove(user_id);

@@ -1249,6 +1249,8 @@ pub async fn confirm_password_reset(
 
     tx.commit().await?;
 
+    crate::modules::auth::backend::invalidate_user_cache(&reset_record.user_id);
+
     crate::utils::audit::log_action(
         &state.db,
         None,

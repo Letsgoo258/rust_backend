@@ -103,6 +103,8 @@ pub async fn init_pool(config: &AppConfig) -> Result<PgPool, sqlx::Error> {
 
             ALTER TABLE subjects ADD COLUMN IF NOT EXISTS system_subject_type VARCHAR(50) NOT NULL DEFAULT 'Core';
             ALTER TABLE subjects ADD COLUMN IF NOT EXISTS subject_type_id UUID REFERENCES subject_types(id) ON DELETE SET NULL;
+            ALTER TABLE subjects ADD COLUMN IF NOT EXISTS color VARCHAR(20) DEFAULT '#4F46E5';
+            ALTER TABLE subjects ADD COLUMN IF NOT EXISTS department VARCHAR(100);
 
             -- Ensure settings modules tables exist
             CREATE TABLE IF NOT EXISTS assets (

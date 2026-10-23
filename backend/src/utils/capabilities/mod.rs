@@ -35,6 +35,9 @@ impl CapabilityController {
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 UNIQUE(school_id, role_code, capability_key)
             );
+
+            CREATE INDEX IF NOT EXISTS idx_role_capabilities_school_upper_role
+                ON role_capabilities (school_id, UPPER(role_code));
             "#,
         )
         .execute(pool)

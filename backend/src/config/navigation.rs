@@ -134,7 +134,7 @@ impl NavigationConfig {
                             badge: None,
                         },
                         NavigationItem {
-                            name: "Class Teacher".into(),
+                            name: "My Class".into(),
                             path: "/dashboard/academics/class-teacher".into(),
                             icon: "teacher".into(),
                             capability: Some("academics:view".into()),

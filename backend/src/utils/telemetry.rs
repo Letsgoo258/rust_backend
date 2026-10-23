@@ -319,13 +319,21 @@ impl TelemetryDispatcher {
     /// Dispatches telemetry payload to all registered adapters asynchronously without blocking
     pub async fn dispatch(&self, payload: TelemetryPayload) {
         let adapters = Arc::clone(&self.adapters);
-        tokio::spawn(async move {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                for adapter in adapters.iter() {
+                    if let Err(e) = adapter.send(&payload).await {
+                        tracing::warn!("Telemetry adapter '{}' error: {}", adapter.name(), e);
+                    }
+                }
+            });
+        } else {
             for adapter in adapters.iter() {
                 if let Err(e) = adapter.send(&payload).await {
                     tracing::warn!("Telemetry adapter '{}' error: {}", adapter.name(), e);
                 }
             }
-        });
+        }
     }
 }
 

@@ -719,6 +719,47 @@ impl AcademicRepository {
         Ok(list)
     }
 
+    pub async fn update_subject(
+        pool: &PgPool,
+        school_id: Uuid,
+        subject_id: Uuid,
+        name: &str,
+        code: &str,
+        subject_type: Option<&str>,
+        system_subject_type: &str,
+        color: Option<&str>,
+        department: Option<&str>,
+        description: Option<&str>,
+    ) -> Result<bool, AppError> {
+        let res = sqlx::query(
+            r#"
+            UPDATE subjects
+            SET name = $1,
+                code = $2,
+                subject_type = COALESCE($3, subject_type),
+                system_subject_type = $4,
+                color = COALESCE($5, color, '#4F46E5'),
+                department = $6,
+                description = $7,
+                updated_at = NOW()
+            WHERE id = $8 AND school_id = $9
+            "#,
+        )
+        .bind(name)
+        .bind(code)
+        .bind(subject_type)
+        .bind(system_subject_type)
+        .bind(color)
+        .bind(department)
+        .bind(description)
+        .bind(subject_id)
+        .bind(school_id)
+        .execute(pool)
+        .await?;
+
+        Ok(res.rows_affected() > 0)
+    }
+
     pub async fn delete_subject(
         pool: &PgPool,
         school_id: Uuid,

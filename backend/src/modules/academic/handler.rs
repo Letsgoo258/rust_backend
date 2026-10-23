@@ -252,6 +252,62 @@ pub async fn get_subjects(
     ))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct UpdateSubjectPayload {
+    pub name: String,
+    pub code: String,
+    pub subject_type: Option<String>,
+    pub system_subject_type: Option<String>,
+    pub color: Option<String>,
+    pub department: Option<String>,
+    pub description: Option<String>,
+}
+
+#[tracing::instrument(err, skip(state, auth_session, payload))]
+pub async fn update_subject(
+    auth_session: AuthSession,
+    State(state): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+    Json(payload): Json<UpdateSubjectPayload>,
+) -> Result<impl IntoResponse, AppError> {
+    let user = auth_session
+        .user
+        .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+    if !user.is_school_admin() && !user.has_capability("academics:manage_curriculum") {
+        return Err(AppError::Forbidden(
+            "Only School Admins or authorized faculty can edit subjects".into(),
+        ));
+    }
+
+    let code = payload.code.trim().to_uppercase();
+    let name = payload.name.trim();
+    let sys_type = payload.system_subject_type.as_deref().unwrap_or("Core");
+
+    let updated = AcademicRepository::update_subject(
+        &state.db,
+        user.school_id,
+        id,
+        name,
+        &code,
+        payload.subject_type.as_deref(),
+        sys_type,
+        payload.color.as_deref(),
+        payload.department.as_deref(),
+        payload.description.as_deref(),
+    )
+    .await?;
+
+    if !updated {
+        return Err(AppError::NotFound("Subject not found".into()));
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({ "message": "Subject updated successfully" })),
+    ))
+}
+
 #[tracing::instrument(err, skip(state, auth_session))]
 pub async fn delete_subject(
     auth_session: AuthSession,

@@ -4,12 +4,12 @@ use crate::{
         create_bulk_subject_types, create_bulk_subjects, delete_subject, delete_subject_type,
         get_academics_dashboard_config, get_class_capacity, get_class_section_history,
         get_class_section_students, get_school_stats, get_subject_types, get_subjects,
-        lookup_admission_numbers, update_class_section,
+        lookup_admission_numbers, update_class_section, update_subject,
     },
     state::AppState,
 };
 use axum::{
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Router,
 };
 
@@ -18,7 +18,7 @@ pub fn router() -> Router<AppState> {
         .route("/years", post(create_academic_year))
         .route("/classes", post(create_bulk_classes))
         .route("/subjects", post(create_bulk_subjects).get(get_subjects))
-        .route("/subjects/:id", delete(delete_subject))
+        .route("/subjects/:id", put(update_subject).delete(delete_subject))
         .route(
             "/subject-types",
             post(create_bulk_subject_types).get(get_subject_types),

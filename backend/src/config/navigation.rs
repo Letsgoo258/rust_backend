@@ -209,16 +209,6 @@ impl NavigationConfig {
                         badge: None,
                     }],
                 },
-                NavigationSection {
-                    section: "ACTIONS".into(),
-                    items: vec![NavigationItem {
-                        name: "Bulk Assign Class".into(),
-                        path: "/dashboard/academics/bulk-assignment".into(),
-                        icon: "user_plus".into(),
-                        capability: Some("academics:assign_students".into()),
-                        badge: None,
-                    }],
-                },
             ],
             users_sidebar: vec![
                 NavigationSection {

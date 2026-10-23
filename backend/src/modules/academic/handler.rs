@@ -3,7 +3,7 @@ use crate::{
     modules::auth::backend::AuthSession, state::AppState,
 };
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
@@ -647,6 +647,7 @@ pub async fn update_class_section(
     }
 
     tx.commit().await?;
+    crate::modules::auth::backend::clear_user_cache();
 
     Ok((
         StatusCode::OK,
@@ -810,5 +811,55 @@ pub async fn get_class_section_students(
     Ok((
         StatusCode::OK,
         Json(serde_json::json!({ "students": students })),
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MyClassQuery {
+    pub class_section_id: Option<uuid::Uuid>,
+}
+
+#[tracing::instrument(err, skip(state, auth_session))]
+pub async fn get_my_class(
+    auth_session: AuthSession,
+    State(state): State<AppState>,
+    Query(query): Query<MyClassQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    let user = auth_session
+        .user
+        .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+    let is_admin = user.is_school_admin()
+        || user
+            .roles
+            .iter()
+            .any(|r| r.eq_ignore_ascii_case("SUPER_ADMIN"));
+
+    let data = AcademicRepository::get_my_class_data(
+        &state.db,
+        user.school_id,
+        user.id,
+        is_admin,
+        query.class_section_id,
+    )
+    .await?;
+
+    Ok((StatusCode::OK, Json(data)))
+}
+
+#[tracing::instrument(err, skip(state, auth_session))]
+pub async fn get_academic_teachers(
+    auth_session: AuthSession,
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, AppError> {
+    let user = auth_session
+        .user
+        .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+    let teachers = AcademicRepository::get_academic_teachers(&state.db, user.school_id).await?;
+
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({ "teachers": teachers })),
     ))
 }

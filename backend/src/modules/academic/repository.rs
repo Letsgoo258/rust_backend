@@ -14,6 +14,8 @@ pub struct ClassCapacityRow {
     pub section_code: String,
     pub capacity: Option<i32>,
     pub enrolled_count: i64,
+    pub class_teacher_staff_id: Option<Uuid>,
+    pub class_teacher_name: Option<String>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -617,14 +619,19 @@ impl AcademicRepository {
                 s.name as section_name,
                 s.code as section_code,
                 cs.capacity,
+                cs.class_teacher_staff_id,
+                COALESCE(NULLIF(u_staff.display_name, ''), u_staff.username, NULLIF(u_direct.display_name, ''), u_direct.username) as class_teacher_name,
                 COUNT(DISTINCT e.student_id)::BIGINT as enrolled_count
             FROM class_sections cs
             JOIN classes c ON cs.class_id = c.id
             JOIN sections s ON cs.section_id = s.id
             JOIN academic_years ay ON cs.academic_year_id = ay.id
+            LEFT JOIN staff st ON cs.class_teacher_staff_id = st.id
+            LEFT JOIN users u_staff ON st.user_id = u_staff.id
+            LEFT JOIN users u_direct ON cs.class_teacher_staff_id = u_direct.id
             LEFT JOIN enrollments e ON e.class_section_id = cs.id AND e.status = 'ACTIVE'
             WHERE c.school_id = $1 AND ay.status = 'ACTIVE'
-            GROUP BY cs.id, c.id, c.name, c.code, s.id, s.name, s.code, cs.capacity
+            GROUP BY cs.id, c.id, c.name, c.code, s.id, s.name, s.code, cs.capacity, cs.class_teacher_staff_id, u_staff.display_name, u_staff.username, u_direct.display_name, u_direct.username
             ORDER BY c.sequence, c.name, s.name
             "#,
         )
@@ -644,6 +651,8 @@ impl AcademicRepository {
                 section_code: r.get("section_code"),
                 capacity: r.get("capacity"),
                 enrolled_count: r.get("enrolled_count"),
+                class_teacher_staff_id: r.get("class_teacher_staff_id"),
+                class_teacher_name: r.get("class_teacher_name"),
             })
             .collect();
 
@@ -1080,4 +1089,154 @@ impl AcademicRepository {
 
         Ok(rows)
     }
+
+    pub async fn get_academic_teachers(
+        pool: &PgPool,
+        school_id: Uuid,
+    ) -> Result<Vec<AcademicTeacherRow>, AppError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                COALESCE(s.id, u.id) as staff_id,
+                u.id as user_id,
+                COALESCE(s.employee_id, 'FACULTY') as employee_id,
+                COALESCE(NULLIF(u.display_name, ''), u.username) as name
+            FROM users u
+            LEFT JOIN staff s ON s.user_id = u.id AND s.school_id = $1
+            JOIN user_roles ur ON ur.user_id = u.id
+            JOIN roles r ON ur.role_id = r.id
+            WHERE u.school_id = $1 AND u.status = 'ACTIVE'
+              AND r.code IN ('TEACHER', 'CLASS_TEACHER', 'HEADMASTER', 'PRINCIPAL', 'SCHOOL_ADMIN')
+            GROUP BY s.id, u.id, s.employee_id, u.display_name, u.username
+            ORDER BY name
+            "#,
+        )
+        .bind(school_id)
+        .fetch_all(pool)
+        .await?;
+
+        let list = rows
+            .into_iter()
+            .map(|r| AcademicTeacherRow {
+                staff_id: r.get("staff_id"),
+                user_id: r.get("user_id"),
+                employee_id: r.get("employee_id"),
+                name: r.get("name"),
+            })
+            .collect();
+
+        Ok(list)
+    }
+
+    pub async fn get_my_class_data(
+        pool: &PgPool,
+        school_id: Uuid,
+        user_id: Uuid,
+        is_admin: bool,
+        requested_section_id: Option<Uuid>,
+    ) -> Result<MyClassResponse, AppError> {
+        let all_classes = Self::get_class_capacities(pool, school_id).await?;
+
+        let user_section_ids: Vec<Uuid> = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            SELECT cs.id
+            FROM class_sections cs
+            JOIN classes c ON cs.class_id = c.id
+            WHERE c.school_id = $1
+              AND (cs.status IS NULL OR cs.status = 'ACTIVE')
+              AND (
+                  cs.class_teacher_staff_id = $2
+                  OR cs.class_teacher_staff_id IN (
+                      SELECT id FROM staff WHERE user_id = $2 AND school_id = $1
+                  )
+              )
+            "#,
+        )
+        .bind(school_id)
+        .bind(user_id)
+        .fetch_all(pool)
+        .await?;
+
+        let assigned_classes: Vec<MyClassSectionInfo> = all_classes
+            .into_iter()
+            .filter(|c| {
+                if is_admin {
+                    c.class_teacher_staff_id.is_some()
+                        || Some(c.class_section_id) == requested_section_id
+                } else {
+                    user_section_ids.contains(&c.class_section_id)
+                }
+            })
+            .map(|c| MyClassSectionInfo {
+                class_section_id: c.class_section_id,
+                class_id: c.class_id,
+                class_name: c.class_name,
+                class_code: c.class_code,
+                section_id: c.section_id,
+                section_name: c.section_name,
+                section_code: c.section_code,
+                capacity: c.capacity,
+                enrolled_count: c.enrolled_count,
+                class_teacher_name: c.class_teacher_name,
+            })
+            .collect();
+
+        let active_section_id: Option<Uuid> = if let Some(req_id) = requested_section_id {
+            Some(req_id)
+        } else if !is_admin {
+            user_section_ids.first().copied()
+        } else {
+            assigned_classes.first().map(|c| c.class_section_id)
+        };
+
+        let current_class = if let Some(sec_id) = active_section_id {
+            assigned_classes
+                .iter()
+                .find(|c| c.class_section_id == sec_id)
+                .cloned()
+        } else {
+            None
+        };
+
+        let students = if let Some(ref sec) = current_class {
+            Self::get_class_section_students(pool, sec.class_section_id, school_id).await?
+        } else {
+            vec![]
+        };
+
+        Ok(MyClassResponse {
+            current_class,
+            available_classes: assigned_classes,
+            students,
+        })
+    }
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct AcademicTeacherRow {
+    pub staff_id: Uuid,
+    pub user_id: Uuid,
+    pub employee_id: String,
+    pub name: String,
+}
+
+#[derive(Debug, serde::Serialize, Clone)]
+pub struct MyClassSectionInfo {
+    pub class_section_id: Uuid,
+    pub class_id: Uuid,
+    pub class_name: String,
+    pub class_code: String,
+    pub section_id: Uuid,
+    pub section_name: String,
+    pub section_code: String,
+    pub capacity: Option<i32>,
+    pub enrolled_count: i64,
+    pub class_teacher_name: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct MyClassResponse {
+    pub current_class: Option<MyClassSectionInfo>,
+    pub available_classes: Vec<MyClassSectionInfo>,
+    pub students: Vec<SectionStudentRow>,
 }

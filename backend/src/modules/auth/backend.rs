@@ -35,6 +35,10 @@ pub struct User {
     pub school_status: String,
     pub school_operable: bool,
     pub school_onboarding_step: i32,
+    #[serde(default)]
+    pub is_class_teacher: bool,
+    #[serde(default)]
+    pub has_assigned_class_teacher: bool,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -53,6 +57,8 @@ pub struct UserMeResponse {
     pub school_status: String,
     pub school_operable: bool,
     pub school_onboarding_step: i32,
+    pub is_class_teacher: bool,
+    pub has_assigned_class_teacher: bool,
     pub url_signature: Option<crate::utils::url_signer::DashboardSignature>,
 }
 
@@ -113,6 +119,8 @@ impl User {
             school_status: self.school_status.clone(),
             school_operable: self.school_operable,
             school_onboarding_step: self.school_onboarding_step,
+            is_class_teacher: self.is_class_teacher,
+            has_assigned_class_teacher: self.has_assigned_class_teacher,
             url_signature: Some(crate::utils::url_signer::UrlSigner::sign_dashboard_session(
                 self.id,
                 self.school_id,
@@ -139,6 +147,44 @@ pub struct Backend {
 impl Backend {
     pub fn new(db: PgPool) -> Self {
         Self { db }
+    }
+
+    pub async fn check_class_teacher_status(
+        pool: &PgPool,
+        school_id: Uuid,
+        user_id: Uuid,
+    ) -> (bool, bool) {
+        sqlx::query_as::<_, (bool, bool)>(
+            r#"
+            SELECT
+                EXISTS (
+                    SELECT 1
+                    FROM class_sections cs
+                    JOIN classes c ON cs.class_id = c.id
+                    WHERE c.school_id = $1
+                      AND (cs.status IS NULL OR cs.status = 'ACTIVE')
+                      AND (
+                          cs.class_teacher_staff_id = $2
+                          OR cs.class_teacher_staff_id IN (
+                              SELECT id FROM staff WHERE user_id = $2 AND school_id = $1
+                          )
+                      )
+                ) as is_class_teacher,
+                EXISTS (
+                    SELECT 1
+                    FROM class_sections cs
+                    JOIN classes c ON cs.class_id = c.id
+                    WHERE c.school_id = $1
+                      AND (cs.status IS NULL OR cs.status = 'ACTIVE')
+                      AND cs.class_teacher_staff_id IS NOT NULL
+                ) as has_assigned_class_teacher
+            "#,
+        )
+        .bind(school_id)
+        .bind(user_id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or((false, false))
     }
 
     pub async fn get_user_by_id(pool: &PgPool, user_id: Uuid) -> Option<User> {
@@ -187,6 +233,9 @@ impl Backend {
             )
             .await;
 
+            let (is_class_teacher, has_assigned_class_teacher) =
+                Self::check_class_teacher_status(pool, row.school_id, row.id).await;
+
             let user = User {
                 id: row.id,
                 school_id: row.school_id,
@@ -200,6 +249,8 @@ impl Backend {
                 school_status: row.school_status,
                 school_operable: row.school_operable,
                 school_onboarding_step: row.school_onboarding_step,
+                is_class_teacher,
+                has_assigned_class_teacher,
             };
 
             USER_CACHE.insert(user_id, (user.clone(), Instant::now()));
@@ -286,6 +337,9 @@ impl AuthnBackend for Backend {
                     )
                     .await;
 
+                let (is_class_teacher, has_assigned_class_teacher) =
+                    Self::check_class_teacher_status(&self.db, row.school_id, row.id).await;
+
                 let user = User {
                     id: row.id,
                     school_id: row.school_id,
@@ -299,6 +353,8 @@ impl AuthnBackend for Backend {
                     school_status: row.school_status,
                     school_operable: row.school_operable,
                     school_onboarding_step: row.school_onboarding_step,
+                    is_class_teacher,
+                    has_assigned_class_teacher,
                 };
 
                 USER_CACHE.insert(user.id, (user.clone(), Instant::now()));

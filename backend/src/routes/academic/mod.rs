@@ -2,9 +2,10 @@ use crate::{
     modules::academic::handler::{
         assign_students_bulk, bulk_assign_class, create_academic_year, create_bulk_classes,
         create_bulk_subject_types, create_bulk_subjects, delete_subject, delete_subject_type,
-        get_academics_dashboard_config, get_class_capacity, get_class_section_history,
-        get_class_section_students, get_school_stats, get_subject_types, get_subjects,
-        lookup_admission_numbers, update_class_section, update_subject,
+        get_academic_teachers, get_academics_dashboard_config, get_class_capacity,
+        get_class_section_history, get_class_section_students, get_my_class, get_school_stats,
+        get_subject_types, get_subjects, lookup_admission_numbers, update_class_section,
+        update_subject,
     },
     state::AppState,
 };
@@ -31,6 +32,8 @@ pub fn router() -> Router<AppState> {
             "/class-section/:id/students",
             get(get_class_section_students),
         )
+        .route("/my-class", get(get_my_class))
+        .route("/teachers", get(get_academic_teachers))
         .route("/stats", get(get_school_stats))
         .route("/assign-students-bulk", post(assign_students_bulk))
         .route("/lookup-admission-numbers", post(lookup_admission_numbers))

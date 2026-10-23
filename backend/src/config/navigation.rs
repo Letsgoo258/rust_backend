@@ -479,7 +479,16 @@ impl NavigationConfig {
             let filtered_items: Vec<NavigationItem> = sec
                 .items
                 .iter()
-                .filter(|item| can_access(&item.capability))
+                .filter(|item| {
+                    if item.path == "/dashboard/academics/class-teacher" {
+                        let can_see_my_class = user.is_class_teacher
+                            || (is_school_admin && user.has_assigned_class_teacher);
+                        if !can_see_my_class {
+                            return false;
+                        }
+                    }
+                    can_access(&item.capability)
+                })
                 .cloned()
                 .collect();
 
@@ -526,5 +535,104 @@ impl NavigationConfig {
                 Vec::new()
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::modules::auth::backend::User;
+    use uuid::Uuid;
+
+    fn create_test_user(
+        roles: Vec<&str>,
+        is_class_teacher: bool,
+        has_assigned_class_teacher: bool,
+    ) -> User {
+        User {
+            id: Uuid::new_v4(),
+            school_id: Uuid::new_v4(),
+            username: "testuser".into(),
+            password_hash: "hash".into(),
+            display_name: Some("Test User".into()),
+            roles: roles.into_iter().map(|s| s.into()).collect(),
+            capabilities: vec!["academics:view".into()],
+            email_verified: true,
+            phone_verified: true,
+            school_status: "ACTIVE".into(),
+            school_operable: true,
+            school_onboarding_step: 4,
+            is_class_teacher,
+            has_assigned_class_teacher,
+        }
+    }
+
+    #[test]
+    fn test_my_class_hidden_when_no_class_teacher_assigned() {
+        // When no class teacher is assigned anywhere in the school:
+        // Neither a teacher nor an admin should see "My Class" in the sidebar
+        let teacher = create_test_user(vec!["TEACHER"], false, false);
+        let admin = create_test_user(vec!["SCHOOL_ADMIN"], false, false);
+
+        let nav_teacher = NavigationConfig::build_user_navigation(&teacher);
+        let nav_admin = NavigationConfig::build_user_navigation(&admin);
+
+        let teacher_has_my_class = nav_teacher
+            .academics_sidebar
+            .iter()
+            .any(|sec| sec.items.iter().any(|item| item.name == "My Class"));
+        let admin_has_my_class = nav_admin
+            .academics_sidebar
+            .iter()
+            .any(|sec| sec.items.iter().any(|item| item.name == "My Class"));
+
+        assert!(
+            !teacher_has_my_class,
+            "Teacher without class assignment must not see My Class"
+        );
+        assert!(
+            !admin_has_my_class,
+            "Admin when no class teacher assigned in school must not see My Class"
+        );
+    }
+
+    #[test]
+    fn test_my_class_visibility_when_teacher_assigned() {
+        // When class teacher is assigned:
+        // 1. Assigned class teacher sees "My Class"
+        let assigned_teacher = create_test_user(vec!["TEACHER"], true, true);
+        let nav_assigned = NavigationConfig::build_user_navigation(&assigned_teacher);
+        let assigned_has_my_class = nav_assigned
+            .academics_sidebar
+            .iter()
+            .any(|sec| sec.items.iter().any(|item| item.name == "My Class"));
+        assert!(
+            assigned_has_my_class,
+            "Assigned class teacher MUST see My Class"
+        );
+
+        // 2. Unassigned teacher does NOT see "My Class"
+        let unassigned_teacher = create_test_user(vec!["TEACHER"], false, true);
+        let nav_unassigned = NavigationConfig::build_user_navigation(&unassigned_teacher);
+        let unassigned_has_my_class = nav_unassigned
+            .academics_sidebar
+            .iter()
+            .any(|sec| sec.items.iter().any(|item| item.name == "My Class"));
+        assert!(
+            !unassigned_has_my_class,
+            "Unassigned teacher must NOT see My Class"
+        );
+
+        // 3. School admin sees "My Class" when a class teacher is assigned in school
+        let admin = create_test_user(vec!["SCHOOL_ADMIN"], false, true);
+        let nav_admin = NavigationConfig::build_user_navigation(&admin);
+        let admin_has_my_class = nav_admin
+            .academics_sidebar
+            .iter()
+            .any(|sec| sec.items.iter().any(|item| item.name == "My Class"));
+        assert!(
+            admin_has_my_class,
+            "School admin sees My Class when class teachers exist in school"
+        );
     }
 }

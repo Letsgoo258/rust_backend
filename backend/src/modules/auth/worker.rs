@@ -11,20 +11,21 @@ pub async fn run_login_security_worker(pool: PgPool) {
         tracing::info!("Executing 1-Hour Security Maintenance: Anomaly Detection & 30-Day Pruning");
 
         // 1. ANOMALY DETECTION ENGINE: Flag logins for the same user from different IPs within 1 hour
-        let flag_res = sqlx::query!(
+        let flag_res = sqlx::query(
             r#"
             UPDATE login_history lh
             SET is_suspicious = true,
                 suspicious_reason = 'Flagged by 1-Hour Security Engine: Multiple logins from different IPs within 1 hour'
-            WHERE id IN (
-                SELECT l1.id
-                FROM login_history l1
-                JOIN login_history l2 ON l1.user_id = l2.user_id
-                    AND l1.id <> l2.id
-                    AND l1.ip_address <> l2.ip_address
-                    AND ABS(EXTRACT(EPOCH FROM (l1.created_at - l2.created_at))) <= 3600
-                WHERE l1.created_at >= NOW() - INTERVAL '24 hours'
-            )
+            WHERE lh.created_at >= NOW() - INTERVAL '24 hours'
+              AND lh.is_suspicious = false
+              AND EXISTS (
+                  SELECT 1 FROM login_history l2
+                  WHERE l2.user_id = lh.user_id
+                    AND l2.id <> lh.id
+                    AND l2.ip_address <> lh.ip_address
+                    AND l2.created_at >= NOW() - INTERVAL '25 hours'
+                    AND ABS(EXTRACT(EPOCH FROM (lh.created_at - l2.created_at))) <= 3600
+              )
             "#
         )
         .execute(&pool)

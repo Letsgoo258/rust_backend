@@ -320,28 +320,27 @@ impl AcademicRepository {
         ay_id: Uuid,
         admission_numbers: &[String],
     ) -> Result<Vec<LookupStudentRow>, AppError> {
-        let rows = sqlx::query_as!(
-            LookupStudentRow,
+        let rows = sqlx::query_as::<_, LookupStudentRow>(
             r#"
             SELECT
                 u.id,
-                COALESCE(u.display_name, u.first_name || ' ' || u.last_name) as "display_name?",
-                u.username as "username!",
-                u.admission_number as "admission_number!",
-                COALESCE(e.class_section_id, u.class_section_id) as "current_class_section_id?",
-                c.name as "current_class_name?",
-                sec.name as "current_section_name?"
+                COALESCE(u.display_name, u.first_name || ' ' || u.last_name) as display_name,
+                u.username,
+                u.admission_number,
+                COALESCE(e.class_section_id, u.class_section_id) as current_class_section_id,
+                c.name as current_class_name,
+                sec.name as current_section_name
             FROM users u
             LEFT JOIN enrollments e ON e.student_id = u.id AND e.academic_year_id = $2
-            LEFT JOIN class_sections cs ON cs.id = COALESCE(e.class_section_id, u.class_section_id)
+            LEFT JOIN class_sections cs ON (cs.id = e.class_section_id OR (e.class_section_id IS NULL AND cs.id = u.class_section_id))
             LEFT JOIN classes c ON c.id = cs.class_id
             LEFT JOIN sections sec ON sec.id = cs.section_id
             WHERE u.school_id = $1 AND UPPER(u.admission_number) = ANY(SELECT UPPER(x) FROM unnest($3::text[]) x)
             "#,
-            school_id,
-            ay_id,
-            admission_numbers
         )
+        .bind(school_id)
+        .bind(ay_id)
+        .bind(admission_numbers)
         .fetch_all(pool)
         .await?;
 

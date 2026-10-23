@@ -242,6 +242,8 @@ pub async fn update_user_profile(
     .execute(&state.db)
     .await?;
 
+    crate::modules::auth::backend::invalidate_user_cache(&target_user_id);
+
     if final_status == "TC_ISSUED" {
         let _ = sqlx::query(
             r#"UPDATE enrollments

@@ -111,6 +111,8 @@ pub async fn assign_user_role(
     .execute(&mut *conn)
     .await?;
 
+    crate::modules::auth::backend::invalidate_user_cache(&user_id);
+
     Ok(role_id)
 }
 

@@ -23,7 +23,18 @@ pub struct TenantContext {
 
 pub async fn build_auth_layer(pool: PgPool) -> SessionLayer {
     let session_store = PostgresStore::new(pool.clone());
-    session_store.migrate().await.unwrap();
+
+    // Avoid redundant advisory locks on every server boot if tower_sessions already exists
+    let table_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'tower_sessions')"
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap_or(false);
+
+    if !table_exists {
+        let _ = session_store.migrate().await;
+    }
 
     let session_layer = SessionManagerLayer::new(session_store)
         .with_secure(false) // Set to true in production with HTTPS

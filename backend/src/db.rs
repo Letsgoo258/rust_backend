@@ -31,7 +31,9 @@ pub async fn init_pool(config: &AppConfig) -> Result<PgPool, sqlx::Error> {
         .await?;
 
     tracing::info!("Running database migrations...");
-    if let Err(e) = sqlx::migrate!("./migrations").run(&pool).await {
+    let mut migrator = sqlx::migrate!("./migrations");
+    migrator.set_locking(false);
+    if let Err(e) = migrator.run(&pool).await {
         tracing::warn!(
             "Migration check warning: {:?}. Proceeding with connected database pool.",
             e

@@ -497,6 +497,8 @@ impl CapabilityController {
         let grant_id: Uuid = row.try_get("id").unwrap_or_default();
         let created_at: DateTime<Utc> = row.try_get("created_at").unwrap_or_else(|_| Utc::now());
 
+        crate::modules::auth::backend::invalidate_user_cache(&user_id);
+
         // Fetch user & admin metadata for response
         let user_meta = sqlx::query(
             r#"

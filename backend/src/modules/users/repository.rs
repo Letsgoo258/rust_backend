@@ -1,5 +1,5 @@
 use crate::error::AppError;
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, QueryBuilder, Row};
 use uuid::Uuid;
 
 #[derive(Debug, serde::Serialize)]
@@ -96,59 +96,120 @@ impl UserRepository {
         Ok(id)
     }
 
+    fn append_user_filter_clauses(
+        qb: &mut QueryBuilder<sqlx::Postgres>,
+        filter_role: &str,
+        status: &str,
+        admitted_from: &str,
+        admitted_to: &str,
+        admission_number: &str,
+        class_name: &str,
+        search: &str,
+    ) {
+        if !filter_role.is_empty() {
+            let upper = filter_role.to_uppercase();
+            if upper == "STUDENT" {
+                qb.push(" AND (EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON ur.role_id = r.id WHERE ur.user_id = u.id AND r.code = 'STUDENT') OR u.admission_number IS NOT NULL)");
+            } else if upper == "TEACHER" {
+                qb.push(" AND EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON ur.role_id = r.id WHERE ur.user_id = u.id AND r.code IN ('TEACHER', 'STAFF'))");
+            } else if upper == "SCHOOL_ADMIN" {
+                qb.push(" AND EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON ur.role_id = r.id WHERE ur.user_id = u.id AND r.code IN ('SCHOOL_ADMIN', 'SUPER_ADMIN'))");
+            } else {
+                qb.push(" AND EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON ur.role_id = r.id WHERE ur.user_id = u.id AND (r.code = ");
+                qb.push_bind(filter_role.to_string());
+                qb.push(" OR r.code = ");
+                qb.push_bind(upper);
+                qb.push("))");
+            }
+        }
+
+        if !status.is_empty() {
+            qb.push(" AND u.status::TEXT ILIKE ");
+            qb.push_bind(status.to_string());
+        }
+
+        if !admitted_from.is_empty() {
+            qb.push(" AND u.created_at >= ");
+            qb.push_bind(admitted_from.to_string());
+            qb.push("::timestamptz");
+        }
+
+        if !admitted_to.is_empty() {
+            qb.push(" AND u.created_at <= (");
+            qb.push_bind(admitted_to.to_string());
+            qb.push("::timestamptz + interval '1 day')");
+        }
+
+        if !admission_number.is_empty() {
+            qb.push(" AND u.admission_number IS NOT NULL AND u.admission_number ILIKE ");
+            qb.push_bind(format!("%{}%", admission_number));
+        }
+
+        if !class_name.is_empty() {
+            qb.push(" AND EXISTS (SELECT 1 FROM enrollments e2 JOIN class_sections cs2 ON (cs2.id = e2.class_section_id OR (e2.class_section_id IS NULL AND cs2.id = u.class_section_id)) JOIN classes c2 ON cs2.class_id = c2.id WHERE (e2.student_id = u.id AND e2.status = 'ACTIVE' OR u.class_section_id IS NOT NULL) AND c2.name ILIKE ");
+            qb.push_bind(format!("%{}%", class_name));
+            qb.push(")");
+        }
+
+        if !search.is_empty() {
+            let pat = format!("%{}%", search);
+            qb.push(" AND (u.username ILIKE ");
+            qb.push_bind(pat.clone());
+            qb.push(" OR u.display_name ILIKE ");
+            qb.push_bind(pat.clone());
+            qb.push(" OR u.first_name ILIKE ");
+            qb.push_bind(pat.clone());
+            qb.push(" OR u.last_name ILIKE ");
+            qb.push_bind(pat.clone());
+            qb.push(" OR u.email ILIKE ");
+            qb.push_bind(pat.clone());
+            qb.push(" OR u.phone ILIKE ");
+            qb.push_bind(pat.clone());
+            qb.push(" OR (u.admission_number IS NOT NULL AND u.admission_number ILIKE ");
+            qb.push_bind(pat.clone());
+            qb.push(") OR EXISTS (SELECT 1 FROM enrollments e3 JOIN class_sections cs3 ON (cs3.id = e3.class_section_id OR (e3.class_section_id IS NULL AND cs3.id = u.class_section_id)) JOIN classes c3 ON cs3.class_id = c3.id WHERE (e3.student_id = u.id AND e3.status = 'ACTIVE' OR u.class_section_id IS NOT NULL) AND c3.name ILIKE ");
+            qb.push_bind(pat);
+            qb.push("))");
+        }
+    }
+
     pub async fn list_users(
         pool: &PgPool,
         school_id: Uuid,
         filters: &std::collections::HashMap<String, String>,
     ) -> Result<(Vec<UserListItem>, i64), AppError> {
-        let filter_role = filters.get("role").map(|s| s.as_str()).unwrap_or("");
-        let status = filters.get("status").map(|s| s.as_str()).unwrap_or("");
-        let admitted_from = filters
-            .get("admitted_from")
-            .map(|s| s.as_str())
-            .unwrap_or("");
-        let admitted_to = filters.get("admitted_to").map(|s| s.as_str()).unwrap_or("");
+        let filter_role = filters.get("role").map(|s| s.trim()).unwrap_or("");
+        let status = filters.get("status").map(|s| s.trim()).unwrap_or("");
+        let admitted_from = filters.get("admitted_from").map(|s| s.trim()).unwrap_or("");
+        let admitted_to = filters.get("admitted_to").map(|s| s.trim()).unwrap_or("");
         let admission_number = filters
             .get("admission_number")
-            .map(|s| s.as_str())
+            .map(|s| s.trim())
             .unwrap_or("");
-        let class_name = filters.get("class_name").map(|s| s.as_str()).unwrap_or("");
-        let search = filters.get("search").map(|s| s.as_str()).unwrap_or("");
+        let class_name = filters.get("class_name").map(|s| s.trim()).unwrap_or("");
+        let search = filters.get("search").map(|s| s.trim()).unwrap_or("");
 
-        let rows = sqlx::query(
-            r#"
-            WITH filtered_users AS (
-                SELECT u.id, u.created_at, COUNT(*) OVER() as full_count
+        let mut qb = QueryBuilder::<sqlx::Postgres>::new(
+            "WITH filtered_users AS (
+                SELECT u.id, u.created_at
                 FROM users u
-                LEFT JOIN user_roles ur ON ur.user_id = u.id
-                LEFT JOIN roles r ON ur.role_id = r.id
-                LEFT JOIN enrollments e ON e.student_id = u.id AND e.status = 'ACTIVE'
-                LEFT JOIN class_sections cs ON cs.id = COALESCE(e.class_section_id, u.class_section_id)
-                LEFT JOIN classes c ON cs.class_id = c.id
-                WHERE u.school_id = $1
-                  AND ($2 = ''
-                       OR r.code = $2
-                       OR r.code = UPPER($2)
-                       OR ($2 = 'STUDENT' AND (r.code = 'STUDENT' OR u.admission_number IS NOT NULL))
-                       OR ($2 = 'TEACHER' AND r.code IN ('TEACHER', 'STAFF'))
-                       OR ($2 = 'SCHOOL_ADMIN' AND r.code IN ('SCHOOL_ADMIN', 'SUPER_ADMIN')))
-                  AND ($3 = '' OR u.status::TEXT ILIKE $3)
-                  AND ($4 = '' OR u.created_at >= NULLIF($4, '')::timestamptz)
-                  AND ($5 = '' OR u.created_at <= (NULLIF($5, '')::timestamptz + interval '1 day'))
-                  AND ($6 = '' OR (u.admission_number IS NOT NULL AND u.admission_number ILIKE CONCAT('%', $6, '%')))
-                  AND ($7 = '' OR (c.name IS NOT NULL AND c.name ILIKE CONCAT('%', $7, '%')))
-                  AND ($8 = ''
-                       OR u.username ILIKE CONCAT('%', $8, '%')
-                       OR u.display_name ILIKE CONCAT('%', $8, '%')
-                       OR u.first_name ILIKE CONCAT('%', $8, '%')
-                       OR u.last_name ILIKE CONCAT('%', $8, '%')
-                       OR u.email ILIKE CONCAT('%', $8, '%')
-                       OR u.phone ILIKE CONCAT('%', $8, '%')
-                       OR (u.admission_number IS NOT NULL AND u.admission_number ILIKE CONCAT('%', $8, '%'))
-                       OR (c.name IS NOT NULL AND c.name ILIKE CONCAT('%', $8, '%')))
-                GROUP BY u.id, u.created_at
-                ORDER BY u.created_at DESC
-                LIMIT 300
+                WHERE u.school_id = ",
+        );
+        qb.push_bind(school_id);
+        Self::append_user_filter_clauses(
+            &mut qb,
+            filter_role,
+            status,
+            admitted_from,
+            admitted_to,
+            admission_number,
+            class_name,
+            search,
+        );
+
+        qb.push(
+            " ORDER BY u.created_at DESC
+            LIMIT 300
             )
             SELECT
                 u.id,
@@ -175,14 +236,13 @@ impl UserRepository {
                 TRIM(CONCAT(g.first_name, ' ', g.last_name)) as guardian_name,
                 g.phone as guardian_phone,
                 sg.relationship as guardian_relationship,
-                u.created_at::TEXT as created_at,
-                fu.full_count
+                u.created_at::TEXT as created_at
             FROM filtered_users fu
             JOIN users u ON u.id = fu.id
             LEFT JOIN student_guardians sg ON sg.student_id = u.id
             LEFT JOIN guardians g ON sg.guardian_id = g.id
             LEFT JOIN enrollments e ON e.student_id = u.id AND e.status = 'ACTIVE'
-            LEFT JOIN class_sections cs ON cs.id = COALESCE(e.class_section_id, u.class_section_id)
+            LEFT JOIN class_sections cs ON (cs.id = e.class_section_id OR (e.class_section_id IS NULL AND cs.id = u.class_section_id))
             LEFT JOIN classes c ON cs.class_id = c.id
             LEFT JOIN sections sec ON cs.section_id = sec.id
             LEFT JOIN staff st ON st.user_id = u.id
@@ -192,24 +252,31 @@ impl UserRepository {
                 JOIN roles ON roles.id = ur2.role_id
                 WHERE ur2.user_id = u.id
             ) r ON TRUE
-            ORDER BY u.created_at DESC
-            "#
-        )
-        .bind(school_id)
-        .bind(filter_role)
-        .bind(status)
-        .bind(admitted_from)
-        .bind(admitted_to)
-        .bind(admission_number)
-        .bind(class_name)
-        .bind(search)
-        .fetch_all(pool)
-        .await?;
+            ORDER BY u.created_at DESC"
+        );
 
-        let total_count = rows
-            .first()
-            .map(|r| r.get::<i64, _>("full_count"))
-            .unwrap_or(0);
+        let rows = qb.build().fetch_all(pool).await?;
+
+        let total_count = if rows.len() < 300 {
+            rows.len() as i64
+        } else {
+            let mut count_qb = QueryBuilder::<sqlx::Postgres>::new(
+                "SELECT COUNT(*) FROM users u WHERE u.school_id = ",
+            );
+            count_qb.push_bind(school_id);
+            Self::append_user_filter_clauses(
+                &mut count_qb,
+                filter_role,
+                status,
+                admitted_from,
+                admitted_to,
+                admission_number,
+                class_name,
+                search,
+            );
+            let count_row = count_qb.build().fetch_one(pool).await?;
+            count_row.get::<i64, _>(0)
+        };
 
         let list = rows
             .into_iter()

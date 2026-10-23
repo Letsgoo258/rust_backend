@@ -1,7 +1,22 @@
 use async_trait::async_trait;
 use axum_login::{AuthUser, AuthnBackend, UserId};
+use dashmap::DashMap;
 use sqlx::PgPool;
+use std::sync::LazyLock;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
+
+static USER_CACHE: LazyLock<DashMap<Uuid, (User, Instant)>> = LazyLock::new(DashMap::new);
+const USER_CACHE_TTL: Duration = Duration::from_secs(60);
+
+pub fn invalidate_user_cache(user_id: &Uuid) {
+    USER_CACHE.remove(user_id);
+}
+
+#[allow(dead_code)]
+pub fn clear_user_cache() {
+    USER_CACHE.clear();
+}
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct User {
@@ -127,8 +142,16 @@ impl Backend {
     }
 
     pub async fn get_user_by_id(pool: &PgPool, user_id: Uuid) -> Option<User> {
-        let row = sqlx::query_as!(
-            DbUserRow,
+        // Fast in-memory cache lookup
+        if let Some(entry) = USER_CACHE.get(&user_id) {
+            let (ref user, ref cached_at) = *entry;
+            if cached_at.elapsed() < USER_CACHE_TTL {
+                return Some(user.clone());
+            }
+        }
+        USER_CACHE.remove(&user_id);
+
+        let row = sqlx::query_as::<_, DbUserRow>(
             r#"
             SELECT
                 u.id,
@@ -136,21 +159,21 @@ impl Backend {
                 u.username,
                 u.password_hash,
                 u.display_name,
-                COALESCE(array_agg(DISTINCT r.code::TEXT) FILTER (WHERE r.code IS NOT NULL), ARRAY[]::TEXT[]) as "roles!",
+                COALESCE(array_agg(DISTINCT r.code::TEXT) FILTER (WHERE r.code IS NOT NULL), ARRAY[]::TEXT[]) as roles,
                 u.email_verified,
                 u.phone_verified,
-                s.status::TEXT as "school_status!",
-                COALESCE(s.operable, false) as "school_operable!",
-                COALESCE(s.onboarding_step, 1) as "school_onboarding_step!"
+                s.status::TEXT as school_status,
+                COALESCE(s.operable, false) as school_operable,
+                COALESCE(s.onboarding_step, 1) as school_onboarding_step
             FROM users u
             JOIN schools s ON u.school_id = s.id
             LEFT JOIN user_roles ur ON ur.user_id = u.id
             LEFT JOIN roles r ON ur.role_id = r.id
             WHERE u.id = $1 AND u.status = 'ACTIVE'
             GROUP BY u.id, u.school_id, u.username, u.password_hash, u.display_name, u.email_verified, u.phone_verified, s.status, s.operable, s.onboarding_step
-            "#,
-            user_id
+            "#
         )
+        .bind(user_id)
         .fetch_optional(pool)
         .await
         .unwrap_or(None);
@@ -164,7 +187,7 @@ impl Backend {
             )
             .await;
 
-            return Some(User {
+            let user = User {
                 id: row.id,
                 school_id: row.school_id,
                 username: row.username,
@@ -177,7 +200,10 @@ impl Backend {
                 school_status: row.school_status,
                 school_operable: row.school_operable,
                 school_onboarding_step: row.school_onboarding_step,
-            });
+            };
+
+            USER_CACHE.insert(user_id, (user.clone(), Instant::now()));
+            return Some(user);
         }
 
         None
@@ -219,8 +245,7 @@ impl AuthnBackend for Backend {
         &self,
         creds: Self::Credentials,
     ) -> Result<Option<Self::User>, Self::Error> {
-        let row = sqlx::query_as!(
-            DbUserRow,
+        let row = sqlx::query_as::<_, DbUserRow>(
             r#"
             SELECT
                 u.id,
@@ -228,12 +253,12 @@ impl AuthnBackend for Backend {
                 u.username,
                 u.password_hash,
                 u.display_name,
-                COALESCE(array_agg(DISTINCT r.code::TEXT) FILTER (WHERE r.code IS NOT NULL), ARRAY[]::TEXT[]) as "roles!",
+                COALESCE(array_agg(DISTINCT r.code::TEXT) FILTER (WHERE r.code IS NOT NULL), ARRAY[]::TEXT[]) as roles,
                 u.email_verified,
                 u.phone_verified,
-                s.status::TEXT as "school_status!",
-                COALESCE(s.operable, false) as "school_operable!",
-                COALESCE(s.onboarding_step, 1) as "school_onboarding_step!"
+                s.status::TEXT as school_status,
+                COALESCE(s.operable, false) as school_operable,
+                COALESCE(s.onboarding_step, 1) as school_onboarding_step
             FROM users u
             JOIN schools s ON u.school_id = s.id
             LEFT JOIN user_roles ur ON ur.user_id = u.id
@@ -241,9 +266,9 @@ impl AuthnBackend for Backend {
             WHERE (u.username = $1 OR u.email = $1) AND u.status = 'ACTIVE' AND s.status IN ('ACTIVE', 'PENDING_SETUP')
             GROUP BY u.id, u.school_id, u.username, u.password_hash, u.display_name, u.email_verified, u.phone_verified, s.status, s.operable, s.onboarding_step
             LIMIT 1
-            "#,
-            creds.username
+            "#
         )
+        .bind(&creds.username)
         .fetch_optional(&self.db)
         .await
         .unwrap_or(None);
@@ -261,7 +286,7 @@ impl AuthnBackend for Backend {
                     )
                     .await;
 
-                return Ok(Some(User {
+                let user = User {
                     id: row.id,
                     school_id: row.school_id,
                     username: row.username,
@@ -274,7 +299,10 @@ impl AuthnBackend for Backend {
                     school_status: row.school_status,
                     school_operable: row.school_operable,
                     school_onboarding_step: row.school_onboarding_step,
-                }));
+                };
+
+                USER_CACHE.insert(user.id, (user.clone(), Instant::now()));
+                return Ok(Some(user));
             }
         }
 

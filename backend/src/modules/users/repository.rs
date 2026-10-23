@@ -6,6 +6,8 @@ use uuid::Uuid;
 pub struct UserListItem {
     pub id: Uuid,
     pub username: String,
+    pub first_name: Option<String>,
+    pub last_name: Option<String>,
     pub display_name: String,
     pub email: Option<String>,
     pub phone: Option<String>,
@@ -151,6 +153,8 @@ impl UserRepository {
             SELECT
                 u.id,
                 u.username,
+                u.first_name,
+                u.last_name,
                 COALESCE(
                     NULLIF(u.display_name, ''),
                     NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), ''),
@@ -212,6 +216,8 @@ impl UserRepository {
             .map(|r| UserListItem {
                 id: r.get("id"),
                 username: r.get("username"),
+                first_name: r.try_get("first_name").ok(),
+                last_name: r.try_get("last_name").ok(),
                 display_name: r.get("display_name"),
                 email: r.try_get("email").ok(),
                 phone: r.try_get("phone").ok(),

@@ -165,6 +165,38 @@ pub async fn update_user_profile(
         None
     };
 
+    // Synchronize first_name, last_name, and display_name
+    let (inferred_first, inferred_last) = if clean_first_name.is_none() && clean_last_name.is_none()
+    {
+        if let Some(dn) = clean_display_name {
+            let parts: Vec<&str> = dn.split_whitespace().collect();
+            if parts.len() >= 2 {
+                (Some(parts[0].to_string()), Some(parts[1..].join(" ")))
+            } else if parts.len() == 1 {
+                (Some(parts[0].to_string()), Some("-".to_string()))
+            } else {
+                (None, None)
+            }
+        } else {
+            (None, None)
+        }
+    } else {
+        (None, None)
+    };
+
+    let final_first_name = clean_first_name.map(|s| s.to_string()).or(inferred_first);
+    let final_last_name = clean_last_name.map(|s| s.to_string()).or(inferred_last);
+
+    let generated_display_name = match (&final_first_name, &final_last_name) {
+        (Some(f), Some(l)) => Some(format!("{} {}", f, l).trim().to_string()),
+        (Some(f), None) => Some(f.to_string()),
+        (None, Some(l)) => Some(l.to_string()),
+        (None, None) => None,
+    };
+    let final_display_name = clean_display_name
+        .map(|s| s.to_string())
+        .or(generated_display_name);
+
     // Update user in database
     sqlx::query(
         r#"UPDATE users
@@ -182,9 +214,9 @@ pub async fn update_user_profile(
                updated_by_user_id = $10
            WHERE id = $11"#,
     )
-    .bind(clean_first_name)
-    .bind(clean_last_name)
-    .bind(clean_display_name)
+    .bind(final_first_name)
+    .bind(final_last_name)
+    .bind(final_display_name)
     .bind(clean_email)
     .bind(clean_phone)
     .bind(clean_gender)
@@ -407,6 +439,37 @@ pub async fn bulk_update_users(
             .map(|s| s.trim().to_uppercase().replace(['-', ' '], "_"))
             .filter(|s| !s.is_empty());
 
+        let (inferred_first, inferred_last) =
+            if clean_first_name.is_none() && clean_last_name.is_none() {
+                if let Some(dn) = clean_display_name {
+                    let parts: Vec<&str> = dn.split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        (Some(parts[0].to_string()), Some(parts[1..].join(" ")))
+                    } else if parts.len() == 1 {
+                        (Some(parts[0].to_string()), Some("-".to_string()))
+                    } else {
+                        (None, None)
+                    }
+                } else {
+                    (None, None)
+                }
+            } else {
+                (None, None)
+            };
+
+        let final_first_name = clean_first_name.map(|s| s.to_string()).or(inferred_first);
+        let final_last_name = clean_last_name.map(|s| s.to_string()).or(inferred_last);
+
+        let generated_display_name = match (&final_first_name, &final_last_name) {
+            (Some(f), Some(l)) => Some(format!("{} {}", f, l).trim().to_string()),
+            (Some(f), None) => Some(f.to_string()),
+            (None, Some(l)) => Some(l.to_string()),
+            (None, None) => None,
+        };
+        let final_display_name = clean_display_name
+            .map(|s| s.to_string())
+            .or(generated_display_name);
+
         sqlx::query(
             r#"UPDATE users
                SET
@@ -424,9 +487,9 @@ pub async fn bulk_update_users(
                    updated_by_user_id = $11
                WHERE id = $12"#,
         )
-        .bind(clean_first_name)
-        .bind(clean_last_name)
-        .bind(clean_display_name)
+        .bind(final_first_name)
+        .bind(final_last_name)
+        .bind(final_display_name)
         .bind(clean_email)
         .bind(clean_phone)
         .bind(clean_gender)

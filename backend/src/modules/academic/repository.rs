@@ -32,6 +32,8 @@ pub struct SubjectRow {
     pub subject_type: Option<String>,
     pub system_subject_type: String,
     pub subject_type_id: Option<Uuid>,
+    pub color: Option<String>,
+    pub department: Option<String>,
     pub description: Option<String>,
 }
 
@@ -214,6 +216,7 @@ impl AcademicRepository {
         for subj in subjects {
             let stype = subj.subject_type.unwrap_or_else(|| "CORE".into());
             let sys_type = subj.system_subject_type.unwrap_or_else(|| "Core".into());
+            let color = subj.color.unwrap_or_else(|| "#4F46E5".into());
             Self::upsert_subject(
                 pool,
                 school_id,
@@ -222,6 +225,9 @@ impl AcademicRepository {
                 &stype,
                 &sys_type,
                 subj.subject_type_id,
+                Some(&color),
+                subj.department.as_deref(),
+                subj.description.as_deref(),
             )
             .await?;
             count += 1;
@@ -509,16 +515,23 @@ impl AcademicRepository {
         subject_type: &str,
         system_subject_type: &str,
         subject_type_id: Option<Uuid>,
+        color: Option<&str>,
+        department: Option<&str>,
+        description: Option<&str>,
     ) -> Result<(), AppError> {
         sqlx::query(
             r#"
-            INSERT INTO subjects (school_id, name, code, subject_type, system_subject_type, subject_type_id, status)
-            VALUES ($1, $2, $3, $4, $5, $6, 'ACTIVE')
+            INSERT INTO subjects (school_id, name, code, subject_type, system_subject_type, subject_type_id, color, department, description, status)
+            VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, '#4F46E5'), $8, $9, 'ACTIVE')
             ON CONFLICT (school_id, code) DO UPDATE SET
                 name = EXCLUDED.name,
                 subject_type = EXCLUDED.subject_type,
                 system_subject_type = EXCLUDED.system_subject_type,
-                subject_type_id = EXCLUDED.subject_type_id
+                subject_type_id = EXCLUDED.subject_type_id,
+                color = COALESCE(EXCLUDED.color, subjects.color, '#4F46E5'),
+                department = COALESCE(EXCLUDED.department, subjects.department),
+                description = COALESCE(EXCLUDED.description, subjects.description),
+                status = 'ACTIVE'
             "#
         )
         .bind(school_id)
@@ -527,6 +540,9 @@ impl AcademicRepository {
         .bind(subject_type)
         .bind(system_subject_type)
         .bind(subject_type_id)
+        .bind(color)
+        .bind(department)
+        .bind(description)
         .execute(pool)
         .await?;
 
@@ -667,7 +683,7 @@ impl AcademicRepository {
 
     pub async fn get_subjects(pool: &PgPool, school_id: Uuid) -> Result<Vec<SubjectRow>, AppError> {
         let rows = sqlx::query(
-            "SELECT id, name, code, subject_type, COALESCE(system_subject_type, 'Core') as system_subject_type, subject_type_id, description FROM subjects WHERE school_id = $1 ORDER BY name ASC"
+            "SELECT id, name, code, subject_type, COALESCE(system_subject_type, 'Core') as system_subject_type, subject_type_id, color, department, description FROM subjects WHERE school_id = $1 AND status != 'DELETED' ORDER BY name ASC"
         )
         .bind(school_id)
         .fetch_all(pool)
@@ -682,11 +698,41 @@ impl AcademicRepository {
                 subject_type: r.get("subject_type"),
                 system_subject_type: r.get("system_subject_type"),
                 subject_type_id: r.get("subject_type_id"),
+                color: r.get("color"),
+                department: r.get("department"),
                 description: r.get("description"),
             })
             .collect();
 
         Ok(list)
+    }
+
+    pub async fn delete_subject(
+        pool: &PgPool,
+        school_id: Uuid,
+        subject_id: Uuid,
+    ) -> Result<bool, AppError> {
+        let res = sqlx::query("DELETE FROM subjects WHERE id = $1 AND school_id = $2")
+            .bind(subject_id)
+            .bind(school_id)
+            .execute(pool)
+            .await?;
+
+        Ok(res.rows_affected() > 0)
+    }
+
+    pub async fn delete_subject_type(
+        pool: &PgPool,
+        school_id: Uuid,
+        type_id: Uuid,
+    ) -> Result<bool, AppError> {
+        let res = sqlx::query("DELETE FROM subject_types WHERE id = $1 AND school_id = $2")
+            .bind(type_id)
+            .bind(school_id)
+            .execute(pool)
+            .await?;
+
+        Ok(res.rows_affected() > 0)
     }
 
     pub async fn get_subject_types(

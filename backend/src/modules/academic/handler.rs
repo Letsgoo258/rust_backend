@@ -37,6 +37,9 @@ pub struct SubjectInput {
     pub subject_type: Option<String>,
     pub system_subject_type: Option<String>,
     pub subject_type_id: Option<uuid::Uuid>,
+    pub color: Option<String>,
+    pub department: Option<String>,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -249,6 +252,33 @@ pub async fn get_subjects(
     ))
 }
 
+#[tracing::instrument(err, skip(state, auth_session))]
+pub async fn delete_subject(
+    auth_session: AuthSession,
+    State(state): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<impl IntoResponse, AppError> {
+    let user = auth_session
+        .user
+        .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+    if !user.is_school_admin() && !user.has_capability("academics:manage_curriculum") {
+        return Err(AppError::Forbidden(
+            "Only School Admins or authorized faculty can delete subjects".into(),
+        ));
+    }
+
+    let deleted = AcademicRepository::delete_subject(&state.db, user.school_id, id).await?;
+    if !deleted {
+        return Err(AppError::NotFound("Subject not found".into()));
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({ "message": "Subject deleted successfully" })),
+    ))
+}
+
 #[tracing::instrument(err, skip(state, auth_session, payload))]
 pub async fn create_bulk_subject_types(
     auth_session: AuthSession,
@@ -299,6 +329,33 @@ pub async fn get_subject_types(
     Ok((
         StatusCode::OK,
         Json(serde_json::json!({ "subject_types": subject_types })),
+    ))
+}
+
+#[tracing::instrument(err, skip(state, auth_session))]
+pub async fn delete_subject_type(
+    auth_session: AuthSession,
+    State(state): State<AppState>,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<impl IntoResponse, AppError> {
+    let user = auth_session
+        .user
+        .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+    if !user.is_school_admin() && !user.has_capability("academics:manage_curriculum") {
+        return Err(AppError::Forbidden(
+            "Only School Admins or authorized faculty can delete subject types".into(),
+        ));
+    }
+
+    let deleted = AcademicRepository::delete_subject_type(&state.db, user.school_id, id).await?;
+    if !deleted {
+        return Err(AppError::NotFound("Subject type not found".into()));
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({ "message": "Subject type deleted successfully" })),
     ))
 }
 

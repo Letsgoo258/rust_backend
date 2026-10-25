@@ -5,3 +5,4 @@ pub mod cron;
 pub mod notifications;
 pub mod telemetry;
 pub mod users;
+pub mod whatsapp;

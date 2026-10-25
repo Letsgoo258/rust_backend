@@ -25,7 +25,10 @@ pub async fn init_pool(config: &AppConfig) -> Result<PgPool, sqlx::Error> {
         .log_slow_statements(tracing::log::LevelFilter::Warn, Duration::from_secs(5));
 
     let pool = PgPoolOptions::new()
-        .max_connections(50)
+        .max_connections(20)
+        .min_connections(2)
+        .idle_timeout(Duration::from_secs(60))
+        .acquire_slow_threshold(Duration::from_secs(5))
         .acquire_timeout(Duration::from_secs(30))
         .connect_with(connect_options)
         .await?;
@@ -181,6 +184,9 @@ pub async fn init_pool(config: &AppConfig) -> Result<PgPool, sqlx::Error> {
 
     // Ensure role_capabilities schema is created
     crate::utils::capabilities::CapabilityController::ensure_schema(&pool).await?;
+
+    // Ensure whatsapp tables and outbox schema are created
+    let _ = crate::utils::whatsapp::ensure_schema(&pool).await;
 
     Ok(pool)
 }

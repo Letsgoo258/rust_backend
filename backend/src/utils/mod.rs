@@ -16,4 +16,5 @@ pub mod shutdown;
 pub mod student_lifecycle;
 pub mod telemetry;
 pub mod url_signer;
+pub mod whatsapp;
 pub mod write_controller;

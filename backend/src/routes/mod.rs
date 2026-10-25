@@ -3,8 +3,10 @@ pub mod admissions;
 pub mod auth;
 pub mod cron;
 pub mod health;
+pub mod settings;
 pub mod telemetry;
 pub mod users;
+pub mod whatsapp;
 
 use crate::state::AppState;
 use axum::Router;
@@ -19,4 +21,6 @@ pub fn app_router() -> Router<AppState> {
         .nest("/api/v1/academic", academic::router())
         .nest("/api/v1/telemetry", telemetry::router())
         .nest("/api/v1/cron", cron::router())
+        .nest("/api/v1/settings", settings::router())
+        .nest("/api/v1/whatsapp", whatsapp::router())
 }

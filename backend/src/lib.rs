@@ -6,3 +6,4 @@ pub mod modules;
 pub mod routes;
 pub mod state;
 pub mod utils;
+pub use utils as util;

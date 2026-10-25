@@ -1120,9 +1120,13 @@ pub async fn request_password_reset(
         .execute(&state.db)
         .await?;
 
+        let app_url = std::env::var("APP_URL")
+            .unwrap_or_else(|_| "https://my-frontend-kappa-five.vercel.app".to_string());
         let reset_url = format!(
-            "http://localhost:3000/reset-password?token={}&email={}",
-            token, email
+            "{}/reset-password?token={}&email={}",
+            app_url.trim_end_matches('/'),
+            token,
+            email
         );
         let email_body = format!(
             "<h3>Eravaya Password Reset Request</h3>\

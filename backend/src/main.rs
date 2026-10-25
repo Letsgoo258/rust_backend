@@ -69,6 +69,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create App State
     let state = AppState::new(pool, config.clone());
 
+    // Initialize in-process WhatsApp Service (restores session if exists, starts queue consumer)
+    let wa_config = utils::whatsapp::WhatsAppConfig::new(state.db.clone());
+    match utils::whatsapp::WhatsAppService::start(wa_config).await {
+        Ok(wa_service) => {
+            let wa_arc = std::sync::Arc::new(wa_service);
+            *state.whatsapp.write().await = Some(wa_arc);
+            tracing::info!("In-process WhatsApp service initialized on boot");
+        }
+        Err(e) => {
+            tracing::warn!("WhatsApp service not started on boot: {e:#}");
+        }
+    }
+
     // Recover & clean background upload jobs on startup (Auto-purges old jobs >3 days)
     utils::jobs::recover_and_clean_jobs(&state.db, state.jobs.clone()).await;
 

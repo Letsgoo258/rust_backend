@@ -1,3 +1,5 @@
+pub mod public;
+
 use crate::{
     modules::admissions::handler::{
         create_admission, enroll_admission, list_admissions, update_admission_status,
@@ -11,6 +13,7 @@ use axum::{
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .nest("/public", public::router())
         .route("/", get(list_admissions).post(create_admission))
         .route("/:id/enroll", post(enroll_admission))
         .route("/:id/status", put(update_admission_status))

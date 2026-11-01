@@ -176,3 +176,26 @@ pub struct StudentRosterItem {
     pub roll_number: Option<String>,
     pub gender: Option<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisterRow {
+    pub record_id: Uuid,
+    pub student_id: Uuid,
+    pub student_name: String,
+    pub roll_number: Option<String>,
+    pub admission_number: Option<String>,
+    pub class_name: String,
+    pub section_name: String,
+    pub subject_name: Option<String>,
+    pub session_type: String,
+    pub status: String,
+    pub remarks: Option<String>,
+    pub marked_by_name: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RegisterQuery {
+    pub date: Option<String>,
+    pub class_section_id: Option<Uuid>,
+}

@@ -9,7 +9,7 @@ use crate::{
         attendance::{
             dto::{
                 AttendanceConfigDto, AttendanceSessionDetailResponse, AttendanceSessionSummary,
-                BulkEditAttendanceRequest, CollisionItem, RecordAttendanceRequest,
+                BulkEditAttendanceRequest, CollisionItem, RecordAttendanceRequest, RegisterRow,
                 ResolveCollisionRequest, StudentRosterItem, TodayAttendanceStats,
                 UpdateSingleRecordRequest,
             },
@@ -666,5 +666,16 @@ impl AttendanceService {
         .await;
 
         Ok(())
+    }
+
+    /// Retrieve flat attendance records for daily register view
+    pub async fn get_register(
+        pool: &PgPool,
+        user: &User,
+        date_opt: Option<NaiveDate>,
+        class_section_id_opt: Option<Uuid>,
+    ) -> Result<Vec<RegisterRow>, AppError> {
+        AttendanceRepository::get_register(pool, user.school_id, date_opt, class_section_id_opt)
+            .await
     }
 }

@@ -6,8 +6,8 @@ use crate::{
     error::AppError,
     modules::attendance::dto::{
         AttendanceConfigDto, AttendanceCorrectionLog, AttendanceSessionDetailResponse,
-        AttendanceSessionSummary, CollisionItem, StudentAttendanceDetail, StudentAttendanceInput,
-        StudentRosterItem, TodayAttendanceStats,
+        AttendanceSessionSummary, CollisionItem, RegisterRow, StudentAttendanceDetail,
+        StudentAttendanceInput, StudentRosterItem, TodayAttendanceStats,
     },
 };
 
@@ -903,5 +903,75 @@ impl AttendanceRepository {
         }
 
         Ok(())
+    }
+
+    /// Retrieve flat attendance records for daily register view
+    pub async fn get_register(
+        pool: &PgPool,
+        school_id: Uuid,
+        date_opt: Option<NaiveDate>,
+        class_section_id_opt: Option<Uuid>,
+    ) -> Result<Vec<RegisterRow>, AppError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                r.id as record_id,
+                r.student_id,
+                COALESCE(NULLIF(u.display_name, ''), NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), ''), u.username, 'Student') as student_name,
+                COALESCE((
+                    SELECT e.roll_number 
+                    FROM enrollments e 
+                    WHERE e.student_id = u.id AND (e.class_section_id = s.class_section_id OR e.class_section_id = u.class_section_id)
+                    ORDER BY e.created_at DESC LIMIT 1
+                ), u.admission_number, '') as roll_number,
+                u.admission_number,
+                c.name as class_name,
+                sec.name as section_name,
+                subj.name as subject_name,
+                s.attendance_type as session_type,
+                r.status,
+                r.remarks,
+                COALESCE(NULLIF(u_marker.display_name, ''), u_marker.username, 'Teacher') as marked_by_name,
+                r.created_at::text as created_at
+            FROM attendance_records r
+            JOIN attendance_sessions s ON r.attendance_session_id = s.id
+            JOIN class_sections cs ON s.class_section_id = cs.id
+            JOIN classes c ON cs.class_id = c.id
+            JOIN sections sec ON cs.section_id = sec.id
+            LEFT JOIN subjects subj ON s.subject_id = subj.id
+            JOIN users u ON r.student_id = u.id
+            LEFT JOIN users u_marker ON s.marked_by = u_marker.id
+            WHERE s.school_id = $1
+              AND ($2::date IS NULL OR s.date = $2)
+              AND ($3::uuid IS NULL OR s.class_section_id = $3)
+            ORDER BY s.date DESC, c.name ASC, sec.name ASC, COALESCE(NULLIF(u.admission_number, ''), '999999'), student_name ASC
+            "#,
+        )
+        .bind(school_id)
+        .bind(date_opt)
+        .bind(class_section_id_opt)
+        .fetch_all(pool)
+        .await?;
+
+        let list = rows
+            .into_iter()
+            .map(|r| RegisterRow {
+                record_id: r.get("record_id"),
+                student_id: r.get("student_id"),
+                student_name: r.get("student_name"),
+                roll_number: r.get("roll_number"),
+                admission_number: r.get("admission_number"),
+                class_name: r.get("class_name"),
+                section_name: r.get("section_name"),
+                subject_name: r.get("subject_name"),
+                session_type: r.get("session_type"),
+                status: r.get("status"),
+                remarks: r.get("remarks"),
+                marked_by_name: r.get("marked_by_name"),
+                created_at: r.get("created_at"),
+            })
+            .collect();
+
+        Ok(list)
     }
 }

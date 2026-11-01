@@ -22,7 +22,9 @@ pub fn router() -> Router<AppState> {
             "/sessions/:id",
             get(AttendanceHandler::get_session_detail).delete(AttendanceHandler::delete_session),
         )
+        .route("/register", get(AttendanceHandler::get_register))
         .route("/stats/today", get(AttendanceHandler::get_today_stats))
+        .route("/today-stats", get(AttendanceHandler::get_today_stats))
         .route("/collisions", get(AttendanceHandler::list_collisions))
         .route(
             "/collisions/:id/resolve",

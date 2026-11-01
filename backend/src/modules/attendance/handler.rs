@@ -14,7 +14,7 @@ use crate::{
         attendance::{
             dto::{
                 AttendanceConfigDto, BulkEditAttendanceRequest, RecordAttendanceRequest,
-                ResolveCollisionRequest, UpdateSingleRecordRequest,
+                RegisterQuery, ResolveCollisionRequest, UpdateSingleRecordRequest,
             },
             service::AttendanceService,
         },
@@ -181,7 +181,52 @@ impl AttendanceHandler {
 
         Ok(Json(serde_json::json!({
             "success": true,
+            "date": stats.date,
+            "total_students": stats.total_enrolled,
+            "total_enrolled": stats.total_enrolled,
+            "present_count": stats.present_students,
+            "present_students": stats.present_students,
+            "absent_count": stats.absent_students,
+            "absent_students": stats.absent_students,
+            "late_count": stats.late_students,
+            "late_students": stats.late_students,
+            "excused_count": 0,
+            "sessions_recorded": stats.completed_sections,
+            "completed_sections": stats.completed_sections,
+            "total_expected_sessions": stats.total_sections,
+            "total_sections": stats.total_sections,
+            "pending_sections": stats.pending_sections,
+            "open_collisions_count": stats.collision_alerts_count,
+            "collision_alerts_count": stats.collision_alerts_count,
+            "attendance_percentage": stats.attendance_percentage,
+            "substitution_deadlocks_count": stats.substitution_deadlocks_count,
             "stats": stats
+        })))
+    }
+
+    /// Retrieve flat attendance records for daily register view
+    pub async fn get_register(
+        auth_session: AuthSession,
+        State(state): State<AppState>,
+        Query(params): Query<RegisterQuery>,
+    ) -> Result<impl IntoResponse, AppError> {
+        let user = auth_session
+            .user
+            .ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+
+        let date_opt = params
+            .date
+            .as_deref()
+            .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
+
+        let records =
+            AttendanceService::get_register(&state.db, &user, date_opt, params.class_section_id)
+                .await?;
+
+        Ok(Json(serde_json::json!({
+            "success": true,
+            "records": records,
+            "count": records.len()
         })))
     }
 

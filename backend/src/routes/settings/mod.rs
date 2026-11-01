@@ -1,4 +1,5 @@
 pub mod admissions;
+pub mod reports;
 pub mod whatsapp;
 
 use crate::state::AppState;
@@ -8,4 +9,5 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .nest("/whatsapp", whatsapp::router())
         .nest("/admissions", admissions::router())
+        .nest("/reports", reports::router())
 }

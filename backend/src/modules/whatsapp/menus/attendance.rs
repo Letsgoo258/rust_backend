@@ -3,7 +3,7 @@ use crate::modules::attendance::dto::StudentAttendanceInput;
 use crate::modules::attendance::repository::AttendanceRepository;
 use crate::modules::whatsapp::repository::WhatsAppRepository;
 use crate::modules::whatsapp::service::WhatsAppUserContext;
-use chrono::{NaiveDate, Utc};
+use chrono::{Datelike, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
@@ -148,6 +148,130 @@ pub fn parse_absent_input(text: &str) -> Result<Vec<String>, String> {
     }
 
     Ok(unique_rolls)
+}
+
+/// Helper to get school local date based on configured timezone
+pub async fn get_school_local_date(pool: &PgPool, school_id: Uuid) -> NaiveDate {
+    sqlx::query_scalar(
+        "SELECT (NOW() AT TIME ZONE COALESCE(timezone, 'Asia/Kolkata'))::date FROM schools WHERE id = $1",
+    )
+    .bind(school_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_else(|| Utc::now().date_naive())
+}
+
+/// Parses date input from WhatsApp messages:
+/// - "yesterday" / "yday" -> current_date - 1 day
+/// - "today" -> current_date
+/// - "day before yesterday" -> current_date - 2 days
+/// - "date YYYY-MM-DD", "YYYY-MM-DD"
+/// - "date DD-MM-YYYY", "DD-MM-YYYY"
+/// - "date DD/MM/YYYY", "DD/MM/YYYY"
+/// - "date DD.MM.YYYY", "DD.MM.YYYY"
+/// - Checks future date prevention and 60-day historical limit
+pub fn parse_date_input(text: &str, current_date: NaiveDate) -> Result<Option<NaiveDate>, String> {
+    let raw = text.trim();
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    let lower = raw.to_lowercase();
+
+    if lower == "change date" || lower == "date" || lower == "set date" {
+        return Ok(None);
+    }
+
+    let is_explicit_date_prefix = lower.starts_with("date")
+        || lower.starts_with("change date")
+        || lower.starts_with("set date");
+
+    let stripped = lower
+        .strip_prefix("change date to")
+        .or_else(|| lower.strip_prefix("change date"))
+        .or_else(|| lower.strip_prefix("set date to"))
+        .or_else(|| lower.strip_prefix("set date"))
+        .or_else(|| lower.strip_prefix("date to"))
+        .or_else(|| lower.strip_prefix("date:"))
+        .or_else(|| lower.strip_prefix("date"))
+        .or_else(|| lower.strip_prefix("for"))
+        .unwrap_or(&lower)
+        .trim();
+
+    if stripped.is_empty() {
+        return Ok(None);
+    }
+
+    let parsed_date = if stripped == "yesterday" || stripped == "yday" {
+        Some(current_date - chrono::Duration::days(1))
+    } else if stripped == "today" {
+        Some(current_date)
+    } else if stripped == "day before yesterday" {
+        Some(current_date - chrono::Duration::days(2))
+    } else {
+        // Only attempt date parsing if there is an explicit date prefix OR it contains date delimiters (-, /, .)
+        let has_delimiter =
+            stripped.contains('-') || stripped.contains('/') || stripped.contains('.');
+        if is_explicit_date_prefix || has_delimiter {
+            let formats = [
+                "%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d", "%d.%m.%Y", "%Y.%m.%d", "%d %b %Y",
+                "%d %B %Y", "%b %d %Y", "%B %d %Y",
+            ];
+
+            let mut found = None;
+            for fmt in &formats {
+                if let Ok(d) = NaiveDate::parse_from_str(stripped, fmt) {
+                    found = Some(d);
+                    break;
+                }
+            }
+
+            if found.is_none() && has_delimiter {
+                let current_year = current_date.format("%Y").to_string();
+                let with_year_hyphen = format!("{stripped}-{current_year}");
+                let with_year_slash = format!("{stripped}/{current_year}");
+
+                for candidate in [&with_year_hyphen, &with_year_slash] {
+                    for fmt in &formats {
+                        if let Ok(d) = NaiveDate::parse_from_str(candidate, fmt) {
+                            found = Some(d);
+                            break;
+                        }
+                    }
+                    if found.is_some() {
+                        break;
+                    }
+                }
+            }
+
+            if found.is_none() && is_explicit_date_prefix {
+                return Err(format!("Could not understand the date \"{stripped}\"."));
+            }
+
+            found
+        } else {
+            None
+        }
+    };
+
+    if let Some(target) = parsed_date {
+        if target > current_date {
+            return Err(format!(
+                "Cannot mark attendance for a future date ({}). Please choose today or a past date.",
+                target.format("%d %b %Y")
+            ));
+        }
+        if target < current_date - chrono::Duration::days(60) {
+            return Err(format!(
+                "Cannot mark attendance for dates older than 60 days via WhatsApp ({}). Please use the ERAVAYA Web Portal for historical records.",
+                target.format("%d %b %Y")
+            ));
+        }
+        return Ok(Some(target));
+    }
+
+    Ok(None)
 }
 
 /// Check if teacher currently has an active scheduled period in current_day_timetable.
@@ -369,7 +493,14 @@ pub async fn start_attendance_flow(pool: &PgPool, context: &WhatsAppUserContext)
         }
     };
 
-    // 4. Check if teacher has an active scheduled period right now in timetable
+    // 4. Check school's local date and weekday for Sunday / weekend edge cases
+    let local_date = get_school_local_date(pool, context.school_id).await;
+    let weekday = local_date.weekday();
+    let is_sunday = weekday == chrono::Weekday::Sun;
+    let is_weekend = is_sunday || weekday == chrono::Weekday::Sat;
+    let formatted_today = local_date.format("%d %b %Y (%A)").to_string();
+
+    // 5. Check if teacher has an active scheduled period right now in timetable
     if let Some(active_slot) = check_active_period(pool, context.school_id, staff_id).await {
         let payload = serde_json::json!({
             "class_section_id": active_slot.class_section_id,
@@ -379,6 +510,7 @@ pub async fn start_attendance_flow(pool: &PgPool, context: &WhatsAppUserContext)
             "subject_id": active_slot.subject_id,
             "subject_name": active_slot.subject_name,
             "is_daily_roll_call": false,
+            "target_date": local_date.to_string(),
         });
 
         let _ = WhatsAppRepository::set_conversation_state(
@@ -392,26 +524,36 @@ pub async fn start_attendance_flow(pool: &PgPool, context: &WhatsAppUserContext)
         return format!(
             "📅 *Found active class in your timetable!*\n\n\
             🏫 *Class*: {} - Section {}\n\
-            📚 *Subject*: {} (Period {}, {} - {})\n\n\
+            📚 *Subject*: {} (Period {}, {} - {})\n\
+            📅 *Date*: {}\n\n\
             Please send the list of absent roll numbers in the format:\n\
             👉 *1, 2, 55 absent*\n\n\
-            _(Or reply *all present* if everyone is present, or *cancel* to abort)_",
+            _(Or reply *all present* if everyone is present, reply *yesterday* to change date, or *cancel* to abort)_",
             active_slot.class_name,
             active_slot.section_name,
             active_slot.subject_name,
             active_slot.period_number,
             active_slot.start_time,
-            active_slot.end_time
+            active_slot.end_time,
+            formatted_today
         );
     }
 
-    // 5. No active slot right now -> Show ONLY the teacher's assigned classes & subjects
+    // 6. No active slot right now -> Show ONLY the teacher's assigned classes & subjects
     let options =
         get_teacher_available_classes(pool, context.school_id, staff_id, context.user_id).await;
     if options.is_empty() {
+        let time_info = if is_sunday {
+            format!("📅 *Today is {formatted_today} (Sunday - Non-Working / Weekend)*\n⏰ *No timetable classes scheduled today.*")
+        } else if is_weekend {
+            format!("📅 *Today is {formatted_today} (Weekend / Non-Working Day)*\n⏰ *No timetable classes scheduled today.*")
+        } else {
+            format!("📅 *Date*: {formatted_today}\n⏰ *No active period scheduled in your timetable right now.*")
+        };
+
         return format!(
             "📋 *Attendance - {name}*\n\n\
-            ⏰ *No active period scheduled in your timetable right now.*\n\n\
+            {time_info}\n\n\
             ⚠️ No classes or subjects are assigned to your teacher profile for attendance recording.\n\n\
             Please contact your school administrator or timetable coordinator to assign your classes or subjects."
         );
@@ -435,7 +577,11 @@ pub async fn start_attendance_flow(pool: &PgPool, context: &WhatsAppUserContext)
         class_list_text.push_str(&format!("{} {}\n", num_emoji, opt.display));
     }
 
-    let payload = serde_json::to_value(&options).unwrap_or(serde_json::json!([]));
+    let payload = serde_json::json!({
+        "options": options,
+        "target_date": local_date.to_string(),
+    });
+
     let _ = WhatsAppRepository::set_conversation_state(
         pool,
         context.session_id,
@@ -444,12 +590,38 @@ pub async fn start_attendance_flow(pool: &PgPool, context: &WhatsAppUserContext)
     )
     .await;
 
+    let header_text = if is_sunday {
+        format!(
+            "📅 *Today is {formatted_today} (Sunday - Non-Working / Weekend)*\n\
+            ⏰ *No timetable classes scheduled today.*"
+        )
+    } else if is_weekend {
+        format!(
+            "📅 *Today is {formatted_today} (Weekend / Non-Working Day)*\n\
+            ⏰ *No timetable classes scheduled today.*"
+        )
+    } else {
+        format!(
+            "📅 *Date*: {formatted_today}\n\
+            ⏰ *No active period scheduled in your timetable right now.*"
+        )
+    };
+
+    let date_notice = if is_weekend {
+        "\n💡 *Weekend Note*: If you are recording attendance for a past working day, reply *yesterday* or *date YYYY-MM-DD* (e.g. *date 2026-10-31*).\n"
+    } else {
+        ""
+    };
+
     format!(
-        "⏰ *No active period scheduled in your timetable right now.*\n\n\
+        "{header_text}\n\n\
         Which class and subject would you like to take attendance for?\n\n\
-        {}\n\n\
-        👉 Reply with the number (e.g. *1*) or class/subject name, or send *cancel* to abort.",
-        class_list_text.trim_end()
+        {}{}\n\
+        👉 Reply with the number (e.g. *1*) or class/subject name.\n\
+        👉 To change date, reply *yesterday* or *date YYYY-MM-DD*.\n\
+        👉 Reply *cancel* or *abort* to exit.",
+        class_list_text.trim_end(),
+        date_notice
     )
 }
 
@@ -463,6 +635,7 @@ pub async fn record_attendance_for_roster(
     period_number: Option<i32>,
     subject_id: Option<Uuid>,
     subject_name: Option<&str>,
+    target_date: NaiveDate,
     absent_rolls: &[String],
 ) -> String {
     let name = context.display_name.as_deref().unwrap_or("Teacher");
@@ -567,24 +740,13 @@ pub async fn record_attendance_for_roster(
             }
         };
 
-    // 4. Resolve school's local date
-    let local_date: NaiveDate = sqlx::query_scalar(
-        "SELECT (NOW() AT TIME ZONE COALESCE(timezone, 'Asia/Kolkata'))::date FROM schools WHERE id = $1",
-    )
-    .bind(context.school_id)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or_else(|| Utc::now().date_naive());
-
     let attendance_type = if period_number.is_some() {
         "PERIOD_WISE"
     } else {
         "DAILY"
     };
 
-    // 5. Transactional insert
+    // 4. Transactional insert using target_date
     let mut tx = match pool.begin().await {
         Ok(t) => t,
         Err(e) => {
@@ -600,7 +762,7 @@ pub async fn record_attendance_for_roster(
         context.school_id,
         academic_year_id,
         class_section_id,
-        local_date,
+        target_date,
         period_number,
         attendance_type,
         subject_id,
@@ -639,10 +801,10 @@ pub async fn record_attendance_for_roster(
         return format!("❌ Failed to commit attendance: {e}");
     }
 
-    // 6. Clear conversation state
+    // 5. Clear conversation state
     let _ = WhatsAppRepository::clear_conversation_state(pool, context.session_id).await;
 
-    // 7. Format receipt
+    // 6. Format receipt
     let total_count = roster.len();
     let absent_count = absent_students.len();
     let present_count = total_count.saturating_sub(absent_count);
@@ -663,7 +825,7 @@ pub async fn record_attendance_for_roster(
         "Daily Roll Call".to_string()
     };
 
-    let formatted_date = local_date.format("%d %b %Y").to_string();
+    let formatted_date = target_date.format("%d %b %Y (%A)").to_string();
 
     let mut receipt = format!(
         "📋 *Attendance Marked Successfully!*\n\n\
@@ -726,8 +888,25 @@ pub async fn handle_attendance_conversation_step(
 
     match state_type {
         "ATTENDANCE_SELECT_CLASS" => {
-            let options: Vec<AvailableClassOption> =
-                serde_json::from_value(payload.clone()).unwrap_or_default();
+            let (options, target_date) = if payload.is_array() {
+                let opts: Vec<AvailableClassOption> =
+                    serde_json::from_value(payload.clone()).unwrap_or_default();
+                let today = get_school_local_date(pool, context.school_id).await;
+                (opts, today)
+            } else {
+                let opts: Vec<AvailableClassOption> = payload
+                    .get("options")
+                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+                    .unwrap_or_default();
+                let today = get_school_local_date(pool, context.school_id).await;
+                let t_date = payload
+                    .get("target_date")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+                    .unwrap_or(today);
+                (opts, t_date)
+            };
+
             if options.is_empty() {
                 let _ =
                     WhatsAppRepository::clear_conversation_state(pool, context.session_id).await;
@@ -735,6 +914,80 @@ pub async fn handle_attendance_conversation_step(
                     .to_string();
             }
 
+            let today = get_school_local_date(pool, context.school_id).await;
+
+            // 1. Check if user is requesting to change the date
+            match parse_date_input(trimmed, today) {
+                Ok(Some(new_date)) => {
+                    let new_date_str = new_date.format("%d %b %Y (%A)").to_string();
+                    let updated_payload = serde_json::json!({
+                        "options": options,
+                        "target_date": new_date.to_string(),
+                    });
+                    let _ = WhatsAppRepository::set_conversation_state(
+                        pool,
+                        context.session_id,
+                        "ATTENDANCE_SELECT_CLASS",
+                        updated_payload,
+                    )
+                    .await;
+
+                    let mut class_list_text = String::new();
+                    for opt in &options {
+                        let num_emoji = match opt.index {
+                            1 => "1️⃣",
+                            2 => "2️⃣",
+                            3 => "3️⃣",
+                            4 => "4️⃣",
+                            5 => "5️⃣",
+                            6 => "6️⃣",
+                            7 => "7️⃣",
+                            8 => "8️⃣",
+                            9 => "9️⃣",
+                            10 => "🔟",
+                            _ => "▪️",
+                        };
+                        class_list_text.push_str(&format!("{} {}\n", num_emoji, opt.display));
+                    }
+
+                    return format!(
+                        "📅 *Attendance Date Set: {new_date_str}*\n\n\
+                        Which class and subject would you like to take attendance for?\n\n\
+                        {}\n\n\
+                        👉 Reply with the number (e.g. *1*) or class/subject name.\n\
+                        👉 To change date again, reply *yesterday* or *date YYYY-MM-DD*.\n\
+                        👉 Reply *cancel* or *abort* to exit.",
+                        class_list_text.trim_end()
+                    );
+                }
+                Err(err_msg) => {
+                    return format!(
+                        "⚠️ *Date Error*: {err_msg}\n\n\
+                        Please provide a valid date:\n\
+                        👉 *yesterday*\n\
+                        👉 *date YYYY-MM-DD* (e.g. *date 2026-10-31*)\n\
+                        👉 *today*\n\n\
+                        _(Or reply with the class number (e.g. *1*) or *cancel* to abort)_"
+                    );
+                }
+                Ok(None) => {
+                    let lower = trimmed.to_lowercase();
+                    if lower == "change date" || lower == "date" || lower == "set date" {
+                        let curr_fmt = target_date.format("%d %b %Y (%A)").to_string();
+                        return format!(
+                            "📅 *Change Attendance Date*\n\n\
+                            Current selected date: *{curr_fmt}*\n\n\
+                            Please reply with the date you want to record attendance for:\n\
+                            👉 *yesterday*\n\
+                            👉 *date YYYY-MM-DD* (e.g. *date 2026-10-31*)\n\
+                            👉 *today*\n\n\
+                            _(Or reply with the class number (e.g. *1*) or *cancel* to abort)_"
+                        );
+                    }
+                }
+            }
+
+            // 2. Parse class selection
             let lower = trimmed.to_lowercase();
             let clean_input: String = lower.chars().filter(|c| c.is_alphanumeric()).collect();
 
@@ -772,6 +1025,7 @@ pub async fn handle_attendance_conversation_step(
                     "subject_id": selected.subject_id,
                     "subject_name": selected.subject_name,
                     "is_daily_roll_call": selected.is_daily_roll_call,
+                    "target_date": target_date.to_string(),
                 });
 
                 let _ = WhatsAppRepository::set_conversation_state(
@@ -790,18 +1044,23 @@ pub async fn handle_attendance_conversation_step(
                     format!("📚 *Subject*: {}", selected.subject_name)
                 };
 
+                let formatted_target_date = target_date.format("%d %b %Y (%A)").to_string();
+
                 format!(
                     "✅ Selected: *{} - Section {}*\n\
-                    {}\n\n\
+                    {}\n\
+                    📅 *Date*: {}\n\n\
                     Please send the absent roll numbers in the format:\n\
                     👉 *1, 2, 55 absent*\n\n\
-                    _(Or send *all present* if everyone is present, or *cancel* to abort)_",
-                    selected.class_name, selected.section_name, session_display
+                    _(Or send *all present* if everyone is present, reply *yesterday* to change date, or *cancel* to abort)_",
+                    selected.class_name, selected.section_name, session_display, formatted_target_date
                 )
             } else {
                 format!(
                     "⚠️ Invalid selection: \"{}\".\n\n\
-                    Please reply with the class number (e.g. *1*) or class/subject name, or send *cancel* to abort.",
+                    Please reply with the class number (e.g. *1*) or class/subject name.\n\
+                    👉 To change the date, reply *yesterday* or *date YYYY-MM-DD*.\n\
+                    👉 Reply *cancel* or *abort* to exit.",
                     trimmed
                 )
             }
@@ -839,6 +1098,72 @@ pub async fn handle_attendance_conversation_step(
                 .and_then(|s| Uuid::parse_str(s).ok());
             let subject_name = payload.get("subject_name").and_then(|v| v.as_str());
 
+            let today = get_school_local_date(pool, context.school_id).await;
+            let current_target_date: NaiveDate = payload
+                .get("target_date")
+                .and_then(|v| v.as_str())
+                .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+                .unwrap_or(today);
+
+            // 1. Check if user is requesting to change date in this step
+            match parse_date_input(trimmed, today) {
+                Ok(Some(new_date)) => {
+                    let mut updated_payload = payload.clone();
+                    if let Some(obj) = updated_payload.as_object_mut() {
+                        obj.insert(
+                            "target_date".to_string(),
+                            serde_json::json!(new_date.to_string()),
+                        );
+                    }
+                    let _ = WhatsAppRepository::set_conversation_state(
+                        pool,
+                        context.session_id,
+                        "ATTENDANCE_WAITING_FOR_ABSENTEES",
+                        updated_payload,
+                    )
+                    .await;
+
+                    let new_date_str = new_date.format("%d %b %Y (%A)").to_string();
+                    let session_info = if let Some(p) = period_number {
+                        format!("Period {p} ({})", subject_name.unwrap_or("Subject"))
+                    } else {
+                        subject_name.unwrap_or("Daily Roll Call").to_string()
+                    };
+
+                    return format!(
+                        "📅 *Attendance Date Updated: {new_date_str}*\n\n\
+                        🏫 *Class*: {class_name} - Section {section_name}\n\
+                        ⏰ *Session*: {session_info}\n\n\
+                        Please send the absent roll numbers in the format:\n\
+                        👉 *1, 2, 55 absent*\n\n\
+                        _(Or send *all present* if everyone is present, or *cancel* to abort)_"
+                    );
+                }
+                Err(err_msg) => {
+                    return format!(
+                        "⚠️ *Date Error*: {err_msg}\n\n\
+                        Please send the absent roll numbers (e.g. *1, 2, 55 absent*), \
+                        or reply *yesterday* or *date YYYY-MM-DD* to change date, or *cancel* to abort."
+                    );
+                }
+                Ok(None) => {
+                    let lower = trimmed.to_lowercase();
+                    if lower == "change date" || lower == "date" || lower == "set date" {
+                        let curr_fmt = current_target_date.format("%d %b %Y (%A)").to_string();
+                        return format!(
+                            "📅 *Change Attendance Date*\n\n\
+                            Current date: *{curr_fmt}*\n\n\
+                            Please reply with the target date:\n\
+                            👉 *yesterday*\n\
+                            👉 *date YYYY-MM-DD* (e.g. *date 2026-10-31*)\n\
+                            👉 *today*\n\n\
+                            _(Or reply with roll numbers (e.g. *1, 2, 55 absent*) or *cancel* to abort)_"
+                        );
+                    }
+                }
+            }
+
+            // 2. Parse absentees
             match parse_absent_input(trimmed) {
                 Ok(absent_rolls) => {
                     record_attendance_for_roster(
@@ -850,6 +1175,7 @@ pub async fn handle_attendance_conversation_step(
                         period_number,
                         subject_id,
                         subject_name,
+                        current_target_date,
                         &absent_rolls,
                     )
                     .await
@@ -864,7 +1190,7 @@ pub async fn handle_attendance_conversation_step(
                         "⚠️ *Invalid Format*\n\n\
                         Could not understand the roll numbers. Please send in the format:\n\
                         👉 *1, 2, 55 absent*\n\n\
-                        _(Or send *all present* if everyone is present, or *cancel* to abort)_"
+                        _(Or send *all present* if everyone is present, reply *yesterday* to change date, or *cancel* to abort)_"
                     )
                 }
             }
@@ -936,5 +1262,107 @@ pub async fn handle_attendance_query(pool: &PgPool, context: &WhatsAppUserContex
             {clean_url}/dashboard\n\n\
             _Verified by ERAVAYA ERP. No attendance penalties or warnings apply._"
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::NaiveDate;
+
+    #[test]
+    fn test_parse_date_input_relative_and_formats() {
+        let sunday = NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
+        let saturday = NaiveDate::from_ymd_opt(2026, 10, 31).unwrap();
+        let friday = NaiveDate::from_ymd_opt(2026, 10, 30).unwrap();
+
+        // 1. Relative keywords
+        assert_eq!(
+            parse_date_input("yesterday", sunday).unwrap(),
+            Some(saturday)
+        );
+        assert_eq!(parse_date_input("yday", sunday).unwrap(), Some(saturday));
+        assert_eq!(
+            parse_date_input("date yesterday", sunday).unwrap(),
+            Some(saturday)
+        );
+        assert_eq!(parse_date_input("today", sunday).unwrap(), Some(sunday));
+        assert_eq!(
+            parse_date_input("day before yesterday", sunday).unwrap(),
+            Some(friday)
+        );
+
+        // 2. Exact standard formats
+        assert_eq!(
+            parse_date_input("2026-10-31", sunday).unwrap(),
+            Some(saturday)
+        );
+        assert_eq!(
+            parse_date_input("date 2026-10-31", sunday).unwrap(),
+            Some(saturday)
+        );
+        assert_eq!(
+            parse_date_input("change date to 2026-10-31", sunday).unwrap(),
+            Some(saturday)
+        );
+        assert_eq!(
+            parse_date_input("31-10-2026", sunday).unwrap(),
+            Some(saturday)
+        );
+        assert_eq!(
+            parse_date_input("31/10/2026", sunday).unwrap(),
+            Some(saturday)
+        );
+        assert_eq!(
+            parse_date_input("date 31 Oct 2026", sunday).unwrap(),
+            Some(saturday)
+        );
+
+        // 3. Class selections must NEVER be treated as dates
+        assert_eq!(parse_date_input("1", sunday).unwrap(), None);
+        assert_eq!(parse_date_input("4", sunday).unwrap(), None);
+        assert_eq!(parse_date_input("Class 2 Section B", sunday).unwrap(), None);
+        assert_eq!(parse_date_input("Mathematics", sunday).unwrap(), None);
+
+        // 4. Standalone "date" or "change date" prompt triggers
+        assert_eq!(parse_date_input("date", sunday).unwrap(), None);
+        assert_eq!(parse_date_input("change date", sunday).unwrap(), None);
+        assert_eq!(parse_date_input("set date", sunday).unwrap(), None);
+
+        // 5. Future date validation
+        let future_res = parse_date_input("2026-11-05", sunday);
+        assert!(future_res.is_err(), "Future date must be rejected");
+        assert!(future_res
+            .unwrap_err()
+            .contains("Cannot mark attendance for a future date"));
+
+        // 6. Very old date validation (>60 days)
+        let old_res = parse_date_input("2026-05-01", sunday);
+        assert!(old_res.is_err(), "Old date must be rejected");
+        assert!(old_res.unwrap_err().contains("older than 60 days"));
+    }
+
+    #[test]
+    fn test_parse_absent_input_formats() {
+        assert_eq!(
+            parse_absent_input("1, 2, 55 absent").unwrap(),
+            vec!["1".to_string(), "2".to_string(), "55".to_string()]
+        );
+        assert_eq!(
+            parse_absent_input("all present").unwrap(),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            parse_absent_input("everyone present").unwrap(),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            parse_absent_input("cancel").unwrap_err(),
+            "CANCEL".to_string()
+        );
+        assert_eq!(
+            parse_absent_input("abort").unwrap_err(),
+            "CANCEL".to_string()
+        );
     }
 }

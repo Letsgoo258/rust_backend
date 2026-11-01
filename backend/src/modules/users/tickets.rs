@@ -230,6 +230,14 @@ pub async fn list_school_tickets(
         .user
         .ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
 
+    let is_authorized =
+        auth_user.is_school_admin() || auth_user.has_capability("attendance:resolve_tickets");
+    if !is_authorized {
+        return Err(AppError::Forbidden(
+            "Only school administrators can access institutional support tickets".into(),
+        ));
+    }
+
     let school_id = auth_user.school_id;
 
     let tickets = sqlx::query_as::<_, ChangeTicketItem>(
@@ -276,11 +284,9 @@ pub async fn resolve_school_ticket(
         .user
         .ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
 
-    let is_admin = auth_user
-        .roles
-        .iter()
-        .any(|r| r == "SCHOOL_ADMIN" || r == "SUPER_ADMIN");
-    if !is_admin {
+    let is_authorized =
+        auth_user.is_school_admin() || auth_user.has_capability("attendance:resolve_tickets");
+    if !is_authorized {
         return Err(AppError::Forbidden(
             "Only school administrators can resolve institutional tickets".into(),
         ));

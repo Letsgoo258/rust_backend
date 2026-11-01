@@ -20,7 +20,8 @@ RUN mkdir -p src/bin tests && \
     echo "pub fn dummy() {}" > src/lib.rs && \
     echo "fn main() {}" > src/main.rs && \
     echo "fn main() {}" > src/bin/test_runner.rs && \
-    cargo build --release || true && \
+    echo "fn main() {}" > src/bin/reset_test_pass.rs && \
+    cargo build --release --bin eravaya --bin test_runner || true && \
     rm -rf src tests
 
 # Copy application source code from backend directory
@@ -29,15 +30,14 @@ COPY backend/ .
 # Set SQLX_OFFLINE=true for offline compile-time query checking
 ENV SQLX_OFFLINE=true
 
-# Touch source files and compile binaries
-RUN touch src/lib.rs src/main.rs src/bin/test_runner.rs && \
-    cargo build --release --bin eravaya && \
-    cargo build --bin test_runner
+# Touch source files and compile release binaries
+RUN touch src/lib.rs src/main.rs src/bin/test_runner.rs src/bin/reset_test_pass.rs && \
+    cargo build --release --bin eravaya --bin test_runner
 
 # Optional test execution during Docker build (default false to allow building in CI/Cloud without live DB)
 ARG RUN_TESTS=false
 RUN if [ "$RUN_TESTS" = "true" ]; then \
-        cargo run --bin test_runner; \
+        cargo run --release --bin test_runner; \
     fi
 
 # ========================================================

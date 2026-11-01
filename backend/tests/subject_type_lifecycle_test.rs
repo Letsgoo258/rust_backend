@@ -172,6 +172,7 @@ async fn test_subject_type_and_subject_full_lifecycle() {
         Some(updated_dept),
         Some(updated_desc),
         None,
+        Some("ACTIVE"),
     )
     .await
     .expect("Error executing update_subject");

@@ -22,6 +22,7 @@ pub struct StudentPreviewItem {
     pub class_name: Option<String>,
     pub section_name: Option<String>,
     pub class_section_id: Option<String>,
+    pub roll_number: Option<String>,
     pub is_duplicate: bool,
     pub error_reason: Option<String>,
 }
@@ -141,6 +142,13 @@ pub async fn preview_bulk_students(
                 required: false,
                 min_length: None,
                 max_length: Some(100),
+            },
+            ColumnSchema {
+                header: "Roll Number",
+                col_type: ColumnType::String,
+                required: false,
+                min_length: None,
+                max_length: Some(50),
             },
         ],
     };
@@ -266,6 +274,14 @@ pub async fn preview_bulk_students(
             .or_else(|| row.get("Class Section Code").cloned())
             .or_else(|| row.get("Class ID").cloned())
             .or_else(|| row.get("Class Id").cloned());
+        let roll_num_raw = row
+            .get("Roll Number")
+            .cloned()
+            .or_else(|| row.get("Roll No").cloned())
+            .or_else(|| row.get("Rollno").cloned())
+            .or_else(|| row.get("roll_number").cloned())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
 
         let mut row_error: Option<String> = None;
         let mut resolved_cls_name: Option<String> = None;
@@ -358,6 +374,7 @@ pub async fn preview_bulk_students(
             class_name: resolved_cls_name,
             section_name: resolved_sec_name,
             class_section_id: cls_section_id_raw,
+            roll_number: roll_num_raw,
             is_duplicate: is_row_error,
             error_reason: row_error,
         });
@@ -474,6 +491,13 @@ pub async fn bulk_upload_students(
                 required: false,
                 min_length: None,
                 max_length: Some(100),
+            },
+            ColumnSchema {
+                header: "Roll Number",
+                col_type: ColumnType::String,
+                required: false,
+                min_length: None,
+                max_length: Some(50),
             },
         ],
     };
@@ -723,6 +747,14 @@ async fn process_bulk_students_background(
             .or_else(|| row.get("Class Section Code").cloned())
             .or_else(|| row.get("Class ID").cloned())
             .or_else(|| row.get("Class Id").cloned());
+        let roll_num_raw = row
+            .get("Roll Number")
+            .cloned()
+            .or_else(|| row.get("Roll No").cloned())
+            .or_else(|| row.get("Rollno").cloned())
+            .or_else(|| row.get("roll_number").cloned())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
 
         let cs_id_str = cls_section_id_raw.clone().unwrap_or_default();
 
@@ -880,6 +912,7 @@ async fn process_bulk_students_background(
                 None,
                 active_ay_id,
                 pre_cs_id,
+                roll_num_raw.as_deref(),
             )
             .await;
 
@@ -998,6 +1031,7 @@ pub struct SingleStudentRequest {
     pub guardian_phone: String,
     pub student_phone: Option<String>,
     pub class_section_id: Option<String>,
+    pub roll_number: Option<String>,
 }
 
 pub async fn single_add_student(
@@ -1148,6 +1182,11 @@ pub async fn single_add_student(
             None,
             active_ay_id,
             resolved_cs_id,
+            payload
+                .roll_number
+                .as_deref()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty()),
         )
         .await?;
 

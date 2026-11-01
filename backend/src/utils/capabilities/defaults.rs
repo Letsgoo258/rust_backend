@@ -10,7 +10,10 @@ pub fn default_enabled_keys(role_code: &str) -> HashSet<&'static str> {
         // 1. Leadership & Governance (Full Platform / School Authority)
         "SUPER_ADMIN" | "SCHOOL_ADMIN" | "HEADMASTER" | "PRINCIPAL" => {
             for (key, _, _, _) in catalogue() {
-                set.insert(key);
+                // School Admins and Super Admins are strictly prohibited from initial attendance recording
+                if key != "attendance:record" {
+                    set.insert(key);
+                }
             }
         }
 
@@ -30,6 +33,10 @@ pub fn default_enabled_keys(role_code: &str) -> HashSet<&'static str> {
             set.insert("exams:manage_schedules");
             set.insert("exams:enter_marks");
             set.insert("settings:view");
+            set.insert("attendance:view");
+            set.insert("attendance:edit_class");
+            set.insert("attendance:bulk_edit");
+            set.insert("attendance:resolve_tickets");
         }
 
         // 3. Subject Coordinators & Department Heads
@@ -39,6 +46,9 @@ pub fn default_enabled_keys(role_code: &str) -> HashSet<&'static str> {
             set.insert("academics:manage_curriculum");
             set.insert("exams:manage_schedules");
             set.insert("exams:enter_marks");
+            set.insert("attendance:view");
+            set.insert("attendance:record");
+            set.insert("attendance:edit_subject");
         }
 
         // 4. Examination Coordinator
@@ -48,6 +58,7 @@ pub fn default_enabled_keys(role_code: &str) -> HashSet<&'static str> {
             set.insert("exams:manage_schedules");
             set.insert("exams:enter_marks");
             set.insert("users:export");
+            set.insert("attendance:view");
         }
 
         // 5. Class Teachers
@@ -58,6 +69,10 @@ pub fn default_enabled_keys(role_code: &str) -> HashSet<&'static str> {
             set.insert("academics:view");
             set.insert("academics:assign_students");
             set.insert("exams:enter_marks");
+            set.insert("attendance:view");
+            set.insert("attendance:record");
+            set.insert("attendance:edit_class");
+            set.insert("attendance:edit_subject");
         }
 
         // 6. Regular Teachers & Faculty
@@ -67,12 +82,18 @@ pub fn default_enabled_keys(role_code: &str) -> HashSet<&'static str> {
             set.insert("certificate:issue_tc");
             set.insert("academics:view");
             set.insert("exams:enter_marks");
+            set.insert("attendance:view");
+            set.insert("attendance:record");
+            set.insert("attendance:edit_subject");
         }
 
         // 7. Academic Support: Lab Assistant & Counselor
         "LAB_ASSISTANT" | "LAB ASSISTANT" => {
             set.insert("users:view_directory");
             set.insert("academics:view");
+            set.insert("attendance:view");
+            set.insert("attendance:record");
+            set.insert("attendance:edit_subject");
         }
 
         "COUNSELOR" => {
@@ -149,6 +170,7 @@ pub fn default_enabled_keys(role_code: &str) -> HashSet<&'static str> {
         "STUDENT" | "PARENT" => {
             set.insert("academics:view");
             set.insert("finance:view_fees");
+            set.insert("attendance:view");
         }
 
         "ALUMNI" => {
@@ -158,6 +180,7 @@ pub fn default_enabled_keys(role_code: &str) -> HashSet<&'static str> {
         _ => {
             // Default baseline fallback
             set.insert("academics:view");
+            set.insert("attendance:view");
         }
     }
 

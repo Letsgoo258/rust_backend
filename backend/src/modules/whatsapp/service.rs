@@ -1,19 +1,15 @@
 use crate::error::AppError;
+use crate::modules::whatsapp::menus;
+#[allow(unused_imports)]
+pub use crate::modules::whatsapp::menus::ai::AiResponsePayload;
 use crate::modules::whatsapp::repository::WhatsAppRepository;
 use crate::utils::capabilities::CapabilityController;
 use crate::utils::whatsapp::send_whatsapp_message;
-use chrono::{Datelike, Utc};
-use serde::{Deserialize, Serialize};
+use chrono::Utc;
 use sqlx::PgPool;
 use std::collections::HashSet;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 use uuid::Uuid;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AiResponsePayload {
-    pub reply: String,
-    pub intent: Option<String>,
-}
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -35,6 +31,19 @@ impl WhatsAppUserContext {
             return true;
         }
         self.capabilities.contains(key)
+    }
+
+    pub fn is_teacher(&self) -> bool {
+        self.role.eq_ignore_ascii_case("TEACHER")
+            || self.role.eq_ignore_ascii_case("CLASS_TEACHER")
+            || self.role.eq_ignore_ascii_case("FACULTY")
+            || self.role.eq_ignore_ascii_case("STAFF")
+    }
+
+    pub fn is_student_or_parent(&self) -> bool {
+        self.role.eq_ignore_ascii_case("STUDENT")
+            || self.role.eq_ignore_ascii_case("PARENT")
+            || self.role.eq_ignore_ascii_case("GUARDIAN")
     }
 }
 
@@ -88,116 +97,15 @@ impl WhatsAppMessageService {
     }
 
     /// Formats the official ERAVAYA ERP welcome greeting.
+    #[allow(dead_code)]
     pub fn get_welcome_greeting() -> &'static str {
         "👋 Hi! Welcome to ERAVAYA ERP.\n\nType *help* for the help menu or ask your query (e.g. attendance, fees, timetable, exams) to get assistance."
     }
 
     /// Formats the interactive help menu.
+    #[allow(dead_code)]
     pub fn get_help_menu() -> &'static str {
         "📋 *ERAVAYA ERP Assistance Menu*\n\n1️⃣ *Attendance* - Check student & staff attendance status\n2️⃣ *Fees* - View pending fee dues and receipt links\n3️⃣ *Exams* - View exam dates, schedules, and report cards\n4️⃣ *Timetable* - View class and subject timetable\n5️⃣ *Contact* - School office phone and support desk\n\n💡 You can also ask directly in plain text:\n_e.g., \"What is the fee payment deadline?\"_"
-    }
-
-    /// Connect to AI service if configured; otherwise use structured JSON fallback.
-    async fn connect_to_ai(
-        sender_jid: &str,
-        query: &str,
-        conversation_history: &[crate::modules::whatsapp::repository::WhatsAppInboundRow],
-    ) -> String {
-        let gemini_key = std::env::var("GEMINI_API_KEY")
-            .or_else(|_| std::env::var("AI_API_KEY"))
-            .or_else(|_| std::env::var("OPENAI_API_KEY"))
-            .ok();
-
-        if let Some(api_key) = gemini_key {
-            if !api_key.trim().is_empty() {
-                match Self::call_gemini_api(&api_key, query, conversation_history).await {
-                    Ok(ai_reply) => {
-                        info!(sender = %sender_jid, "AI successfully generated response for WhatsApp");
-                        return ai_reply;
-                    }
-                    Err(e) => {
-                        warn!(
-                            sender = %sender_jid,
-                            error = %e,
-                            "AI request failed or timed out, using structured fallback"
-                        );
-                    }
-                }
-            }
-        }
-
-        // Robust Structured Fallback
-        Self::format_fallback_message(query)
-    }
-
-    /// Calls Gemini REST API expecting a structured JSON response.
-    async fn call_gemini_api(
-        api_key: &str,
-        query: &str,
-        _history: &[crate::modules::whatsapp::repository::WhatsAppInboundRow],
-    ) -> Result<String, anyhow::Error> {
-        let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={}",
-            api_key
-        );
-
-        let system_instruction = "You are ERAVAYA ERP's smart school WhatsApp assistant. \
-Respond in concise, helpful plain text suitable for WhatsApp (you may use *bold* or _italics_). \
-Always return your output as valid JSON with format: {\"reply\": \"<your response message>\", \"intent\": \"<query_category>\"}.";
-
-        let body = serde_json::json!({
-            "system_instruction": {
-                "parts": [{ "text": system_instruction }]
-            },
-            "contents": [{
-                "parts": [{ "text": query }]
-            }],
-            "generationConfig": {
-                "response_mime_type": "application/json",
-                "temperature": 0.4,
-                "maxOutputTokens": 300
-            }
-        });
-
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(6))
-            .build()?;
-
-        let res = client.post(&url).json(&body).send().await?;
-        if !res.status().is_success() {
-            let status = res.status();
-            let err_body = res.text().await.unwrap_or_default();
-            return Err(anyhow::anyhow!("Gemini API HTTP {status}: {err_body}"));
-        }
-
-        let resp_json: serde_json::Value = res.json().await?;
-        let text_candidate = resp_json["candidates"][0]["content"]["parts"][0]["text"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("Missing text in Gemini response"))?;
-
-        // Parse structured JSON returned by model
-        if let Ok(parsed) = serde_json::from_str::<AiResponsePayload>(text_candidate) {
-            if !parsed.reply.trim().is_empty() {
-                return Ok(parsed.reply);
-            }
-        }
-
-        // Direct text fallback if not matching JSON schema
-        Ok(text_candidate.to_string())
-    }
-
-    /// Formats the graceful fallback message when AI is unavailable or no key is configured.
-    pub fn format_fallback_message(query: &str) -> String {
-        let display_query = if query.len() > 60 {
-            format!("{}...", &query[..57])
-        } else {
-            query.to_string()
-        };
-
-        format!(
-            "🤖 *ERAVAYA ERP Assistant*\n\nThank you for reaching out! We received your query:\n_{}_\n\nOur automated system is processing your request. An administrator or staff member has also been notified.\n\nType *help* anytime to view the assistance menu.",
-            display_query
-        )
     }
 
     pub fn is_logout(text: &str) -> bool {
@@ -208,157 +116,6 @@ Always return your output as valid JSON with format: {\"reply\": \"<your respons
             || clean == "log out"
             || clean == "sign out"
             || clean == "6"
-    }
-
-    pub fn is_attendance(text: &str) -> bool {
-        let clean = text.trim().to_lowercase();
-        clean.contains("attendance")
-            || clean == "1"
-            || clean.contains("present")
-            || clean.contains("absent")
-    }
-
-    pub fn is_fees(text: &str) -> bool {
-        let clean = text.trim().to_lowercase();
-        clean.contains("fee")
-            || clean.contains("fees")
-            || clean.contains("due")
-            || clean == "2"
-            || clean.contains("payment")
-    }
-
-    pub fn is_exams(text: &str) -> bool {
-        let clean = text.trim().to_lowercase();
-        clean.contains("exam")
-            || clean.contains("marks")
-            || clean.contains("result")
-            || clean == "3"
-            || clean.contains("grade")
-    }
-
-    pub fn is_timetable(text: &str) -> bool {
-        let clean = text.trim().to_lowercase();
-        clean.contains("timetable")
-            || clean.contains("schedule")
-            || clean.contains("routine")
-            || clean == "4"
-            || clean.contains("period")
-    }
-
-    pub fn is_profile(text: &str) -> bool {
-        let clean = text.trim().to_lowercase();
-        clean.contains("profile")
-            || clean.contains("account")
-            || clean.contains("who am i")
-            || clean == "5"
-            || clean.contains("my details")
-    }
-
-    pub fn is_admission_intent(text: &str) -> bool {
-        let clean = text.trim().to_lowercase();
-        clean.contains("admission")
-            || clean.contains("admissions")
-            || clean.contains("apply")
-            || clean.contains("enrol")
-            || clean.contains("enroll")
-            || clean.contains("intake")
-            || clean.contains("new student")
-            || clean.contains("register child")
-    }
-
-    pub async fn handle_admission_inquiry(pool: &PgPool) -> Vec<String> {
-        let app_url = std::env::var("APP_URL")
-            .unwrap_or_else(|_| "https://my-frontend-kappa-five.vercel.app".to_string());
-        let clean_url = app_url.trim_end_matches('/');
-        let apply_link = format!("{clean_url}/admissions/apply");
-
-        // 1. Resolve primary active school
-        let school_row = sqlx::query_as::<_, (Uuid, String)>(
-            "SELECT id, name FROM schools WHERE status = 'ACTIVE' ORDER BY created_at ASC LIMIT 1",
-        )
-        .fetch_optional(pool)
-        .await
-        .ok()
-        .flatten();
-
-        let (school_id, school_name) = match school_row {
-            Some((id, name)) => (id, name),
-            None => (Uuid::nil(), "ERAVAYA School".to_string()),
-        };
-
-        // 2. Fetch admission settings from school_settings
-        let setting_val = sqlx::query_scalar::<_, serde_json::Value>(
-            "SELECT value FROM school_settings WHERE school_id = $1 AND key = 'admission_settings'",
-        )
-        .bind(school_id)
-        .fetch_optional(pool)
-        .await
-        .ok()
-        .flatten();
-
-        let current_year = Utc::now().date_naive().year();
-        let default_ay = format!("{}-{}", current_year, current_year + 1);
-
-        let (is_open, open_date, close_date, ay_name) = if let Some(val) = setting_val {
-            let open_d = val["open_date"]
-                .as_str()
-                .unwrap_or("2026-01-01")
-                .to_string();
-            let close_d = val["close_date"]
-                .as_str()
-                .unwrap_or("2026-12-31")
-                .to_string();
-            let ay = val["academic_year_name"]
-                .as_str()
-                .unwrap_or(&default_ay)
-                .to_string();
-
-            let today = Utc::now().date_naive();
-            let in_date = match (
-                chrono::NaiveDate::parse_from_str(&open_d, "%Y-%m-%d"),
-                chrono::NaiveDate::parse_from_str(&close_d, "%Y-%m-%d"),
-            ) {
-                (Ok(o), Ok(c)) => today >= o && today <= c,
-                _ => true,
-            };
-
-            (in_date, open_d, close_d, ay)
-        } else {
-            (
-                true,
-                format!("{current_year}-01-01"),
-                format!("{current_year}-12-31"),
-                default_ay,
-            )
-        };
-
-        if is_open {
-            vec![
-                format!(
-                    "🎓 *Welcome to ERAVAYA Admissions!*\n\n\
-                    Admissions for *{school_name}* are officially *OPEN* for the Academic Year *{ay_name}*.\n\n\
-                    We warmly welcome prospective students and parents. Please access our online admission portal below:"
-                ),
-                apply_link,
-                "📋 *How to Complete Your Application*:\n\
-                1️⃣ Verify your *Mobile Phone* via WhatsApp OTP.\n\
-                2️⃣ Verify your *Email Address* via Email OTP.\n\
-                3️⃣ Enter Applicant (Student) & Guardian details.\n\
-                4️⃣ Fill in school-specific questions & documents.\n\
-                5️⃣ Complete the security captcha & submit.\n\n\
-                Your unique *Application Number* will be generated instantly upon submission!".to_string(),
-            ]
-        } else {
-            vec![format!(
-                "ℹ️ *ERAVAYA Admissions Notice*\n\n\
-                Admissions for *{school_name}* are currently *CLOSED*.\n\n\
-                📅 *Intake Window*:\n\
-                • Opens On: *{open_date}*\n\
-                • Closes On: *{close_date}*\n\
-                • Academic Year: *{ay_name}*\n\n\
-                For special inquiries or upcoming admissions, please contact the school administrative desk."
-            )]
-        }
     }
 
     pub fn format_unregistered_invitation(_token: &str, _phone: &str) -> (String, String) {
@@ -403,12 +160,24 @@ Always return your output as valid JSON with format: {\"reply\": \"<your respons
         (intro, login_link)
     }
 
+    /// Formats the authenticated menu customized by role:
+    /// - Student / Parent: "1️⃣ Attendance - View your attendance record & standing"
+    /// - Teacher: "1️⃣ Attendance - Record & mark daily class attendance"
+    /// - Admin: "1️⃣ Attendance - View school-wide attendance overview"
     pub fn format_authenticated_menu(context: &WhatsAppUserContext) -> String {
         let name = context.display_name.as_deref().unwrap_or("User");
+        let attendance_item = if context.is_teacher() {
+            "1️⃣ *Attendance* - Record & mark daily class attendance"
+        } else if context.is_student_or_parent() {
+            "1️⃣ *Attendance* - View your attendance record & standing"
+        } else {
+            "1️⃣ *Attendance* - View school-wide attendance overview"
+        };
+
         format!(
             "📋 *ERAVAYA ERP Menu*\n\
             👤 *Account*: {name} (*{}*)\n\n\
-            1️⃣ *Attendance* - View attendance report & percentages\n\
+            {attendance_item}\n\
             2️⃣ *Fees* - View pending dues, fee breakdown & receipts\n\
             3️⃣ *Exams* - Check upcoming exam schedules & results\n\
             4️⃣ *Timetable* - View today's classes and schedule\n\
@@ -417,79 +186,6 @@ Always return your output as valid JSON with format: {\"reply\": \"<your respons
             💡 You can also ask directly:\n\
             _e.g., \"What are my fee dues for this term?\"_",
             context.role
-        )
-    }
-
-    async fn handle_attendance_query(_pool: &PgPool, context: &WhatsAppUserContext) -> String {
-        let name = context.display_name.as_deref().unwrap_or("Student");
-        format!(
-            "📊 *Attendance Summary for {name}*\n\n\
-            📅 *Academic Term*: 2026-2027\n\
-            🟢 *Present*: 88 days\n\
-            🔴 *Absent*: 4 days\n\
-            📈 *Overall Attendance*: *95.6%* (Good Standing)\n\n\
-            _Status: Verified. No attendance penalties or warnings apply._"
-        )
-    }
-
-    async fn handle_fees_query(_pool: &PgPool, context: &WhatsAppUserContext) -> String {
-        let name = context.display_name.as_deref().unwrap_or("Student");
-        format!(
-            "💳 *Fee Details for {name}*\n\n\
-            🏷️ *Current Term*: Term II (2026-2027)\n\
-            ✅ *Total Paid*: ₹25,000\n\
-            ⏳ *Pending Dues*: ₹0.00 (All dues cleared! 🎉)\n\
-            🧾 *Last Receipt*: #REC-2026-0988 (Paid on-time)\n\n\
-            _Thank you for keeping your fee payments up to date._"
-        )
-    }
-
-    async fn handle_timetable_query(_pool: &PgPool, _context: &WhatsAppUserContext) -> String {
-        format!(
-            "📅 *Today's Timetable*\n\n\
-            1️⃣ 09:00 AM - 09:45 AM: *Mathematics* (Room 204)\n\
-            2️⃣ 09:45 AM - 10:30 AM: *Physics* (Science Lab A)\n\
-            ☕ 10:30 AM - 10:45 AM: _Morning Break_\n\
-            3️⃣ 10:45 AM - 11:30 AM: *English Literature* (Room 204)\n\
-            4️⃣ 11:30 AM - 12:15 PM: *Computer Science* (IT Lab)\n\
-            🍽️ 12:15 PM - 01:00 PM: _Lunch Break_\n\
-            5️⃣ 01:00 PM - 01:45 PM: *Social Science* (Room 204)\n\
-            6️⃣ 01:45 PM - 02:30 PM: *Physical Education* (Ground)"
-        )
-    }
-
-    async fn handle_exams_query(_pool: &PgPool, _context: &WhatsAppUserContext) -> String {
-        format!(
-            "📝 *Exam Schedule & Updates*\n\n\
-            📌 *Upcoming*: Mid-Term Examinations (Nov 2026)\n\
-            - 10 Nov: Mathematics (09:30 AM - 12:30 PM)\n\
-            - 12 Nov: Science (09:30 AM - 12:30 PM)\n\
-            - 14 Nov: Social Studies (09:30 AM - 12:30 PM)\n\
-            - 17 Nov: English (09:30 AM - 12:30 PM)\n\n\
-            _Admit cards will be distributed next week._"
-        )
-    }
-
-    async fn handle_profile_query(
-        _pool: &PgPool,
-        context: &WhatsAppUserContext,
-        session: &crate::modules::whatsapp::repository::WhatsAppUserSessionRow,
-    ) -> String {
-        let name = context.display_name.as_deref().unwrap_or("User");
-        let expires_formatted = session.expires_at.format("%d %b %Y, %H:%M UTC").to_string();
-        let cap_count = context.capabilities.len();
-
-        format!(
-            "👤 *Account Profile & Capabilities*\n\n\
-            🏷️ *Name*: {name}\n\
-            📱 *Phone*: {}\n\
-            🛡️ *Role*: *{}*\n\
-            🏫 *School ID*: {}\n\
-            🔑 *Session ID*: `{}`\n\
-            ⏳ *Session Valid Until*: {expires_formatted}\n\
-            📋 *Authorized Capabilities*: {cap_count} active\n\n\
-            _Type *logout* anytime to revoke this session._",
-            context.phone, context.role, context.school_id, session.id
         )
     }
 
@@ -533,9 +229,9 @@ Always return your output as valid JSON with format: {\"reply\": \"<your respons
         };
 
         // 0. Check for admission inquiries (publicly accessible to prospective parents/students without prior ERP login)
-        if Self::is_admission_intent(trimmed) {
+        if menus::admissions::is_admission_intent(trimmed) {
             info!(sender = %sender_jid, "Handling admission inquiry from WhatsApp user");
-            return Self::handle_admission_inquiry(pool).await;
+            return menus::admissions::handle_admission_inquiry(pool).await;
         }
 
         // 1. Check if the incoming message is a link token from ERAVAYA ERP (e.g. "ERA-123456")
@@ -689,6 +385,36 @@ Always return your output as valid JSON with format: {\"reply\": \"<your respons
                     display_name: session.display_name.clone(),
                 };
 
+                // 0. Check if user is currently inside an active multi-step interactive workflow (e.g. attendance marking)
+                if let Ok(Some((state_type, payload))) =
+                    WhatsAppRepository::get_conversation_state(pool, session.id).await
+                {
+                    if Self::is_logout(trimmed)
+                        || trimmed.eq_ignore_ascii_case("cancel")
+                        || trimmed.eq_ignore_ascii_case("exit")
+                        || trimmed.eq_ignore_ascii_case("abort")
+                    {
+                        let _ =
+                            WhatsAppRepository::clear_conversation_state(pool, session.id).await;
+                        info!(sender = %sender_jid, "User cancelled interactive WhatsApp conversation");
+                        return vec![
+                            "❌ *Attendance Cancelled*\n\nAttendance recording has been cancelled. Send *help* to view the menu.".to_string(),
+                        ];
+                    }
+
+                    info!(sender = %sender_jid, state = %state_type, "Handling interactive WhatsApp conversation step");
+                    return vec![
+                        menus::attendance::handle_attendance_conversation_step(
+                            pool,
+                            &context,
+                            trimmed,
+                            &state_type,
+                            &payload,
+                        )
+                        .await,
+                    ];
+                }
+
                 // Check intent with capability authorization
                 if Self::is_logout(trimmed) {
                     let _ = WhatsAppRepository::terminate_session(pool, sender_jid).await;
@@ -709,18 +435,32 @@ Always return your output as valid JSON with format: {\"reply\": \"<your respons
                     )];
                 }
 
-                if Self::is_attendance(trimmed) {
-                    if !context.has_capability("academics:view") {
+                // Explicit "take attendance" / "mark attendance" request
+                if menus::attendance::is_take_attendance(trimmed) {
+                    if !context.has_capability("academics:view") && !context.is_teacher() {
+                        warn!(sender = %sender_jid, role = %context.role, "Blocked attendance: missing academics:view capability");
+                        return vec![format!(
+                            "🚫 *Permission Denied*\n\nYour account role (*{}*) does not have permission to mark attendance.",
+                            context.role
+                        )];
+                    }
+                    return vec![menus::attendance::start_attendance_flow(pool, &context).await];
+                }
+
+                // 1️⃣ Attendance Menu
+                if menus::attendance::is_attendance(trimmed) {
+                    if !context.has_capability("academics:view") && !context.is_teacher() {
                         warn!(sender = %sender_jid, role = %context.role, "Blocked attendance: missing academics:view capability");
                         return vec![format!(
                             "🚫 *Permission Denied*\n\nYour account role (*{}*) does not have the *academics:view* capability to view attendance.",
                             context.role
                         )];
                     }
-                    return vec![Self::handle_attendance_query(pool, &context).await];
+                    return vec![menus::attendance::handle_attendance_query(pool, &context).await];
                 }
 
-                if Self::is_fees(trimmed) {
+                // 2️⃣ Fees Menu
+                if menus::fees::is_fees(trimmed) {
                     if !context.has_capability("finance:view_fees") {
                         warn!(sender = %sender_jid, role = %context.role, "Blocked fees: missing finance:view_fees capability");
                         return vec![format!(
@@ -728,31 +468,36 @@ Always return your output as valid JSON with format: {\"reply\": \"<your respons
                             context.role
                         )];
                     }
-                    return vec![Self::handle_fees_query(pool, &context).await];
+                    return vec![menus::fees::handle_fees_query(pool, &context).await];
                 }
 
-                if Self::is_timetable(trimmed) {
+                // 3️⃣ Timetable Menu
+                if menus::timetable::is_timetable(trimmed) {
                     if !context.has_capability("academics:view") {
                         return vec![format!(
                             "🚫 *Permission Denied*\n\nYour account role (*{}*) does not have permission to view timetables.",
                             context.role
                         )];
                     }
-                    return vec![Self::handle_timetable_query(pool, &context).await];
+                    return vec![menus::timetable::handle_timetable_query(pool, &context).await];
                 }
 
-                if Self::is_exams(trimmed) {
+                // 4️⃣ Exams Menu
+                if menus::exams::is_exams(trimmed) {
                     if !context.has_capability("academics:view") {
                         return vec![format!(
                             "🚫 *Permission Denied*\n\nYour account role (*{}*) does not have permission to view exam schedules.",
                             context.role
                         )];
                     }
-                    return vec![Self::handle_exams_query(pool, &context).await];
+                    return vec![menus::exams::handle_exams_query(pool, &context).await];
                 }
 
-                if Self::is_profile(trimmed) {
-                    return vec![Self::handle_profile_query(pool, &context, &session).await];
+                // 5️⃣ Profile Menu
+                if menus::profile::is_profile(trimmed) {
+                    return vec![
+                        menus::profile::handle_profile_query(pool, &context, &session).await,
+                    ];
                 }
 
                 // Conversational query -> Route to AI / Fallback
@@ -760,12 +505,13 @@ Always return your output as valid JSON with format: {\"reply\": \"<your respons
                     .await
                     .unwrap_or_default();
                 info!(sender = %sender_jid, role = %context.role, query = %trimmed, "Routing authorized WhatsApp query to AI/Fallback");
-                vec![Self::connect_to_ai(sender_jid, trimmed, &history).await]
+                vec![menus::ai::connect_to_ai(sender_jid, trimmed, &history).await]
             }
         }
     }
 
     /// Evaluates user intent and forms the reply string.
+    #[allow(dead_code)]
     pub async fn generate_reply_text(
         pool: &PgPool,
         sender_jid: &str,
@@ -855,7 +601,7 @@ mod tests {
 
     #[test]
     fn test_fallback_message_content() {
-        let fallback = WhatsAppMessageService::format_fallback_message("Check my exam dates");
+        let fallback = menus::ai::format_fallback_message("Check my exam dates");
         assert!(fallback.contains("ERAVAYA ERP Assistant"));
         assert!(fallback.contains("Check my exam dates"));
         assert!(fallback.contains("help"));

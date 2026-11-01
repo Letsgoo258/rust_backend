@@ -174,5 +174,49 @@ pub fn catalogue() -> Vec<(&'static str, &'static str, &'static str, &'static st
             "School Administration",
             "Create, download, and restore school database backups",
         ),
+
+        // 10. Attendance Subsystem
+        (
+            "attendance:view",
+            "View Attendance",
+            "Attendance",
+            "View school attendance registers, reports, and student attendance statistics",
+        ),
+        (
+            "attendance:record",
+            "Record Daily/Period Attendance",
+            "Attendance",
+            "Record and submit class roll-call and period attendance (Teachers only)",
+        ),
+        (
+            "attendance:edit_class",
+            "Class Teacher Attendance Edit",
+            "Attendance",
+            "Edit attendance for designated class section within un-frozen period",
+        ),
+        (
+            "attendance:edit_subject",
+            "Subject Teacher Attendance Edit",
+            "Attendance",
+            "Edit attendance for designated subject period within un-frozen period",
+        ),
+        (
+            "attendance:bulk_edit",
+            "Administrative Bulk Edit Attendance",
+            "Attendance",
+            "School Admin bulk edit or correction of attendance across classes with mandatory justification",
+        ),
+        (
+            "attendance:manage_config",
+            "Manage Attendance Freezing & Policies",
+            "Attendance",
+            "Configure cutoff times, freezing duration, and collision policies",
+        ),
+        (
+            "attendance:resolve_tickets",
+            "Resolve Attendance Collision Tickets",
+            "Attendance",
+            "Review, approve, or resolve attendance collision and deadlock tickets",
+        ),
     ]
 }

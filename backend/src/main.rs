@@ -65,20 +65,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(modules::auth::worker::run_login_security_worker(
         pool.clone(),
     ));
+    modules::academic::timetable::start_daily_timetable_worker(pool.clone());
 
     // Create App State
     let state = AppState::new(pool, config.clone());
 
     // Initialize in-process WhatsApp Service (restores session if exists, starts queue consumer)
-    let wa_config = utils::whatsapp::WhatsAppConfig::new(state.db.clone());
-    match utils::whatsapp::WhatsAppService::start(wa_config).await {
-        Ok(wa_service) => {
-            let wa_arc = std::sync::Arc::new(wa_service);
-            *state.whatsapp.write().await = Some(wa_arc);
-            tracing::info!("In-process WhatsApp service initialized on boot");
-        }
-        Err(e) => {
-            tracing::warn!("WhatsApp service not started on boot: {e:#}");
+    if utils::whatsapp::is_localhost_or_dev() {
+        tracing::info!("WhatsApp live bot service disabled on localhost/development to avoid multi-instance session conflict with cloud container.");
+    } else {
+        let wa_config = utils::whatsapp::WhatsAppConfig::new(state.db.clone());
+        match utils::whatsapp::WhatsAppService::start(wa_config).await {
+            Ok(wa_service) => {
+                let wa_arc = std::sync::Arc::new(wa_service);
+                *state.whatsapp.write().await = Some(wa_arc);
+                tracing::info!("In-process WhatsApp service initialized on boot");
+            }
+            Err(e) => {
+                tracing::warn!("WhatsApp service not started on boot: {e:#}");
+            }
         }
     }
 

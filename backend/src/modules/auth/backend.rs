@@ -94,7 +94,10 @@ impl User {
     pub fn is_school_admin(&self) -> bool {
         self.roles.iter().any(|r| {
             let r_upper = r.to_uppercase();
-            r_upper == "SCHOOL_ADMIN" || r_upper == "HEADMASTER" || r_upper == "PRINCIPAL"
+            r_upper == "SUPER_ADMIN"
+                || r_upper == "SCHOOL_ADMIN"
+                || r_upper == "HEADMASTER"
+                || r_upper == "PRINCIPAL"
         })
     }
 
@@ -296,6 +299,7 @@ impl AuthnBackend for Backend {
         &self,
         creds: Self::Credentials,
     ) -> Result<Option<Self::User>, Self::Error> {
+        let clean_identifier = creds.username.trim();
         let row = sqlx::query_as::<_, DbUserRow>(
             r#"
             SELECT
@@ -314,12 +318,16 @@ impl AuthnBackend for Backend {
             JOIN schools s ON u.school_id = s.id
             LEFT JOIN user_roles ur ON ur.user_id = u.id
             LEFT JOIN roles r ON ur.role_id = r.id
-            WHERE (u.username = $1 OR u.email = $1) AND u.status = 'ACTIVE' AND s.status IN ('ACTIVE', 'PENDING_SETUP')
+            WHERE (
+                u.username = $1
+                OR LOWER(TRIM(u.username)) = LOWER($1)
+                OR LOWER(TRIM(u.email)) = LOWER($1)
+            ) AND u.status = 'ACTIVE' AND s.status IN ('ACTIVE', 'PENDING_SETUP')
             GROUP BY u.id, u.school_id, u.username, u.password_hash, u.display_name, u.email_verified, u.phone_verified, s.status, s.operable, s.onboarding_step
             LIMIT 1
             "#
         )
-        .bind(&creds.username)
+        .bind(clean_identifier)
         .fetch_optional(&self.db)
         .await
         .unwrap_or(None);

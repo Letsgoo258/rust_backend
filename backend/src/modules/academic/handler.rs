@@ -263,6 +263,7 @@ pub struct UpdateSubjectPayload {
     pub department: Option<String>,
     pub description: Option<String>,
     pub class_id: Option<uuid::Uuid>,
+    pub status: Option<String>,
 }
 
 #[tracing::instrument(err, skip(state, auth_session, payload))]
@@ -285,6 +286,7 @@ pub async fn update_subject(
     let code = payload.code.trim().to_uppercase();
     let name = payload.name.trim();
     let sys_type = payload.system_subject_type.as_deref().unwrap_or("Core");
+    let status = payload.status.as_deref().map(|s| s.trim().to_uppercase());
 
     let updated = AcademicRepository::update_subject(
         &state.db,
@@ -298,6 +300,7 @@ pub async fn update_subject(
         payload.department.as_deref(),
         payload.description.as_deref(),
         payload.class_id,
+        status.as_deref(),
     )
     .await?;
 
@@ -932,11 +935,17 @@ pub async fn get_my_class(
     let is_class_teacher = user
         .roles
         .iter()
-        .any(|r| r.eq_ignore_ascii_case("CLASS_TEACHER"));
+        .any(|r| r.eq_ignore_ascii_case("CLASS_TEACHER"))
+        || user.is_class_teacher
+        || user.is_school_admin()
+        || user
+            .roles
+            .iter()
+            .any(|r| r.eq_ignore_ascii_case("SUPER_ADMIN"));
 
     if !is_class_teacher {
         return Err(AppError::Forbidden(
-            "Access denied: My Class is strictly reserved for users with the CLASS_TEACHER role."
+            "Access denied: My Class is strictly reserved for users with the CLASS_TEACHER role or assigned Class Teachers."
                 .into(),
         ));
     }

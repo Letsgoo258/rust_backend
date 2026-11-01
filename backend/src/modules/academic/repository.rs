@@ -39,6 +39,7 @@ pub struct SubjectRow {
     pub description: Option<String>,
     pub class_id: Option<Uuid>,
     pub class_name: Option<String>,
+    pub status: String,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -621,7 +622,7 @@ impl AcademicRepository {
                 cs.capacity,
                 cs.class_teacher_staff_id,
                 COALESCE(NULLIF(u_staff.display_name, ''), u_staff.username, NULLIF(u_direct.display_name, ''), u_direct.username) as class_teacher_name,
-                COUNT(DISTINCT e.student_id)::BIGINT as enrolled_count
+                COUNT(DISTINCT COALESCE(u.id, e.student_id))::BIGINT as enrolled_count
             FROM class_sections cs
             JOIN classes c ON cs.class_id = c.id
             JOIN sections s ON cs.section_id = s.id
@@ -629,6 +630,7 @@ impl AcademicRepository {
             LEFT JOIN staff st ON cs.class_teacher_staff_id = st.id
             LEFT JOIN users u_staff ON st.user_id = u_staff.id
             LEFT JOIN users u_direct ON cs.class_teacher_staff_id = u_direct.id
+            LEFT JOIN users u ON u.class_section_id = cs.id AND u.status = 'ACTIVE'
             LEFT JOIN enrollments e ON e.class_section_id = cs.id AND e.status = 'ACTIVE'
             WHERE c.school_id = $1 AND ay.status = 'ACTIVE'
             GROUP BY cs.id, c.id, c.name, c.code, s.id, s.name, s.code, cs.capacity, cs.class_teacher_staff_id, u_staff.display_name, u_staff.username, u_direct.display_name, u_direct.username
@@ -682,9 +684,7 @@ impl AcademicRepository {
         let pending_enrollments: i64 = sqlx::query_scalar(
             r#"
             SELECT COUNT(*) FROM users u
-            WHERE u.school_id = $1 AND u.admission_number IS NOT NULL AND NOT EXISTS (
-                SELECT 1 FROM enrollments e WHERE e.student_id = u.id AND e.status = 'ACTIVE'
-            )
+            WHERE u.school_id = $1 AND u.admission_number IS NOT NULL AND u.class_section_id IS NULL
             "#,
         )
         .bind(school_id)
@@ -693,7 +693,13 @@ impl AcademicRepository {
         .unwrap_or(0);
 
         let total_staff: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM users WHERE school_id = $1 AND ('TEACHER' = ANY(roles) OR 'SCHOOL_ADMIN' = ANY(roles) OR 'STAFF' = ANY(roles))"
+            r#"
+            SELECT COUNT(DISTINCT u.id)
+            FROM users u
+            JOIN user_roles ur ON ur.user_id = u.id
+            JOIN roles r ON ur.role_id = r.id
+            WHERE u.school_id = $1 AND r.code IN ('TEACHER', 'CLASS_TEACHER', 'SCHOOL_ADMIN', 'STAFF', 'HEADMASTER', 'PRINCIPAL')
+            "#,
         )
         .bind(school_id)
         .fetch_one(pool)
@@ -714,7 +720,8 @@ impl AcademicRepository {
             SELECT s.id, s.name, s.code, s.subject_type,
                    COALESCE(s.system_subject_type, 'Core') as system_subject_type,
                    s.subject_type_id, s.color, s.department, s.description,
-                   s.class_id, c.name as class_name
+                   s.class_id, c.name as class_name,
+                   COALESCE(s.status, 'ACTIVE') as status
             FROM subjects s
             LEFT JOIN classes c ON s.class_id = c.id
             WHERE s.school_id = $1 AND s.status != 'DELETED'
@@ -739,6 +746,7 @@ impl AcademicRepository {
                 description: r.get("description"),
                 class_id: r.get("class_id"),
                 class_name: r.get("class_name"),
+                status: r.get("status"),
             })
             .collect();
 
@@ -757,6 +765,7 @@ impl AcademicRepository {
         department: Option<&str>,
         description: Option<&str>,
         class_id: Option<Uuid>,
+        status: Option<&str>,
     ) -> Result<bool, AppError> {
         let res = sqlx::query(
             r#"
@@ -769,8 +778,9 @@ impl AcademicRepository {
                 department = $6,
                 description = $7,
                 class_id = $8,
+                status = COALESCE($9, status, 'ACTIVE'),
                 updated_at = NOW()
-            WHERE id = $9 AND school_id = $10
+            WHERE id = $10 AND school_id = $11
             "#,
         )
         .bind(name)
@@ -781,6 +791,7 @@ impl AcademicRepository {
         .bind(department)
         .bind(description)
         .bind(class_id)
+        .bind(status)
         .bind(subject_id)
         .bind(school_id)
         .execute(pool)
@@ -1094,15 +1105,23 @@ impl AcademicRepository {
                 u.username,
                 COALESCE(NULLIF(u.display_name, ''), NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), ''), u.username) as display_name,
                 u.admission_number,
-                e.roll_number,
+                COALESCE((
+                    SELECT e.roll_number 
+                    FROM enrollments e 
+                    WHERE e.student_id = u.id AND (e.class_section_id = $1 OR e.class_section_id = u.class_section_id)
+                    ORDER BY e.created_at DESC LIMIT 1
+                ), u.admission_number, '') as roll_number,
                 u.status::TEXT as status,
                 u.gender,
                 u.email,
                 u.phone
-            FROM enrollments e
-            JOIN users u ON u.id = e.student_id
-            WHERE e.class_section_id = $1 AND e.status = 'ACTIVE' AND u.school_id = $2
-            ORDER BY COALESCE(NULLIF(e.roll_number, ''), '999999'), u.first_name, u.last_name
+            FROM users u
+            WHERE (u.class_section_id = $1 OR EXISTS (
+                SELECT 1 FROM enrollments e WHERE e.student_id = u.id AND e.class_section_id = $1
+            ))
+              AND u.school_id = $2
+              AND u.status = 'ACTIVE'
+            ORDER BY COALESCE(NULLIF(u.admission_number, ''), '999999'), u.first_name, u.last_name
             "#,
         )
         .bind(class_section_id)
@@ -1227,10 +1246,69 @@ impl AcademicRepository {
             vec![]
         };
 
+        let guardians: Vec<ClassGuardianRow> = if let Some(ref _sec) = current_class {
+            let student_ids: Vec<Uuid> = students.iter().map(|s| s.id).collect();
+            if !student_ids.is_empty() {
+                sqlx::query_as::<_, ClassGuardianRow>(
+                    r#"
+                    SELECT
+                        sg.student_id,
+                        g.id as guardian_id,
+                        COALESCE(NULLIF(TRIM(CONCAT(g.first_name, ' ', g.last_name)), ''), 'Parent') as guardian_name,
+                        g.phone,
+                        g.email,
+                        COALESCE(sg.relationship, 'GUARDIAN') as relationship,
+                        COALESCE(sg.is_primary, false) as is_primary
+                    FROM student_guardians sg
+                    JOIN guardians g ON sg.guardian_id = g.id
+                    WHERE sg.student_id = ANY($1)
+                    ORDER BY g.first_name, g.last_name
+                    "#,
+                )
+                .bind(&student_ids)
+                .fetch_all(pool)
+                .await
+                .unwrap_or_default()
+            } else {
+                vec![]
+            }
+        } else {
+            vec![]
+        };
+
+        let subjects: Vec<ClassSubjectRow> = if let Some(ref sec) = current_class {
+            sqlx::query_as::<_, ClassSubjectRow>(
+                r#"
+                SELECT
+                    s.id as subject_id,
+                    s.name as subject_name,
+                    s.code as subject_code,
+                    st.id as teacher_staff_id,
+                    COALESCE(u.display_name, u.username, 'Assigned Faculty') as teacher_name,
+                    COUNT(ts.id)::int as weekly_periods
+                FROM timetable_slots ts
+                JOIN subjects s ON ts.subject_id = s.id
+                LEFT JOIN staff st ON ts.teacher_staff_id = st.id
+                LEFT JOIN users u ON st.user_id = u.id
+                WHERE ts.class_section_id = $1
+                GROUP BY s.id, s.name, s.code, st.id, u.display_name, u.username
+                ORDER BY s.name
+                "#,
+            )
+            .bind(sec.class_section_id)
+            .fetch_all(pool)
+            .await
+            .unwrap_or_default()
+        } else {
+            vec![]
+        };
+
         Ok(MyClassResponse {
             current_class,
             available_classes: assigned_classes,
             students,
+            guardians,
+            subjects,
         })
     }
 }
@@ -1257,9 +1335,32 @@ pub struct MyClassSectionInfo {
     pub class_teacher_name: Option<String>,
 }
 
+#[derive(Debug, serde::Serialize, sqlx::FromRow, Clone)]
+pub struct ClassGuardianRow {
+    pub student_id: Uuid,
+    pub guardian_id: Uuid,
+    pub guardian_name: String,
+    pub phone: Option<String>,
+    pub email: Option<String>,
+    pub relationship: String,
+    pub is_primary: bool,
+}
+
+#[derive(Debug, serde::Serialize, sqlx::FromRow, Clone)]
+pub struct ClassSubjectRow {
+    pub subject_id: Uuid,
+    pub subject_name: String,
+    pub subject_code: String,
+    pub teacher_staff_id: Option<Uuid>,
+    pub teacher_name: String,
+    pub weekly_periods: i32,
+}
+
 #[derive(Debug, serde::Serialize)]
 pub struct MyClassResponse {
     pub current_class: Option<MyClassSectionInfo>,
     pub available_classes: Vec<MyClassSectionInfo>,
     pub students: Vec<SectionStudentRow>,
+    pub guardians: Vec<ClassGuardianRow>,
+    pub subjects: Vec<ClassSubjectRow>,
 }

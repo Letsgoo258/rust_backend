@@ -58,6 +58,9 @@ pub async fn init_pool(config: &AppConfig) -> Result<PgPool, sqlx::Error> {
             ALTER TABLE enrollments ADD CONSTRAINT enrollments_class_section_id_fkey
                 FOREIGN KEY (class_section_id) REFERENCES class_sections(id) ON DELETE CASCADE ON UPDATE CASCADE;
 
+            -- Allow unassigned enrollments for admitted students prior to class division
+            ALTER TABLE enrollments ALTER COLUMN class_section_id DROP NOT NULL;
+
             -- Performance tweak: Make frontend_telemetry unlogged to avoid WAL overhead for high-volume analytics
             ALTER TABLE frontend_telemetry SET UNLOGGED;
 

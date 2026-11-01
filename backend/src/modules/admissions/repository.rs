@@ -100,6 +100,8 @@ impl AdmissionRepository {
         school_id: Uuid,
         admission_id: Uuid,
         user_id: Uuid,
+        class_section_id: Option<Uuid>,
+        roll_number: Option<&str>,
     ) -> Result<String, AppError> {
         let admission = sqlx::query(
             "SELECT status::text FROM admissions WHERE id = $1 AND school_id = $2 FOR UPDATE",
@@ -158,7 +160,9 @@ impl AdmissionRepository {
 
         let s_user_id: Uuid = sqlx::query_scalar(
             r#"INSERT INTO users (school_id, first_name, last_name, username, password_hash, status, imported_via_csv, updated_by_user_id, admission_number, date_of_birth, updated_at)
-               VALUES ($1, $2, $3, $4, $5, 'ACTIVE', false, $6, $7, $8, NOW()) RETURNING id"#,
+               VALUES ($1, $2, $3, $4, $5, 'ACTIVE', false, $6, $7, $8, NOW())
+               ON CONFLICT (school_id, username) DO UPDATE SET updated_at = NOW()
+               RETURNING id"#,
         )
         .bind(school_id)
         .bind(&applicant_first_name)
@@ -177,39 +181,84 @@ impl AdmissionRepository {
         let g_first = names.first().unwrap_or(&"Guardian");
         let g_last = names.get(1).unwrap_or(&"");
 
-        let g_username = format!("{}_{}", g_first.to_lowercase(), guardian_phone);
-        let g_user_id: Uuid = sqlx::query_scalar(
-            r#"INSERT INTO users (school_id, first_name, last_name, email, phone, username, password_hash, status, imported_via_csv, updated_by_user_id, updated_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACTIVE', false, $8, NOW()) RETURNING id"#,
+        let existing_g_user: Option<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM users WHERE school_id = $1 AND (phone = $2 OR (email IS NOT NULL AND LOWER(email) = LOWER($3))) LIMIT 1",
         )
         .bind(school_id)
-        .bind(g_first)
-        .bind(g_last)
-        .bind(&guardian_email)
         .bind(&guardian_phone)
-        .bind(&g_username)
-        .bind(&default_pass)
-        .bind(user_id)
-        .fetch_one(&mut *conn)
-        .await?;
+        .bind(&guardian_email)
+        .fetch_optional(&mut *conn)
+        .await
+        .ok()
+        .flatten();
+
+        let g_user_id = match existing_g_user {
+            Some(uid) => uid,
+            None => {
+                let g_username = format!(
+                    "g_{}_{}",
+                    g_first.to_lowercase().replace(' ', "_"),
+                    guardian_phone
+                        .replace('+', "")
+                        .chars()
+                        .take(10)
+                        .collect::<String>()
+                );
+                sqlx::query_scalar(
+                    r#"INSERT INTO users (school_id, first_name, last_name, email, phone, username, password_hash, status, imported_via_csv, updated_by_user_id, updated_at)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACTIVE', false, $8, NOW())
+                       ON CONFLICT (school_id, username) DO UPDATE SET
+                           email = COALESCE(EXCLUDED.email, users.email),
+                           phone = COALESCE(EXCLUDED.phone, users.phone),
+                           updated_at = NOW()
+                       RETURNING id"#,
+                )
+                .bind(school_id)
+                .bind(g_first)
+                .bind(g_last)
+                .bind(&guardian_email)
+                .bind(&guardian_phone)
+                .bind(&g_username)
+                .bind(&default_pass)
+                .bind(user_id)
+                .fetch_one(&mut *conn)
+                .await?
+            }
+        };
 
         crate::utils::roles::assign_user_role(&mut *conn, school_id, g_user_id, "PARENT").await?;
 
-        let guardian_record_id: Uuid = sqlx::query_scalar(
-            r#"INSERT INTO guardians (school_id, user_id, first_name, last_name, email, phone, updated_at)
-               VALUES ($1, $2, $3, $4, $5, $6, NOW()) RETURNING id"#,
+        let existing_g_record: Option<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM guardians WHERE school_id = $1 AND (user_id = $2 OR phone = $3) LIMIT 1",
         )
         .bind(school_id)
         .bind(g_user_id)
-        .bind(g_first)
-        .bind(g_last)
-        .bind(&guardian_email)
         .bind(&guardian_phone)
-        .fetch_one(&mut *conn)
-        .await?;
+        .fetch_optional(&mut *conn)
+        .await
+        .ok()
+        .flatten();
+
+        let guardian_record_id = match existing_g_record {
+            Some(gid) => gid,
+            None => {
+                sqlx::query_scalar(
+                    r#"INSERT INTO guardians (school_id, user_id, first_name, last_name, email, phone, updated_at)
+                       VALUES ($1, $2, $3, $4, $5, $6, NOW()) RETURNING id"#,
+                )
+                .bind(school_id)
+                .bind(g_user_id)
+                .bind(g_first)
+                .bind(g_last)
+                .bind(&guardian_email)
+                .bind(&guardian_phone)
+                .fetch_one(&mut *conn)
+                .await?
+            }
+        };
 
         sqlx::query(
-            r#"INSERT INTO student_guardians (student_id, guardian_id, relationship) VALUES ($1, $2, 'PARENT')"#,
+            r#"INSERT INTO student_guardians (student_id, guardian_id, relationship) VALUES ($1, $2, 'PARENT') ON CONFLICT DO NOTHING"#,
         )
         .bind(s_user_id)
         .bind(guardian_record_id)
@@ -225,6 +274,14 @@ impl AdmissionRepository {
         .execute(&mut *conn)
         .await?;
 
+        if let Some(csid) = class_section_id {
+            sqlx::query("UPDATE users SET class_section_id = $1 WHERE id = $2")
+                .bind(csid)
+                .bind(s_user_id)
+                .execute(&mut *conn)
+                .await?;
+        }
+
         let active_ay_id: Option<Uuid> = sqlx::query_scalar(
             "SELECT id FROM academic_years WHERE school_id = $1 AND status = 'ACTIVE' LIMIT 1",
         )
@@ -236,13 +293,18 @@ impl AdmissionRepository {
 
         if let Some(ay_id) = active_ay_id {
             sqlx::query(
-                r#"INSERT INTO enrollments (school_id, academic_year_id, student_id, status)
-                   VALUES ($1, $2, $3, 'ACTIVE')
-                   ON CONFLICT (student_id, academic_year_id) DO UPDATE SET status = 'ACTIVE'"#,
+                r#"INSERT INTO enrollments (student_id, academic_year_id, class_section_id, roll_number, status, enrollment_date, created_at, updated_at)
+                   VALUES ($1, $2, $3, $4, 'ACTIVE', CURRENT_DATE, NOW(), NOW())
+                   ON CONFLICT (student_id, academic_year_id) DO UPDATE SET
+                       class_section_id = COALESCE(EXCLUDED.class_section_id, enrollments.class_section_id),
+                       roll_number = COALESCE(EXCLUDED.roll_number, enrollments.roll_number),
+                       status = 'ACTIVE',
+                       updated_at = NOW()"#,
             )
-            .bind(school_id)
-            .bind(ay_id)
             .bind(s_user_id)
+            .bind(ay_id)
+            .bind(class_section_id)
+            .bind(roll_number)
             .execute(&mut *conn)
             .await?;
         }

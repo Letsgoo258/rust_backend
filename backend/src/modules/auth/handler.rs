@@ -116,7 +116,7 @@ pub async fn login(
     Json(payload): Json<LoginRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let creds = Credentials {
-        username: payload.username,
+        username: payload.username.trim().to_string(),
         password: payload.password,
     };
 
@@ -965,6 +965,8 @@ pub async fn request_verify_otp(
     );
 
     let target_email = user_data.email.unwrap_or_default();
+    let target_phone = norm_ph.clone();
+
     if !target_email.is_empty() {
         if let Err(e) = crate::utils::email::send_email(
             &target_email,
@@ -993,14 +995,41 @@ pub async fn request_verify_otp(
         );
     }
 
-    tracing::warn!("============================================================");
-    tracing::warn!("WHATSAPP OTP DISPATCHED TO TERMINAL");
-    tracing::warn!("USER: {}", user.username);
-    tracing::warn!("YOUR WHATSAPP VERIFICATION CODE IS: {}", phone_otp);
+    if !target_phone.is_empty() {
+        let clean_phone: String = target_phone
+            .chars()
+            .filter(|c| c.is_ascii_digit())
+            .collect();
+        if !clean_phone.is_empty() {
+            let jid = format!("{clean_phone}@s.whatsapp.net");
+            let wa_msg = format!(
+                "🔐 *ERAVAYA Account Verification*\n\nHello {},\nYour WhatsApp verification code is: *{}*\n\nThis code will expire in 15 minutes.",
+                user.username, phone_otp
+            );
+            let pool = state.db.clone();
+            tokio::spawn(async move {
+                if let Err(e) =
+                    crate::utils::whatsapp::send_urgent_whatsapp_message(&pool, &jid, &wa_msg, None)
+                        .await
+                {
+                    tracing::warn!(
+                        "Failed to dispatch WhatsApp verification OTP to {}: {}",
+                        clean_phone,
+                        e
+                    );
+                }
+            });
+        }
+    }
 
-    // For safety, also log the email one to the terminal in case email fails completely in dev
-    tracing::warn!("YOUR EMAIL VERIFICATION CODE IS: {}", email_otp);
-    tracing::warn!("============================================================");
+    println!("============================================================");
+    println!("🔐 [ACCOUNT VERIFICATION OTPS DISPATCHED]");
+    println!("User: {}", user.username);
+    println!("Email: {} -> Code: {}", target_email, email_otp);
+    if !target_phone.is_empty() {
+        println!("WhatsApp / Phone: {} -> Code: {}", target_phone, phone_otp);
+    }
+    println!("============================================================");
 
     Ok((
         axum::http::StatusCode::OK,
@@ -1016,7 +1045,7 @@ pub struct SubmitVerifyOtpRequest {
 
 #[tracing::instrument(err, skip(state, auth_session))]
 pub async fn submit_verify_otp(
-    auth_session: AuthSession,
+    mut auth_session: AuthSession,
     axum::extract::State(state): axum::extract::State<AppState>,
     axum::Json(payload): axum::Json<SubmitVerifyOtpRequest>,
 ) -> Result<impl axum::response::IntoResponse, AppError> {
@@ -1070,11 +1099,13 @@ pub async fn submit_verify_otp(
 
     sqlx::query!("UPDATE users SET email_verified = true, phone_verified = true, status = 'ACTIVE' WHERE id = $1", user.id).execute(&state.db).await?;
 
+    // Invalidate in-memory user cache so get_user_by_id loads freshly verified state
+    crate::modules::auth::backend::invalidate_user_cache(&user.id);
+
     if let Some(updated_user) =
         crate::modules::auth::backend::Backend::get_user_by_id(&state.db, user.id).await
     {
-        let mut session = auth_session;
-        session
+        auth_session
             .login(&updated_user)
             .await
             .map_err(|_| AppError::BadRequest("Failed to update session".into()))?;
@@ -1098,9 +1129,12 @@ pub async fn request_password_reset(
 ) -> Result<impl axum::response::IntoResponse, AppError> {
     let email = payload.email.trim().to_lowercase();
 
-    let user = sqlx::query!("SELECT id, username FROM users WHERE LOWER(email) = LOWER($1) AND status = 'ACTIVE' LIMIT 1", email)
-        .fetch_optional(&state.db)
-        .await?;
+    let user = sqlx::query!(
+        "SELECT id, username, phone FROM users WHERE LOWER(email) = LOWER($1) AND status NOT IN ('DELETED', 'SUSPENDED') LIMIT 1",
+        email
+    )
+    .fetch_optional(&state.db)
+    .await?;
 
     if let Some(user_record) = user {
         use argon2::password_hash::rand_core::{OsRng, RngCore};
@@ -1150,6 +1184,24 @@ pub async fn request_password_reset(
             }
         });
 
+        if let Some(ref phone) = user_record.phone {
+            let clean_phone: String = phone.chars().filter(|c| c.is_ascii_digit()).collect();
+            if !clean_phone.is_empty() {
+                let jid = format!("{clean_phone}@s.whatsapp.net");
+                let wa_msg = format!(
+                    "🔐 *ERAVAYA Password Reset*\n\nHello {},\nYour password reset code is: *{}*\n\nReset link: {}\n\nThis code will expire in 15 minutes.",
+                    user_record.username, code, reset_url
+                );
+                let pool = state.db.clone();
+                tokio::spawn(async move {
+                    let _ = crate::utils::whatsapp::send_urgent_whatsapp_message(
+                        &pool, &jid, &wa_msg, None,
+                    )
+                    .await;
+                });
+            }
+        }
+
         // Write CRITICAL password reset event directly to audit buffer
         crate::utils::audit::log_action(
             &state.db,
@@ -1169,6 +1221,17 @@ pub async fn request_password_reset(
         )
         .await
         .ok();
+
+        println!("============================================================");
+        println!("🔐 [FORGOT PASSWORD RESET REQUEST DISPATCHED]");
+        println!("Target Email: {}", email);
+        println!("User: {}", user_record.username);
+        println!("Verification Code (OTP): {}", code);
+        println!("Reset URL: {}", reset_url);
+        if let Some(ref ph) = user_record.phone {
+            println!("Target WhatsApp / Phone: {}", ph);
+        }
+        println!("============================================================");
 
         tracing::info!("================ CRITICAL PASSWORD RESET CREATED ================");
         tracing::info!("Target Email: {}", email);
@@ -1237,7 +1300,7 @@ pub async fn confirm_password_reset(
     let mut tx = state.db.begin().await?;
 
     sqlx::query!(
-        "UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2",
+        "UPDATE users SET password_hash = $1, status = CASE WHEN status = 'INACTIVE' THEN 'ACTIVE' ELSE status END, email_verified = true, updated_at = now() WHERE id = $2",
         new_password_hash,
         reset_record.user_id
     )

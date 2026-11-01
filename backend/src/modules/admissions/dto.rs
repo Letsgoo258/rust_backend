@@ -60,3 +60,9 @@ pub struct UpdateAdmissionStatusRequest {
     pub status: String,
     pub reason: Option<String>,
 }
+
+#[derive(Debug, Deserialize, Default)]
+pub struct EnrollAdmissionRequest {
+    pub class_section_id: Option<Uuid>,
+    pub roll_number: Option<String>,
+}

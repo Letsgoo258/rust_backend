@@ -24,6 +24,10 @@ pub struct NavigationTree {
     pub school_settings_sidebar: Vec<NavigationSection>,
     pub platform_sidebar: Vec<NavigationSection>,
     pub modules_sidebar: Vec<NavigationSection>,
+    #[serde(default)]
+    pub my_class_sidebar: Vec<NavigationSection>,
+    #[serde(default)]
+    pub attendance_sidebar: Vec<NavigationSection>,
 }
 
 pub struct NavigationConfig;
@@ -58,7 +62,7 @@ impl NavigationConfig {
                     name: "Attendance".into(),
                     path: "/dashboard/attendance".into(),
                     icon: "calendar".into(),
-                    capability: Some("academics:view".into()),
+                    capability: Some("attendance:view".into()),
                     badge: None,
                 },
                 NavigationItem {
@@ -427,6 +431,128 @@ impl NavigationConfig {
                     },
                 ],
             }],
+            my_class_sidebar: vec![NavigationSection {
+                section: "CLASS MANAGEMENT".into(),
+                items: vec![
+                    NavigationItem {
+                        name: "Overview".into(),
+                        path: "/dashboard/my-class".into(),
+                        icon: "home".into(),
+                        capability: None,
+                        badge: None,
+                    },
+                    NavigationItem {
+                        name: "Timetable".into(),
+                        path: "/dashboard/my-class?tab=timetable".into(),
+                        icon: "calendar".into(),
+                        capability: None,
+                        badge: None,
+                    },
+                    NavigationItem {
+                        name: "Subjects".into(),
+                        path: "/dashboard/my-class?tab=subjects".into(),
+                        icon: "book".into(),
+                        capability: None,
+                        badge: None,
+                    },
+                    NavigationItem {
+                        name: "Student Attendance".into(),
+                        path: "/dashboard/my-class?tab=attendance".into(),
+                        icon: "calendar".into(),
+                        capability: None,
+                        badge: None,
+                    },
+                    NavigationItem {
+                        name: "Academic Performance".into(),
+                        path: "/dashboard/my-class?tab=performance".into(),
+                        icon: "reports".into(),
+                        capability: None,
+                        badge: None,
+                    },
+                    NavigationItem {
+                        name: "Issues Reported".into(),
+                        path: "/dashboard/my-class?tab=issues".into(),
+                        icon: "shield".into(),
+                        capability: None,
+                        badge: None,
+                    },
+                    NavigationItem {
+                        name: "Parents Portal".into(),
+                        path: "/dashboard/my-class?tab=parents".into(),
+                        icon: "users".into(),
+                        capability: None,
+                        badge: None,
+                    },
+                    NavigationItem {
+                        name: "Class Notice".into(),
+                        path: "/dashboard/my-class?tab=communication".into(),
+                        icon: "chat".into(),
+                        capability: None,
+                        badge: None,
+                    },
+                    NavigationItem {
+                        name: "Class Teacher Duties".into(),
+                        path: "/dashboard/my-class?tab=duties".into(),
+                        icon: "layout".into(),
+                        capability: None,
+                        badge: None,
+                    },
+                ],
+            }],
+            attendance_sidebar: vec![
+                NavigationSection {
+                    section: "DAILY ATTENDANCE".into(),
+                    items: vec![
+                        NavigationItem {
+                            name: "Take Attendance".into(),
+                            path: "/dashboard/attendance/record".into(),
+                            icon: "calendar".into(),
+                            capability: Some("attendance:record".into()),
+                            badge: None,
+                        },
+                        NavigationItem {
+                            name: "Live Overview".into(),
+                            path: "/dashboard/attendance".into(),
+                            icon: "home".into(),
+                            capability: Some("attendance:view".into()),
+                            badge: None,
+                        },
+                        NavigationItem {
+                            name: "School Register".into(),
+                            path: "/dashboard/attendance/register".into(),
+                            icon: "spreadsheet".into(),
+                            capability: Some("attendance:view".into()),
+                            badge: None,
+                        },
+                        NavigationItem {
+                            name: "Bulk Edit Studio".into(),
+                            path: "/dashboard/attendance/bulk-edit".into(),
+                            icon: "export".into(),
+                            capability: Some("attendance:bulk_edit".into()),
+                            badge: None,
+                        },
+                    ],
+                },
+                NavigationSection {
+                    section: "MONITORING & POLICY".into(),
+                    items: vec![
+                        NavigationItem {
+                            name: "Collisions & Tickets".into(),
+                            path: "/dashboard/attendance/collisions".into(),
+                            icon: "shield".into(),
+                            capability: Some("attendance:resolve_tickets".into()),
+                            badge: None,
+                        },
+                        NavigationItem {
+                            name: "Freezing & Settings".into(),
+                            path: "/dashboard/attendance/settings".into(),
+                            icon: "config".into(),
+                            capability: Some("attendance:manage_config".into()),
+                            badge: None,
+                        },
+                    ],
+                },
+            ],
         }
     }
 
@@ -461,6 +587,8 @@ impl NavigationConfig {
                 school_settings_sidebar: vec![],
                 modules_sidebar: vec![],
                 platform_sidebar: master.platform_sidebar,
+                my_class_sidebar: vec![],
+                attendance_sidebar: vec![],
             };
         }
 
@@ -475,6 +603,10 @@ impl NavigationConfig {
                         return false;
                     }
                     if is_school_admin {
+                        // School Admins are strictly prohibited from initial attendance recording
+                        if cap == "attendance:record" {
+                            return false;
+                        }
                         return true;
                     }
                     user.has_capability(cap)
@@ -511,12 +643,41 @@ impl NavigationConfig {
             }
         };
 
+        let is_class_teacher_user = user
+            .roles
+            .iter()
+            .any(|r| r.eq_ignore_ascii_case("CLASS_TEACHER"))
+            || user.is_class_teacher;
+
+        let show_my_class =
+            is_class_teacher_user || (is_school_admin && user.has_assigned_class_teacher);
+
+        let mut filtered_top_nav: Vec<NavigationItem> = master
+            .top_nav
+            .into_iter()
+            .filter(|item| can_access(&item.capability))
+            .collect();
+
+        if show_my_class {
+            let my_class_item = NavigationItem {
+                name: "My Class".into(),
+                path: "/dashboard/my-class".into(),
+                icon: "teacher".into(),
+                capability: None,
+                badge: None,
+            };
+            if let Some(pos) = filtered_top_nav
+                .iter()
+                .position(|i| i.path == "/dashboard/academics")
+            {
+                filtered_top_nav.insert(pos + 1, my_class_item);
+            } else {
+                filtered_top_nav.push(my_class_item);
+            }
+        }
+
         NavigationTree {
-            top_nav: master
-                .top_nav
-                .into_iter()
-                .filter(|item| can_access(&item.capability))
-                .collect(),
+            top_nav: filtered_top_nav,
             users_sidebar: master
                 .users_sidebar
                 .iter()
@@ -543,6 +704,16 @@ impl NavigationConfig {
             } else {
                 Vec::new()
             },
+            my_class_sidebar: if show_my_class {
+                master.my_class_sidebar
+            } else {
+                Vec::new()
+            },
+            attendance_sidebar: master
+                .attendance_sidebar
+                .iter()
+                .filter_map(filter_section)
+                .collect(),
         }
     }
 }
@@ -657,6 +828,63 @@ mod tests {
         assert!(
             exams_in_settings,
             "Exams must appear in school settings sidebar"
+        );
+    }
+
+    #[test]
+    fn test_admin_cannot_see_record_attendance() {
+        let admin = create_test_user(vec!["SCHOOL_ADMIN"], false, false);
+        let nav_admin = NavigationConfig::build_user_navigation(&admin);
+
+        let has_take_attendance = nav_admin
+            .attendance_sidebar
+            .iter()
+            .any(|sec| sec.items.iter().any(|item| item.name == "Take Attendance"));
+        let has_bulk_edit = nav_admin
+            .attendance_sidebar
+            .iter()
+            .any(|sec| sec.items.iter().any(|item| item.name == "Bulk Edit Studio"));
+        let has_collisions = nav_admin.attendance_sidebar.iter().any(|sec| {
+            sec.items
+                .iter()
+                .any(|item| item.name == "Collisions & Tickets")
+        });
+
+        assert!(
+            !has_take_attendance,
+            "School Admin must NEVER see Take Attendance tab"
+        );
+        assert!(has_bulk_edit, "School Admin must see Bulk Edit Studio tab");
+        assert!(
+            has_collisions,
+            "School Admin must see Collisions & Tickets tab"
+        );
+    }
+
+    #[test]
+    fn test_teacher_can_see_record_attendance() {
+        let mut teacher = create_test_user(vec!["TEACHER"], false, false);
+        teacher.capabilities.push("attendance:record".into());
+        teacher.capabilities.push("attendance:view".into());
+
+        let nav_teacher = NavigationConfig::build_user_navigation(&teacher);
+
+        let has_take_attendance = nav_teacher
+            .attendance_sidebar
+            .iter()
+            .any(|sec| sec.items.iter().any(|item| item.name == "Take Attendance"));
+        let has_bulk_edit = nav_teacher
+            .attendance_sidebar
+            .iter()
+            .any(|sec| sec.items.iter().any(|item| item.name == "Bulk Edit Studio"));
+
+        assert!(
+            has_take_attendance,
+            "Teacher with attendance:record capability must see Take Attendance tab"
+        );
+        assert!(
+            !has_bulk_edit,
+            "Regular Teacher must NOT see Bulk Edit Studio tab"
         );
     }
 }

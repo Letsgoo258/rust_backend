@@ -20,6 +20,7 @@ pub struct UserListItem {
     pub date_of_birth: Option<String>,
     pub class_name: Option<String>,
     pub section_name: Option<String>,
+    pub class_section_id: Option<Uuid>,
     pub roll_number: Option<String>,
     pub guardian_name: Option<String>,
     pub guardian_phone: Option<String>,
@@ -211,6 +212,7 @@ impl UserRepository {
                 u.date_of_birth::TEXT as date_of_birth,
                 c.name as class_name,
                 sec.name as section_name,
+                cs.id as class_section_id,
                 e.roll_number,
                 TRIM(CONCAT(g.first_name, ' ', g.last_name)) as guardian_name,
                 g.phone as guardian_phone,
@@ -287,6 +289,7 @@ impl UserRepository {
                 date_of_birth: r.try_get("date_of_birth").ok(),
                 class_name: r.try_get("class_name").ok(),
                 section_name: r.try_get("section_name").ok(),
+                class_section_id: r.try_get("class_section_id").ok(),
                 roll_number: r.try_get("roll_number").ok(),
                 guardian_name: r.try_get("guardian_name").ok(),
                 guardian_phone: r.try_get("guardian_phone").ok(),
@@ -438,6 +441,7 @@ impl UserRepository {
         sec_name: Option<&str>,
         active_ay_id: Option<Uuid>,
         pre_resolved_cs_id: Option<Uuid>,
+        roll_number: Option<&str>,
     ) -> Result<(Uuid, Option<Uuid>), AppError> {
         let s_username = format!(
             "{}_{}",
@@ -447,7 +451,7 @@ impl UserRepository {
 
         let s_user_id: Uuid = sqlx::query_scalar(
             r#"INSERT INTO users (school_id, first_name, last_name, username, password_hash, status, imported_via_csv, updated_by_user_id, phone, admission_number, date_of_birth, class_section_id, updated_at)
-               VALUES ($1, $2, $3, $4, $5, 'INACTIVE', true, $6, $7, $8, $9, $10, NOW())
+               VALUES ($1, $2, $3, $4, $5, 'ACTIVE', true, $6, $7, $8, $9, $10, NOW())
                ON CONFLICT (school_id, username) DO UPDATE SET
                    first_name = EXCLUDED.first_name,
                    last_name = EXCLUDED.last_name,
@@ -500,7 +504,7 @@ impl UserRepository {
                 );
                 let g_uid: Uuid = sqlx::query_scalar(
                     r#"INSERT INTO users (school_id, first_name, last_name, email, phone, username, password_hash, status, imported_via_csv, updated_by_user_id, updated_at)
-                       VALUES ($1, $2, $3, $4, $5, $6, $7, 'INACTIVE', true, $8, NOW())
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACTIVE', true, $8, NOW())
                        ON CONFLICT (school_id, username) DO UPDATE SET
                            email = COALESCE(EXCLUDED.email, users.email),
                            phone = COALESCE(EXCLUDED.phone, users.phone),
@@ -646,13 +650,20 @@ impl UserRepository {
                 .await;
         }
 
-        if let (Some(ay_id), Some(csid)) = (active_ay_id, final_cs_id) {
+        if let Some(ay_id) = active_ay_id {
             let _ = sqlx::query(
-                "INSERT INTO enrollments (student_id, academic_year_id, class_section_id, status) VALUES ($1, $2, $3, 'ACTIVE') ON CONFLICT (student_id, academic_year_id) DO UPDATE SET class_section_id = EXCLUDED.class_section_id"
+                r#"INSERT INTO enrollments (student_id, academic_year_id, class_section_id, roll_number, status, enrollment_date, created_at, updated_at)
+                   VALUES ($1, $2, $3, $4, 'ACTIVE', CURRENT_DATE, NOW(), NOW())
+                   ON CONFLICT (student_id, academic_year_id) DO UPDATE SET
+                       class_section_id = COALESCE(EXCLUDED.class_section_id, enrollments.class_section_id),
+                       roll_number = COALESCE(EXCLUDED.roll_number, enrollments.roll_number),
+                       status = 'ACTIVE',
+                       updated_at = NOW()"#
             )
             .bind(s_user_id)
             .bind(ay_id)
-            .bind(csid)
+            .bind(final_cs_id)
+            .bind(roll_number)
             .execute(&mut *conn)
             .await
             .ok();

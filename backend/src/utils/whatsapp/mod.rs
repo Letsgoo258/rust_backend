@@ -382,6 +382,29 @@ impl WhatsAppService {
 // High-Level Public Utility API (Callable from any controller, module, or job)
 // ---------------------------------------------------------------------------
 
+/// Helper to determine if running in a localhost / development environment
+pub fn is_localhost_or_dev() -> bool {
+    if let Ok(val) = std::env::var("BLOCK_LOCALHOST_WHATSAPP") {
+        if val.eq_ignore_ascii_case("true") || val == "1" {
+            return true;
+        }
+        if val.eq_ignore_ascii_case("false") || val == "0" {
+            return false;
+        }
+    }
+    // Automatically detect local development machine (macOS / Windows desktop) vs production cloud Linux container
+    if cfg!(target_os = "macos") || cfg!(target_os = "windows") {
+        return true;
+    }
+    if let Ok(app_url) = std::env::var("APP_URL") {
+        let lower = app_url.to_lowercase();
+        if lower.contains("localhost") || lower.contains("127.0.0.1") {
+            return true;
+        }
+    }
+    false
+}
+
 /// Enqueue a standard text WhatsApp message using just a PostgreSQL pool reference.
 ///
 /// Automatically formats the JID, handles idempotency, rate limiting, and typing simulation.
@@ -391,6 +414,21 @@ pub async fn send_whatsapp_message(
     text: &str,
     idempotency_key: Option<&str>,
 ) -> Result<Uuid> {
+    if is_localhost_or_dev() {
+        println!("============================================================");
+        println!("🛑 [LOCALHOST DETECTED - WHATSAPP LIVE SEND BLOCKED]");
+        println!("Recipient: {}", recipient);
+        println!("Message: {}", text);
+        println!("Notice: Real WhatsApp socket dispatch skipped on localhost to prevent multi-device conflict with cloud.");
+        println!("============================================================");
+        return Ok(Uuid::new_v4());
+    }
+
+    println!("============================================================");
+    println!("💬 [WHATSAPP DISPATCHED TO REAL SERVICE]");
+    println!("Recipient: {}", recipient);
+    println!("Message: {}", text);
+    println!("============================================================");
     let queue = QueueManager::new(pool.clone());
     let payload = serde_json::json!({
         "text": text,
@@ -415,6 +453,21 @@ pub async fn send_urgent_whatsapp_message(
     text: &str,
     idempotency_key: Option<&str>,
 ) -> Result<Uuid> {
+    if is_localhost_or_dev() {
+        println!("============================================================");
+        println!("🛑 [LOCALHOST DETECTED - URGENT WHATSAPP LIVE SEND BLOCKED]");
+        println!("Recipient: {}", recipient);
+        println!("Message: {}", text);
+        println!("Notice: Real WhatsApp socket dispatch skipped on localhost to prevent multi-device conflict with cloud.");
+        println!("============================================================");
+        return Ok(Uuid::new_v4());
+    }
+
+    println!("============================================================");
+    println!("💬 [URGENT WHATSAPP DISPATCHED TO REAL SERVICE]");
+    println!("Recipient: {}", recipient);
+    println!("Message: {}", text);
+    println!("============================================================");
     let queue = QueueManager::new(pool.clone());
     let payload = serde_json::json!({
         "text": text,

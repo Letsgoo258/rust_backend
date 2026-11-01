@@ -36,7 +36,54 @@ pub fn router() -> Router<AppState> {
         .route("/teachers", get(get_academic_teachers))
         .route("/stats", get(get_school_stats))
         .route("/assign-students-bulk", post(assign_students_bulk))
-        .route("/lookup-admission-numbers", post(lookup_admission_numbers))
         .route("/bulk-assign-class", post(bulk_assign_class))
+        .route("/lookup-admission-numbers", post(lookup_admission_numbers))
         .route("/dashboard-config", get(get_academics_dashboard_config))
+        // Timetable & Substitutions
+        .route(
+            "/timetable/section/:id",
+            get(crate::modules::academic::timetable::TimetableHandler::get_section_timetable),
+        )
+        .route(
+            "/timetable/teacher-slots",
+            get(crate::modules::academic::timetable::TimetableHandler::get_teacher_slots),
+        )
+        .route(
+            "/timetable/slots",
+            post(crate::modules::academic::timetable::TimetableHandler::batch_upsert_slots),
+        )
+        .route(
+            "/timetable/slots/:id",
+            delete(crate::modules::academic::timetable::TimetableHandler::delete_slot),
+        )
+        .route(
+            "/timetable/auto-generate",
+            post(crate::modules::academic::timetable::TimetableHandler::auto_generate_preview),
+        )
+        .route(
+            "/timetable/substitutions",
+            get(crate::modules::academic::timetable::TimetableHandler::list_substitutions)
+                .post(crate::modules::academic::timetable::TimetableHandler::create_substitution),
+        )
+        .route(
+            "/timetable/substitutions/:id",
+            delete(crate::modules::academic::timetable::TimetableHandler::cancel_substitution),
+        )
+        .route(
+            "/timetable/substitutions/available-teachers",
+            get(crate::modules::academic::timetable::TimetableHandler::get_available_substitute_teachers),
+        )
+        .route(
+            "/timetable/today",
+            get(crate::modules::academic::timetable::TimetableHandler::get_today_schedule),
+        )
+        .route(
+            "/timetable/daily/sync",
+            post(crate::modules::academic::timetable::TimetableHandler::sync_daily_timetable),
+        )
+        .route(
+            "/timetable/config",
+            get(crate::modules::academic::timetable::TimetableHandler::get_timetable_config)
+                .post(crate::modules::academic::timetable::TimetableHandler::save_timetable_config),
+        )
 }

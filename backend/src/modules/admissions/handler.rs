@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use uuid::Uuid;
 
 use super::{
-    dto::{CreateAdmissionRequest, UpdateAdmissionStatusRequest},
+    dto::{CreateAdmissionRequest, EnrollAdmissionRequest, UpdateAdmissionStatusRequest},
     repository::AdmissionRepository,
 };
 use crate::{
@@ -97,12 +97,13 @@ pub async fn create_admission(
     ))
 }
 
-#[tracing::instrument(err, skip(state, auth_session))]
+#[tracing::instrument(err, skip(state, auth_session, payload))]
 pub async fn enroll_admission(
     auth_session: AuthSession,
     State(state): State<AppState>,
     Path(admission_id): Path<Uuid>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    payload: Option<Json<EnrollAdmissionRequest>>,
 ) -> Result<impl IntoResponse, AppError> {
     let user = auth_session
         .user
@@ -118,6 +119,18 @@ pub async fn enroll_admission(
         ));
     }
 
+    let (class_section_id, roll_number) = match payload {
+        Some(Json(req)) => (
+            req.class_section_id,
+            req.roll_number
+                .as_deref()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string()),
+        ),
+        None => (None, None),
+    };
+
     let _lock = state
         .key_locks
         .acquire_lock(&(user.school_id, format!("admission:enroll:{}", admission_id)))
@@ -129,6 +142,8 @@ pub async fn enroll_admission(
         user.school_id,
         admission_id,
         user.id,
+        class_section_id,
+        roll_number.as_deref(),
     )
     .await?;
     tx_guard.commit().await?;

@@ -329,6 +329,12 @@ pub async fn send_phone_otp(
     );
     let _ = send_whatsapp_message(&state.db, &jid, &msg, None).await;
 
+    println!("============================================================");
+    println!("🎓 [ADMISSION WHATSAPP OTP DISPATCHED]");
+    println!("Target Phone: {}", clean_phone);
+    println!("Verification Code: {}", otp_str);
+    println!("============================================================");
+
     tracing::info!(phone = %clean_phone, otp = %otp_str, "Dispatched admission phone OTP");
 
     Ok(Json(json!({
@@ -428,11 +434,36 @@ pub async fn send_email_otp(
     .execute(&state.db)
     .await?;
 
+    let email_body = format!(
+        "<h3>ERAVAYA Admission Verification</h3>\
+         <p>Your one-time email verification code is: <strong>{}</strong></p>\
+         <p>This code expires in 10 minutes. Please enter it on the admission application page.</p>",
+        otp_str
+    );
+    let to_email = clean_email.clone();
+    tokio::spawn(async move {
+        if let Err(e) = crate::utils::email::send_email(
+            &to_email,
+            "ERAVAYA Admission Verification Code",
+            &email_body,
+        )
+        .await
+        {
+            tracing::error!("Failed to send admission email OTP to {}: {}", to_email, e);
+        }
+    });
+
+    println!("============================================================");
+    println!("🎓 [ADMISSION EMAIL OTP DISPATCHED]");
+    println!("Target Email: {}", clean_email);
+    println!("Verification Code: {}", otp_str);
+    println!("============================================================");
+
     tracing::info!(email = %clean_email, otp = %otp_str, "Dispatched admission email OTP");
 
     Ok(Json(json!({
         "success": true,
-        "message": "Verification code has been generated for your email.",
+        "message": "Verification code has been sent to your email.",
     })))
 }
 

@@ -1,6 +1,5 @@
 use lettre::transport::smtp::authentication::Credentials;
-use lettre::transport::smtp::client::Tls;
-use lettre::{Message, SmtpTransport, Transport};
+use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use std::env;
 
 pub async fn send_email(
@@ -21,40 +20,55 @@ pub async fn send_email(
         Ok(v) if !v.trim().is_empty() => v,
         _ => return Err("SMTP_PASS environment variable is not set".into()),
     };
-    let smtp_from = match env::var("SMTP_FROM") {
+    let raw_from = match env::var("SMTP_FROM") {
         Ok(v) if !v.trim().is_empty() => v,
         _ => return Err("SMTP_FROM environment variable is not set".into()),
     };
+    let clean_from = raw_from.trim().trim_matches('"').trim_matches('\'');
 
     let email = Message::builder()
-        .from(smtp_from.parse()?)
+        .from(clean_from.parse()?)
         .to(to.parse()?)
         .subject(subject)
         .header(lettre::message::header::ContentType::TEXT_HTML)
         .body(html_body.to_string())?;
 
-    let creds = Credentials::new(smtp_user, smtp_pass);
+    let creds = Credentials::new(smtp_user.clone(), smtp_pass);
 
-    // For port 465, we must use Tls::Wrapper
-    // For port 587, we would use Tls::Required
-    let tls = if smtp_port == 465 {
-        Tls::Wrapper(
-            lettre::transport::smtp::client::TlsParameters::builder(smtp_host.clone()).build()?,
-        )
+    let mailer: AsyncSmtpTransport<Tokio1Executor> = if smtp_port == 465 {
+        AsyncSmtpTransport::<Tokio1Executor>::relay(&smtp_host)?
+            .port(smtp_port)
+            .credentials(creds)
+            .build()
     } else {
-        Tls::Required(
-            lettre::transport::smtp::client::TlsParameters::builder(smtp_host.clone()).build()?,
-        )
+        AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&smtp_host)?
+            .port(smtp_port)
+            .credentials(creds)
+            .build()
     };
 
-    let mailer = SmtpTransport::builder_dangerous(&smtp_host)
-        .port(smtp_port)
-        .credentials(creds)
-        .tls(tls)
-        .build();
+    println!("============================================================");
+    println!("📧 [EMAIL DISPATCHED TO REAL SERVICE]");
+    println!("To: {}", to);
+    println!("Subject: {}", subject);
+    println!(
+        "SMTP Relay: {}:{} (User: {})",
+        smtp_host, smtp_port, smtp_user
+    );
+    println!("============================================================");
 
-    // lettre SmtpTransport is synchronous, we must spawn it in a blocking thread
-    tokio::task::spawn_blocking(move || mailer.send(&email)).await??;
-
-    Ok(())
+    match mailer.send(email).await {
+        Ok(_) => {
+            tracing::info!(target: "email", to = %to, subject = %subject, "Email delivered successfully via SMTP");
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!(
+                "❌ [EMAIL DELIVERY ERROR] Failed to deliver to {}: {:?}",
+                to, e
+            );
+            tracing::error!(target: "email", to = %to, subject = %subject, error = ?e, "Failed to deliver email via SMTP");
+            Err(Box::new(e))
+        }
+    }
 }

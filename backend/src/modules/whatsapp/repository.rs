@@ -499,6 +499,7 @@ impl WhatsAppRepository {
     }
 
     /// Drop a session immediately due to suspicious behavior, token mismatch, or admin revocation.
+    #[allow(dead_code)]
     pub async fn drop_session(
         pool: &PgPool,
         sender_jid: &str,
@@ -649,6 +650,7 @@ impl WhatsAppRepository {
     }
 
     /// Create or retrieve an unexpired verification token for web onboarding.
+    #[allow(dead_code)]
     pub async fn create_verification_token(
         pool: &PgPool,
         sender_jid: &str,
@@ -777,5 +779,60 @@ impl WhatsAppRepository {
                 r.get("roles"),
             )
         }))
+    }
+
+    /// Retrieve active conversation state for a WhatsApp session (valid within 30 minutes).
+    pub async fn get_conversation_state(
+        pool: &PgPool,
+        session_id: Uuid,
+    ) -> Result<Option<(String, serde_json::Value)>, AppError> {
+        let row = sqlx::query_as::<_, (String, serde_json::Value)>(
+            r#"
+            SELECT state_type, payload
+            FROM whatsapp_conversation_state
+            WHERE session_id = $1 AND updated_at > NOW() - INTERVAL '30 minutes'
+            "#,
+        )
+        .bind(session_id)
+        .fetch_optional(pool)
+        .await?;
+
+        Ok(row)
+    }
+
+    /// Set or update the conversational state for a WhatsApp session.
+    pub async fn set_conversation_state(
+        pool: &PgPool,
+        session_id: Uuid,
+        state_type: &str,
+        payload: serde_json::Value,
+    ) -> Result<(), AppError> {
+        sqlx::query(
+            r#"
+            INSERT INTO whatsapp_conversation_state (session_id, state_type, payload, updated_at)
+            VALUES ($1, $2, $3, NOW())
+            ON CONFLICT (session_id) DO UPDATE SET
+                state_type = EXCLUDED.state_type,
+                payload = EXCLUDED.payload,
+                updated_at = NOW()
+            "#,
+        )
+        .bind(session_id)
+        .bind(state_type)
+        .bind(payload)
+        .execute(pool)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Clear conversation state for a WhatsApp session.
+    pub async fn clear_conversation_state(pool: &PgPool, session_id: Uuid) -> Result<(), AppError> {
+        sqlx::query("DELETE FROM whatsapp_conversation_state WHERE session_id = $1")
+            .bind(session_id)
+            .execute(pool)
+            .await?;
+
+        Ok(())
     }
 }

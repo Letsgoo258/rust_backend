@@ -110,6 +110,7 @@ impl CapabilityController {
         if is_admin && roles.iter().any(|r| r.eq_ignore_ascii_case("SUPER_ADMIN")) {
             return Self::catalogue()
                 .into_iter()
+                .filter(|(k, _, _, _)| *k != "attendance:record")
                 .map(|(k, _, _, _)| k.to_string())
                 .collect();
         }
@@ -118,7 +119,10 @@ impl CapabilityController {
         let mut enabled_set = HashSet::new();
         if roles.is_empty() || is_admin {
             for (k, _, _, _) in Self::catalogue() {
-                enabled_set.insert(k.to_string());
+                // School Admins are strictly prohibited from initial attendance recording
+                if k != "attendance:record" {
+                    enabled_set.insert(k.to_string());
+                }
             }
         } else {
             for r in roles {

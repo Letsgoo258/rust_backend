@@ -1,5 +1,6 @@
 pub mod academic;
 pub mod admissions;
+pub mod attendance;
 pub mod auth;
 pub mod cron;
 pub mod notifications;

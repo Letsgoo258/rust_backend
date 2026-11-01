@@ -6,6 +6,7 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
@@ -316,9 +317,35 @@ pub async fn activate_user(
     .await
 }
 
+fn deserialize_optional_uuid<'de, D>(deserializer: D) -> Result<Option<Uuid>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt = Option::<serde_json::Value>::deserialize(deserializer)?;
+    match opt {
+        Some(serde_json::Value::String(s)) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty()
+                || trimmed.eq_ignore_ascii_case("null")
+                || trimmed.eq_ignore_ascii_case("undefined")
+            {
+                Ok(None)
+            } else {
+                Uuid::parse_str(trimmed)
+                    .map(Some)
+                    .map_err(serde::de::Error::custom)
+            }
+        }
+        Some(serde_json::Value::Null) | None => Ok(None),
+        Some(v) => serde_json::from_value(v)
+            .map(Some)
+            .map_err(serde::de::Error::custom),
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct BulkUpdateItemRequest {
-    pub id: Uuid,
+    pub id: String,
     pub display_name: Option<String>,
     pub first_name: Option<String>,
     pub last_name: Option<String>,
@@ -330,6 +357,10 @@ pub struct BulkUpdateItemRequest {
     pub status: Option<String>,
     pub admission_number: Option<String>,
     pub roll_number: Option<String>,
+    pub class_name: Option<String>,
+    pub section_name: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_uuid")]
+    pub class_section_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -378,24 +409,228 @@ pub async fn bulk_update_users(
         ));
     }
 
+    // 1. IN-MEMORY INTRA-BATCH VALIDATION (0 DB roundtrips)
+    let mut seen_admissions: HashMap<String, String> = HashMap::new(); // UPPER(admission) -> item.id
+    let mut seen_emails: HashMap<String, String> = HashMap::new(); // LOWER(email) -> item.id
+
+    for item in &payload.users {
+        if let Some(ref adm) = item.admission_number {
+            let trimmed = adm.trim();
+            if !trimmed.is_empty() {
+                let upper = trimmed.to_uppercase();
+                if let Some(prev_id) = seen_admissions.get(&upper) {
+                    if prev_id != item.id.trim() {
+                        return Err(AppError::BadRequest(format!(
+                            "Duplicate admission number '{}' found multiple times within the submitted batch.",
+                            trimmed
+                        )));
+                    }
+                }
+                seen_admissions.insert(upper, item.id.trim().to_string());
+            }
+        }
+
+        if let Some(ref em) = item.email {
+            let trimmed = em.trim();
+            if !trimmed.is_empty() {
+                let lower = trimmed.to_lowercase();
+                if let Some(prev_id) = seen_emails.get(&lower) {
+                    if prev_id != item.id.trim() {
+                        return Err(AppError::BadRequest(format!(
+                            "Duplicate email '{}' found multiple times within the submitted batch.",
+                            trimmed
+                        )));
+                    }
+                }
+                seen_emails.insert(lower, item.id.trim().to_string());
+            }
+        }
+    }
+
     let mut tx = state.db.begin().await?;
     let mut updated_count = 0;
 
-    for item in &payload.users {
-        // Tenant boundary check
-        let is_super_admin = auth_user.roles.contains(&"SUPER_ADMIN".to_string());
-        let exists: (i64,) = sqlx::query_as(
-            r#"SELECT COUNT(*) FROM users WHERE id = $1 AND (school_id = $2 OR $3)"#,
+    let active_ay_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM academic_years WHERE school_id = $1 AND status = 'ACTIVE' ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(auth_user.school_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let is_super_admin = auth_user
+        .roles
+        .iter()
+        .any(|r| r.eq_ignore_ascii_case("SUPER_ADMIN"));
+
+    // 2. BULK PRE-FETCH: Tenant boundary & existence check
+    let parsed_uids: Vec<Uuid> = payload
+        .users
+        .iter()
+        .filter_map(|u| Uuid::parse_str(u.id.trim()).ok())
+        .collect();
+
+    let valid_user_ids: HashSet<Uuid> = if !parsed_uids.is_empty() {
+        let rows: Vec<(Uuid,)> =
+            sqlx::query_as("SELECT id FROM users WHERE id = ANY($1) AND (school_id = $2 OR $3)")
+                .bind(&parsed_uids)
+                .bind(auth_user.school_id)
+                .bind(is_super_admin)
+                .fetch_all(&mut *tx)
+                .await?;
+        rows.into_iter().map(|r| r.0).collect()
+    } else {
+        HashSet::new()
+    };
+
+    // 3. BULK PRE-CHECK: Database collisions for admission numbers & emails
+    let batch_adms: Vec<String> = seen_admissions.keys().cloned().collect();
+    let batch_emails: Vec<String> = seen_emails.keys().cloned().collect();
+
+    if !batch_adms.is_empty() || !batch_emails.is_empty() {
+        #[derive(sqlx::FromRow)]
+        struct ConflictRow {
+            id: Uuid,
+            admission_number: Option<String>,
+            email: Option<String>,
+        }
+
+        let conflicts: Vec<ConflictRow> = sqlx::query_as(
+            r#"SELECT id, admission_number, email 
+               FROM users 
+               WHERE school_id = $1 
+                 AND (
+                   (admission_number IS NOT NULL AND UPPER(admission_number) = ANY($2))
+                   OR
+                   (email IS NOT NULL AND LOWER(email) = ANY($3))
+                 )"#,
         )
-        .bind(item.id)
         .bind(auth_user.school_id)
-        .bind(is_super_admin)
-        .fetch_one(&mut *tx)
+        .bind(&batch_adms)
+        .bind(&batch_emails)
+        .fetch_all(&mut *tx)
         .await?;
 
-        if exists.0 == 0 {
-            continue;
+        for conflict in conflicts {
+            if let Some(ref db_adm) = conflict.admission_number {
+                let db_adm_upper = db_adm.trim().to_uppercase();
+                if let Some(target_item_id_str) = seen_admissions.get(&db_adm_upper) {
+                    let is_same = Uuid::parse_str(target_item_id_str)
+                        .ok()
+                        .map(|uid| uid == conflict.id)
+                        .unwrap_or(false);
+                    if !is_same {
+                        return Err(AppError::BadRequest(format!(
+                            "Admission number '{}' is already assigned to another student in this school.",
+                            db_adm.trim()
+                        )));
+                    }
+                }
+            }
+
+            if let Some(ref db_em) = conflict.email {
+                let db_em_lower = db_em.trim().to_lowercase();
+                if let Some(target_item_id_str) = seen_emails.get(&db_em_lower) {
+                    let is_same = Uuid::parse_str(target_item_id_str)
+                        .ok()
+                        .map(|uid| uid == conflict.id)
+                        .unwrap_or(false);
+                    if !is_same {
+                        return Err(AppError::BadRequest(format!(
+                            "Email '{}' is already assigned to another user in this school.",
+                            db_em.trim()
+                        )));
+                    }
+                }
+            }
         }
+    }
+
+    // 4. BULK PRE-FETCH: User metadata (class_section_id, student role)
+    #[derive(sqlx::FromRow)]
+    struct UserMetaRow {
+        id: Uuid,
+        class_section_id: Option<Uuid>,
+        is_student: bool,
+    }
+
+    let user_meta_map: HashMap<Uuid, UserMetaRow> = if !parsed_uids.is_empty() {
+        let rows: Vec<UserMetaRow> = sqlx::query_as(
+            r#"SELECT 
+                u.id, 
+                u.class_section_id,
+                (u.admission_number IS NOT NULL OR EXISTS (
+                    SELECT 1 FROM user_roles ur 
+                    JOIN roles r ON ur.role_id = r.id 
+                    WHERE ur.user_id = u.id AND r.code = 'STUDENT'
+                )) AS is_student
+               FROM users u
+               WHERE u.id = ANY($1)"#,
+        )
+        .bind(&parsed_uids)
+        .fetch_all(&mut *tx)
+        .await?;
+        rows.into_iter().map(|r| (r.id, r)).collect()
+    } else {
+        HashMap::new()
+    };
+
+    // 5. BULK PRE-FETCH: Active enrollments
+    #[derive(sqlx::FromRow)]
+    struct EnrollmentMetaRow {
+        id: Uuid,
+        student_id: Uuid,
+    }
+
+    let enrollment_map: HashMap<Uuid, EnrollmentMetaRow> = if let Some(ay_id) = active_ay_id {
+        if !parsed_uids.is_empty() {
+            let rows: Vec<EnrollmentMetaRow> = sqlx::query_as(
+                r#"SELECT id, student_id
+                   FROM enrollments
+                   WHERE academic_year_id = $1 AND student_id = ANY($2) AND status = 'ACTIVE'"#,
+            )
+            .bind(ay_id)
+            .bind(&parsed_uids)
+            .fetch_all(&mut *tx)
+            .await?;
+            rows.into_iter().map(|r| (r.student_id, r)).collect()
+        } else {
+            HashMap::new()
+        }
+    } else {
+        HashMap::new()
+    };
+
+    // 6. BULK PRE-FETCH: Valid class_section_ids passed directly in payload
+    let raw_cs_ids: Vec<Uuid> = payload
+        .users
+        .iter()
+        .filter_map(|u| u.class_section_id)
+        .collect();
+
+    let valid_cs_ids: HashSet<Uuid> = if !raw_cs_ids.is_empty() {
+        let rows: Vec<(Uuid,)> = sqlx::query_as(
+            r#"SELECT cs.id 
+               FROM class_sections cs 
+               JOIN classes c ON c.id = cs.class_id 
+               WHERE cs.id = ANY($1) AND c.school_id = $2"#,
+        )
+        .bind(&raw_cs_ids)
+        .bind(auth_user.school_id)
+        .fetch_all(&mut *tx)
+        .await?;
+        rows.into_iter().map(|r| r.0).collect()
+    } else {
+        HashSet::new()
+    };
+
+    // 7. IN-MEMORY CACHES FOR CLASS / SECTION RESOLUTION
+    let mut class_cache: HashMap<String, Uuid> = HashMap::new();
+    let mut section_cache: HashMap<String, Uuid> = HashMap::new();
+    let mut cs_cache: HashMap<(Uuid, Uuid), Uuid> = HashMap::new();
+    let mut student_role_id_cache: Option<Uuid> = None;
+
+    for item in &payload.users {
+        let parsed_uuid = Uuid::parse_str(item.id.trim()).ok();
 
         let clean_display_name = item
             .display_name
@@ -486,37 +721,233 @@ pub async fn bulk_update_users(
             .map(|s| s.to_string())
             .or(generated_display_name);
 
-        sqlx::query(
-            r#"UPDATE users
-               SET
-                   first_name = COALESCE($1, first_name),
-                   last_name = COALESCE($2, last_name),
-                   display_name = COALESCE($3, display_name),
-                   email = COALESCE($4, email),
-                   phone = COALESCE($5, phone),
-                   gender = COALESCE($6, gender),
-                   blood_group = COALESCE($7, blood_group),
-                   date_of_birth = COALESCE($8, date_of_birth),
-                   admission_number = COALESCE($9, admission_number),
-                   status = COALESCE($10, status),
-                   updated_at = NOW(),
-                   updated_by_user_id = $11
-               WHERE id = $12"#,
-        )
-        .bind(final_first_name)
-        .bind(final_last_name)
-        .bind(final_display_name)
-        .bind(clean_email)
-        .bind(clean_phone)
-        .bind(clean_gender)
-        .bind(clean_blood_group)
-        .bind(clean_dob)
-        .bind(clean_adm)
-        .bind(&status_val)
-        .bind(auth_user.id)
-        .bind(item.id)
-        .execute(&mut *tx)
-        .await?;
+        let is_existing = parsed_uuid.is_some();
+        let target_id = if let Some(uid) = parsed_uuid {
+            if !valid_user_ids.contains(&uid) {
+                continue;
+            }
+            uid
+        } else {
+            // If completely empty row was added, skip
+            if final_first_name.is_none() && clean_adm.is_none() && item.roll_number.is_none() {
+                continue;
+            }
+
+            let new_user_id = Uuid::new_v4();
+            let new_first = final_first_name
+                .clone()
+                .unwrap_or_else(|| "Student".to_string());
+            let new_last = final_last_name.clone().unwrap_or_else(|| "-".to_string());
+            let base_username = clean_adm
+                .unwrap_or("student")
+                .to_lowercase()
+                .replace([' ', '-'], "_");
+            let new_username = format!("{}_{}", base_username, &new_user_id.to_string()[..6]);
+
+            sqlx::query(
+                r#"INSERT INTO users (
+                    id, school_id, username, password_hash, first_name, last_name, display_name,
+                    email, phone, gender, blood_group, date_of_birth, admission_number, status,
+                    email_verified, phone_verified, imported_via_csv, created_at, updated_at
+                ) VALUES (
+                    $1, $2, $3, 'LOCKED_USER', $4, $5, $6,
+                    $7, $8, $9, $10, $11, $12, COALESCE($13, 'ACTIVE'),
+                    false, false, false, NOW(), NOW()
+                )"#,
+            )
+            .bind(new_user_id)
+            .bind(auth_user.school_id)
+            .bind(&new_username)
+            .bind(&new_first)
+            .bind(&new_last)
+            .bind(&final_display_name)
+            .bind(clean_email)
+            .bind(clean_phone)
+            .bind(clean_gender)
+            .bind(clean_blood_group)
+            .bind(clean_dob)
+            .bind(clean_adm)
+            .bind(&status_val)
+            .execute(&mut *tx)
+            .await?;
+
+            let student_role_id = match student_role_id_cache {
+                Some(rid) => rid,
+                None => {
+                    let rid = crate::utils::roles::get_or_create_role_id(
+                        &mut *tx,
+                        auth_user.school_id,
+                        "STUDENT",
+                        "Student",
+                    )
+                    .await?;
+                    student_role_id_cache = Some(rid);
+                    rid
+                }
+            };
+
+            sqlx::query(
+                "INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+            )
+            .bind(new_user_id)
+            .bind(student_role_id)
+            .execute(&mut *tx)
+            .await?;
+
+            new_user_id
+        };
+
+        // Resolve class section if provided
+        let mut target_cs_id: Option<Uuid> = None;
+
+        if let (Some(c_name), Some(s_name), Some(ay_id)) = (
+            item.class_name
+                .as_deref()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty()),
+            item.section_name
+                .as_deref()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty()),
+            active_ay_id,
+        ) {
+            let c_code = c_name.to_uppercase();
+            let s_code = s_name.to_uppercase();
+
+            let class_id = match class_cache.get(&c_code) {
+                Some(&cid) => Some(cid),
+                None => {
+                    let mut cid: Option<Uuid> = sqlx::query_scalar(
+                        "SELECT id FROM classes WHERE school_id = $1 AND (UPPER(name) = UPPER($2) OR UPPER(code) = UPPER($2)) LIMIT 1",
+                    )
+                    .bind(auth_user.school_id)
+                    .bind(c_name)
+                    .fetch_optional(&mut *tx)
+                    .await?;
+
+                    if cid.is_none() {
+                        cid = sqlx::query_scalar(
+                            "INSERT INTO classes (school_id, name, code, sequence) VALUES ($1, $2, $3, 1) ON CONFLICT (school_id, code) DO UPDATE SET name = EXCLUDED.name RETURNING id",
+                        )
+                        .bind(auth_user.school_id)
+                        .bind(c_name)
+                        .bind(&c_code)
+                        .fetch_optional(&mut *tx)
+                        .await?;
+                    }
+                    if let Some(c) = cid {
+                        class_cache.insert(c_code, c);
+                    }
+                    cid
+                }
+            };
+
+            let section_id = match section_cache.get(&s_code) {
+                Some(&sid) => Some(sid),
+                None => {
+                    let mut sid: Option<Uuid> = sqlx::query_scalar(
+                        "SELECT id FROM sections WHERE school_id = $1 AND (UPPER(name) = UPPER($2) OR UPPER(code) = UPPER($2)) LIMIT 1",
+                    )
+                    .bind(auth_user.school_id)
+                    .bind(s_name)
+                    .fetch_optional(&mut *tx)
+                    .await?;
+
+                    if sid.is_none() {
+                        sid = sqlx::query_scalar(
+                            "INSERT INTO sections (school_id, name, code) VALUES ($1, $2, $3) ON CONFLICT (school_id, code) DO UPDATE SET name = EXCLUDED.name RETURNING id",
+                        )
+                        .bind(auth_user.school_id)
+                        .bind(s_name)
+                        .bind(&s_code)
+                        .fetch_optional(&mut *tx)
+                        .await?;
+                    }
+                    if let Some(s) = sid {
+                        section_cache.insert(s_code, s);
+                    }
+                    sid
+                }
+            };
+
+            if let (Some(cid), Some(sid)) = (class_id, section_id) {
+                let cs_id = match cs_cache.get(&(cid, sid)) {
+                    Some(&csid) => Some(csid),
+                    None => {
+                        let mut csid: Option<Uuid> = sqlx::query_scalar(
+                            "SELECT id FROM class_sections WHERE academic_year_id = $1 AND class_id = $2 AND section_id = $3 LIMIT 1",
+                        )
+                        .bind(ay_id)
+                        .bind(cid)
+                        .bind(sid)
+                        .fetch_optional(&mut *tx)
+                        .await?;
+
+                        if csid.is_none() {
+                            csid = sqlx::query_scalar(
+                                "INSERT INTO class_sections (academic_year_id, class_id, section_id, status) VALUES ($1, $2, $3, 'ACTIVE') ON CONFLICT (academic_year_id, class_id, section_id) DO UPDATE SET status = 'ACTIVE' RETURNING id",
+                            )
+                            .bind(ay_id)
+                            .bind(cid)
+                            .bind(sid)
+                            .fetch_optional(&mut *tx)
+                            .await?;
+                        }
+                        if let Some(c) = csid {
+                            cs_cache.insert((cid, sid), c);
+                        }
+                        csid
+                    }
+                };
+                target_cs_id = cs_id;
+            }
+        } else if let Some(csid) = item.class_section_id {
+            if valid_cs_ids.contains(&csid) {
+                target_cs_id = Some(csid);
+            }
+        }
+
+        if is_existing {
+            sqlx::query(
+                r#"UPDATE users
+                   SET
+                       first_name = COALESCE($1, first_name),
+                       last_name = COALESCE($2, last_name),
+                       display_name = COALESCE($3, display_name),
+                       email = COALESCE($4, email),
+                       phone = COALESCE($5, phone),
+                       gender = COALESCE($6, gender),
+                       blood_group = COALESCE($7, blood_group),
+                       date_of_birth = COALESCE($8, date_of_birth),
+                       admission_number = COALESCE($9, admission_number),
+                       status = COALESCE($10, status),
+                       class_section_id = COALESCE($11, class_section_id),
+                       updated_at = NOW(),
+                       updated_by_user_id = $12
+                   WHERE id = $13"#,
+            )
+            .bind(final_first_name)
+            .bind(final_last_name)
+            .bind(final_display_name)
+            .bind(clean_email)
+            .bind(clean_phone)
+            .bind(clean_gender)
+            .bind(clean_blood_group)
+            .bind(clean_dob)
+            .bind(clean_adm)
+            .bind(&status_val)
+            .bind(target_cs_id)
+            .bind(auth_user.id)
+            .bind(target_id)
+            .execute(&mut *tx)
+            .await?;
+        } else if target_cs_id.is_some() {
+            sqlx::query("UPDATE users SET class_section_id = $1 WHERE id = $2")
+                .bind(target_cs_id)
+                .bind(target_id)
+                .execute(&mut *tx)
+                .await?;
+        }
 
         // If status marked as TC_ISSUED, deactivate their active enrollment
         if status_val.as_deref() == Some("TC_ISSUED") {
@@ -525,24 +956,75 @@ pub async fn bulk_update_users(
                    SET status = 'INACTIVE', updated_at = NOW()
                    WHERE student_id = $1 AND status = 'ACTIVE'"#,
             )
-            .bind(item.id)
+            .bind(target_id)
             .execute(&mut *tx)
             .await;
         }
 
-        // If roll_number provided, update active enrollment
-        if let Some(ref roll) = item.roll_number {
-            let clean_roll = roll.trim();
-            if !clean_roll.is_empty() {
-                let _ = sqlx::query(
-                    r#"UPDATE enrollments
-                       SET roll_number = $1
-                       WHERE student_id = $2 AND status = 'ACTIVE'"#,
-                )
-                .bind(clean_roll)
-                .bind(item.id)
-                .execute(&mut *tx)
-                .await;
+        // Check if user is a student using pre-fetched metadata
+        let is_student: bool = if is_existing {
+            user_meta_map
+                .get(&target_id)
+                .map(|m| m.is_student)
+                .unwrap_or(false)
+        } else {
+            true
+        };
+
+        // If user is a student, sync roll_number and class_section_id to enrollments (closed system)
+        if is_student {
+            let clean_roll = item
+                .roll_number
+                .as_deref()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty());
+
+            if let Some(ay_id) = active_ay_id {
+                let resolved_cs = match target_cs_id {
+                    Some(cs) => Some(cs),
+                    None => user_meta_map
+                        .get(&target_id)
+                        .and_then(|m| m.class_section_id),
+                };
+
+                let existing_enrollment = enrollment_map.get(&target_id);
+
+                if let Some(enroll) = existing_enrollment {
+                    if clean_roll.is_some() || target_cs_id.is_some() {
+                        sqlx::query(
+                            r#"UPDATE enrollments
+                               SET roll_number = COALESCE($1, roll_number),
+                                   class_section_id = COALESCE($2, class_section_id),
+                                   updated_at = NOW()
+                               WHERE id = $3"#,
+                        )
+                        .bind(clean_roll)
+                        .bind(target_cs_id)
+                        .bind(enroll.id)
+                        .execute(&mut *tx)
+                        .await?;
+                    }
+                } else if clean_roll.is_some()
+                    || resolved_cs.is_some()
+                    || clean_adm.is_some()
+                    || !is_existing
+                {
+                    sqlx::query(
+                        r#"INSERT INTO enrollments (student_id, academic_year_id, class_section_id, roll_number, status, enrollment_date, created_at, updated_at)
+                           VALUES ($1, $2, $3, $4, 'ACTIVE', CURRENT_DATE, NOW(), NOW())
+                           ON CONFLICT (student_id, academic_year_id) DO UPDATE SET
+                               class_section_id = COALESCE(EXCLUDED.class_section_id, enrollments.class_section_id),
+                               roll_number = COALESCE(EXCLUDED.roll_number, enrollments.roll_number),
+                               status = 'ACTIVE',
+                               updated_at = NOW()"#,
+                    )
+                    .bind(target_id)
+                    .bind(ay_id)
+                    .bind(resolved_cs)
+                    .bind(clean_roll)
+                    .execute(&mut *tx)
+                    .await?;
+                }
             }
         }
 
@@ -560,7 +1042,7 @@ pub async fn bulk_update_users(
         None,
         Some(serde_json::json!({
             "count": updated_count,
-            "user_ids": payload.users.iter().map(|u| u.id).collect::<Vec<_>>()
+            "user_ids": payload.users.iter().map(|u| &u.id).collect::<Vec<_>>()
         })),
         None,
     )

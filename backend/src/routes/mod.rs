@@ -1,5 +1,6 @@
 pub mod academic;
 pub mod admissions;
+pub mod attendance;
 pub mod auth;
 pub mod cron;
 pub mod health;
@@ -19,6 +20,7 @@ pub fn app_router() -> Router<AppState> {
         .nest("/api/v1/users", users::router())
         .nest("/api/v1/admissions", admissions::router())
         .nest("/api/v1/academic", academic::router())
+        .nest("/api/v1/attendance", attendance::router())
         .nest("/api/v1/telemetry", telemetry::router())
         .nest("/api/v1/cron", cron::router())
         .nest("/api/v1/settings", settings::router())

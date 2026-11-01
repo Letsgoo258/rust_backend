@@ -8,33 +8,57 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = AppConfig::from_env();
     let pool = db::init_pool(&config).await?;
 
-    let email = "kabhiram67@gmail.com";
-    let new_pass = "password123";
+    let new_pass = "hello123!";
     let new_hash = hash_password(new_pass)?;
 
-    // Update password
-    let res = sqlx::query!(
-        "UPDATE users SET password_hash = $1, status = 'ACTIVE', email_verified = true, phone_verified = true WHERE email = $2 RETURNING id, username, password_hash",
-        new_hash,
-        email
+    // 1. Reset Super Admin (kabhiram67 / kabhiram67@gmail.com)
+    let res_admin = sqlx::query!(
+        r#"
+        UPDATE users 
+        SET password_hash = $1, status = 'ACTIVE', email_verified = true, phone_verified = true 
+        WHERE email = 'kabhiram67@gmail.com' OR username = 'kabhiram67'
+        RETURNING id, username, email, password_hash
+        "#,
+        new_hash
     )
-    .fetch_optional(&pool)
+    .fetch_all(&pool)
     .await?;
 
-    match res {
-        Some(user) => {
-            println!("User found and password updated!");
-            println!("User ID: {}", user.id);
-            println!("Username: {}", user.username);
-            let verified = verify_password(new_pass, &user.password_hash)?;
-            println!(
-                "Password verification test for '{}': {}",
-                new_pass, verified
-            );
-        }
-        None => {
-            println!("No user found with email: {}", email);
-        }
+    println!("--- Super Admin Updates ---");
+    for user in res_admin {
+        println!(
+            "User updated: id={}, username={}, email={}",
+            user.id,
+            user.username,
+            user.email.unwrap_or_default()
+        );
+        let verified = verify_password(new_pass, &user.password_hash)?;
+        println!("Password verification for '{}': {}", new_pass, verified);
+    }
+
+    // 2. Reset test101
+    let res_test = sqlx::query!(
+        r#"
+        UPDATE users 
+        SET password_hash = $1, status = 'ACTIVE', email_verified = true, phone_verified = true 
+        WHERE username = 'test101' OR email = 'erayaerp@gmail.com'
+        RETURNING id, username, email, password_hash
+        "#,
+        new_hash
+    )
+    .fetch_all(&pool)
+    .await?;
+
+    println!("\n--- Test101 Updates ---");
+    for user in res_test {
+        println!(
+            "User updated: id={}, username={}, email={}",
+            user.id,
+            user.username,
+            user.email.unwrap_or_default()
+        );
+        let verified = verify_password(new_pass, &user.password_hash)?;
+        println!("Password verification for '{}': {}", new_pass, verified);
     }
 
     Ok(())

@@ -18,7 +18,10 @@ pub fn router() -> Router<AppState> {
         .route("/bulk-edit", post(AttendanceHandler::bulk_edit_attendance))
         .route("/records/:id", put(AttendanceHandler::update_record))
         .route("/sessions", get(AttendanceHandler::list_sessions))
-        .route("/sessions/:id", get(AttendanceHandler::get_session_detail))
+        .route(
+            "/sessions/:id",
+            get(AttendanceHandler::get_session_detail).delete(AttendanceHandler::delete_session),
+        )
         .route("/stats/today", get(AttendanceHandler::get_today_stats))
         .route("/collisions", get(AttendanceHandler::list_collisions))
         .route(

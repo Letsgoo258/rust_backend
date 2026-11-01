@@ -24,13 +24,35 @@ pub struct WhatsAppUserContext {
 }
 
 impl WhatsAppUserContext {
-    pub fn has_capability(&self, key: &str) -> bool {
-        if self.role.eq_ignore_ascii_case("SUPER_ADMIN")
+    pub fn is_school_admin(&self) -> bool {
+        self.role.eq_ignore_ascii_case("SUPER_ADMIN")
             || self.role.eq_ignore_ascii_case("SCHOOL_ADMIN")
-        {
+            || self.role.eq_ignore_ascii_case("HEADMASTER")
+            || self.role.eq_ignore_ascii_case("PRINCIPAL")
+    }
+
+    pub fn has_capability(&self, key: &str) -> bool {
+        let key_norm = key.replace('.', ":");
+        if key_norm == "attendance:record" || key_norm == "attendance:mark" {
+            // School Admins are strictly prohibited from initial attendance recording
+            if self.is_school_admin() {
+                return false;
+            }
+        }
+        if self.is_school_admin() {
             return true;
         }
         self.capabilities.contains(key)
+            || self.capabilities.contains(&key_norm)
+            || (key_norm == "attendance:mark" && self.capabilities.contains("attendance:record"))
+            || (key_norm == "attendance:record" && self.capabilities.contains("attendance:mark"))
+            || (key_norm == "attendance:edit"
+                && (self.capabilities.contains("attendance:edit_class")
+                    || self.capabilities.contains("attendance:edit_subject")))
+            || (key_norm == "attendance:edit_class"
+                && self.capabilities.contains("attendance:edit"))
+            || (key_norm == "attendance:edit_subject"
+                && self.capabilities.contains("attendance:edit"))
     }
 
     pub fn is_teacher(&self) -> bool {
@@ -437,10 +459,24 @@ impl WhatsAppMessageService {
 
                 // Explicit "take attendance" / "mark attendance" request
                 if menus::attendance::is_take_attendance(trimmed) {
-                    if !context.has_capability("academics:view") && !context.is_teacher() {
-                        warn!(sender = %sender_jid, role = %context.role, "Blocked attendance: missing academics:view capability");
+                    if context.is_school_admin() {
+                        let app_url = std::env::var("APP_URL").unwrap_or_else(|_| {
+                            "https://my-frontend-kappa-five.vercel.app".to_string()
+                        });
+                        let clean_url = app_url.trim_end_matches('/');
                         return vec![format!(
-                            "🚫 *Permission Denied*\n\nYour account role (*{}*) does not have permission to mark attendance.",
+                            "🚫 *School Administrators Cannot Mark Attendance*\n\n\
+                            Per strict institutional security standards, School Administrators and Super Admins cannot record initial roll-call. Attendance must be entered by designated Class Teachers or Subject Teachers.\n\n\
+                            👉 View attendance registers, audit logs, and reports at:\n\
+                            {clean_url}/dashboard/attendance"
+                        )];
+                    }
+                    if !context.has_capability("attendance:record")
+                        && !context.has_capability("attendance:mark")
+                    {
+                        warn!(sender = %sender_jid, role = %context.role, "Blocked attendance: missing attendance:record capability");
+                        return vec![format!(
+                            "🚫 *Permission Denied*\n\nYour account role (*{}*) lacks the required *attendance:record* capability to mark attendance. Please contact your administrator.",
                             context.role
                         )];
                     }
@@ -449,10 +485,15 @@ impl WhatsAppMessageService {
 
                 // 1️⃣ Attendance Menu
                 if menus::attendance::is_attendance(trimmed) {
-                    if !context.has_capability("academics:view") && !context.is_teacher() {
-                        warn!(sender = %sender_jid, role = %context.role, "Blocked attendance: missing academics:view capability");
+                    if !context.has_capability("attendance:view")
+                        && !context.has_capability("academics:view")
+                        && !context.is_teacher()
+                        && !context.is_school_admin()
+                        && !context.is_student_or_parent()
+                    {
+                        warn!(sender = %sender_jid, role = %context.role, "Blocked attendance: missing attendance:view capability");
                         return vec![format!(
-                            "🚫 *Permission Denied*\n\nYour account role (*{}*) does not have the *academics:view* capability to view attendance.",
+                            "🚫 *Permission Denied*\n\nYour account role (*{}*) does not have the *attendance:view* capability to view attendance.",
                             context.role
                         )];
                     }
@@ -605,5 +646,66 @@ mod tests {
         assert!(fallback.contains("ERAVAYA ERP Assistant"));
         assert!(fallback.contains("Check my exam dates"));
         assert!(fallback.contains("help"));
+    }
+
+    #[test]
+    fn test_whatsapp_user_context_admin_prohibition() {
+        let admin = WhatsAppUserContext {
+            session_id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            school_id: Uuid::new_v4(),
+            role: "SCHOOL_ADMIN".to_string(),
+            capabilities: [
+                "attendance:view",
+                "attendance:bulk_edit",
+                "attendance:delete",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+            phone: "919999999999".to_string(),
+            display_name: Some("Principal".to_string()),
+        };
+
+        assert!(admin.is_school_admin());
+        assert!(admin.has_capability("attendance:view"));
+        assert!(admin.has_capability("attendance:bulk_edit"));
+        assert!(admin.has_capability("attendance:delete"));
+        assert!(admin.has_capability("attendance.delete"));
+        // Strictly blocked from recording / marking initial attendance!
+        assert!(!admin.has_capability("attendance:record"));
+        assert!(!admin.has_capability("attendance:mark"));
+        assert!(!admin.has_capability("attendance.mark"));
+    }
+
+    #[test]
+    fn test_whatsapp_user_context_teacher_capabilities() {
+        let teacher = WhatsAppUserContext {
+            session_id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            school_id: Uuid::new_v4(),
+            role: "TEACHER".to_string(),
+            capabilities: [
+                "attendance:view",
+                "attendance:record",
+                "attendance:edit_subject",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+            phone: "919888888888".to_string(),
+            display_name: Some("Teacher Anita".to_string()),
+        };
+
+        assert!(!teacher.is_school_admin());
+        assert!(teacher.is_teacher());
+        assert!(teacher.has_capability("attendance:record"));
+        assert!(teacher.has_capability("attendance:mark"));
+        assert!(teacher.has_capability("attendance.mark"));
+        assert!(teacher.has_capability("attendance:edit"));
+        assert!(teacher.has_capability("attendance.edit"));
+        assert!(teacher.has_capability("attendance:view"));
+        assert!(!teacher.has_capability("attendance:bulk_edit"));
+        assert!(!teacher.has_capability("attendance:delete"));
     }
 }

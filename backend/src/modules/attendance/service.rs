@@ -50,8 +50,8 @@ impl AttendanceService {
             ));
         }
 
-        // 2. Capability check: Teachers must possess attendance:record
-        if !user.has_capability("attendance:record") {
+        // 2. Capability check: Teachers must possess attendance:record or attendance:mark
+        if !user.has_capability("attendance:record") && !user.has_capability("attendance:mark") {
             return Err(AppError::Forbidden(
                 "User lacks required 'attendance:record' capability to mark attendance".into(),
             ));
@@ -596,5 +596,72 @@ impl AttendanceService {
         }
 
         AttendanceRepository::save_attendance_config(pool, user.school_id, &config).await
+    }
+
+    /// Administrative or authorized deletion of an attendance session and its student records
+    pub async fn delete_session(
+        pool: &PgPool,
+        user: &User,
+        session_id: Uuid,
+    ) -> Result<(), AppError> {
+        let school_id = user.school_id;
+
+        // 1. Capability check: Requires attendance:delete or is_school_admin
+        if !user.has_capability("attendance:delete") && !user.is_school_admin() {
+            return Err(AppError::Forbidden(
+                "User lacks required 'attendance:delete' capability to delete attendance sessions"
+                    .into(),
+            ));
+        }
+
+        // 2. Check if session exists in this school
+        let session_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM attendance_sessions WHERE id = $1 AND school_id = $2)",
+        )
+        .bind(session_id)
+        .bind(school_id)
+        .fetch_one(pool)
+        .await?;
+
+        if !session_exists {
+            return Err(AppError::NotFound("Attendance session not found".into()));
+        }
+
+        let mut tx = pool.begin().await?;
+
+        // Delete records
+        sqlx::query(
+            "DELETE FROM attendance_records WHERE attendance_session_id = $1 AND school_id = $2",
+        )
+        .bind(session_id)
+        .bind(school_id)
+        .execute(&mut *tx)
+        .await?;
+
+        // Delete session
+        sqlx::query("DELETE FROM attendance_sessions WHERE id = $1 AND school_id = $2")
+            .bind(session_id)
+            .bind(school_id)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+
+        // Audit log
+        let _ = crate::utils::audit::record_entity_change(
+            pool,
+            school_id,
+            "ATTENDANCE_SESSION",
+            session_id,
+            "SESSION_DELETED",
+            Some(user.id),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        Ok(())
     }
 }

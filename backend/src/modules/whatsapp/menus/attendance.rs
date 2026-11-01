@@ -46,6 +46,10 @@ pub struct AvailableClassOption {
     pub class_section_id: Uuid,
     pub class_name: String,
     pub section_name: String,
+    pub subject_id: Option<Uuid>,
+    pub subject_name: String,
+    pub period_number: Option<i32>,
+    pub is_daily_roll_call: bool,
     pub display: String,
 }
 
@@ -197,109 +201,156 @@ pub async fn check_active_period(
     })
 }
 
-/// Retrieve available classes assigned to the teacher (or fallback to school's active classes).
+/// Retrieve available classes and subjects strictly assigned to the teacher.
+/// NO fallback to other school classes. If teacher has no assigned classes/subjects, returns empty.
 pub async fn get_teacher_available_classes(
     pool: &PgPool,
     school_id: Uuid,
-    staff_id_opt: Option<Uuid>,
+    staff_id: Uuid,
+    user_id: Uuid,
 ) -> Vec<AvailableClassOption> {
     let mut options = Vec::new();
 
-    if let Some(staff_id) = staff_id_opt {
-        let rows = sqlx::query(
-            r#"
-            SELECT DISTINCT
-                cs.id as class_section_id,
-                c.name as class_name,
-                sec.name as section_name,
-                c.sequence
-            FROM class_sections cs
-            JOIN classes c ON c.id = cs.class_id
-            JOIN sections sec ON sec.id = cs.section_id
-            WHERE c.school_id = $1
-              AND (
-                cs.class_teacher_staff_id = $2
-                OR EXISTS (
-                    SELECT 1 FROM timetable_slots ts
-                    WHERE ts.class_section_id = cs.id
-                      AND (ts.teacher_staff_id = $2 OR ts.co_teacher_staff_ids @> ARRAY[$2::uuid])
-                )
-                OR EXISTS (
-                    SELECT 1 FROM current_day_timetable cdt
-                    WHERE cdt.class_section_id = cs.id
-                      AND (cdt.effective_teacher_id = $2 OR cdt.co_teacher_ids @> ARRAY[$2::uuid])
-                )
-              )
-            ORDER BY c.sequence ASC, sec.name ASC
-            "#,
-        )
-        .bind(school_id)
-        .bind(staff_id)
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default();
-
-        for (idx, r) in rows.into_iter().enumerate() {
-            let cs_id: Uuid = r.get("class_section_id");
-            let c_name: String = r.get("class_name");
-            let s_name: String = r.get("section_name");
-            options.push(AvailableClassOption {
-                index: idx + 1,
-                class_section_id: cs_id,
-                class_name: c_name.clone(),
-                section_name: s_name.clone(),
-                display: format!("{c_name} - Section {s_name}"),
-            });
-        }
-    }
-
-    // Fallback: If no assigned classes found or staff_id_opt is None, fetch active classes from school
-    if options.is_empty() {
-        let rows = sqlx::query(
-            r#"
+    let rows = sqlx::query(
+        r#"
+        SELECT * FROM (
+            -- 1. Designated Class Teacher homeroom / daily roll call
             SELECT
-                cs.id as class_section_id,
-                c.name as class_name,
-                sec.name as section_name,
-                c.sequence
+                cs.id AS class_section_id,
+                c.name AS class_name,
+                sec.name AS section_name,
+                c.sequence AS class_seq,
+                NULL::uuid AS subject_id,
+                'Daily Roll Call' AS subject_name,
+                NULL::int AS period_number,
+                true AS is_daily_roll_call
             FROM class_sections cs
             JOIN classes c ON c.id = cs.class_id
             JOIN sections sec ON sec.id = cs.section_id
             WHERE c.school_id = $1
-            ORDER BY c.sequence ASC, sec.name ASC
-            LIMIT 10
-            "#,
-        )
-        .bind(school_id)
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default();
+              AND (cs.class_teacher_staff_id = $2 OR cs.class_teacher_staff_id = $3)
 
-        for (idx, r) in rows.into_iter().enumerate() {
-            let cs_id: Uuid = r.get("class_section_id");
-            let c_name: String = r.get("class_name");
-            let s_name: String = r.get("section_name");
-            options.push(AvailableClassOption {
-                index: idx + 1,
-                class_section_id: cs_id,
-                class_name: c_name.clone(),
-                section_name: s_name.clone(),
-                display: format!("{c_name} - Section {s_name}"),
-            });
-        }
+            UNION
+
+            -- 2. Today's Timetable slots (including daily substitutions)
+            SELECT
+                cs.id AS class_section_id,
+                c.name AS class_name,
+                sec.name AS section_name,
+                c.sequence AS class_seq,
+                sub.id AS subject_id,
+                sub.name AS subject_name,
+                cdt.period_number,
+                false AS is_daily_roll_call
+            FROM current_day_timetable cdt
+            JOIN schools sch ON sch.id = cdt.school_id
+            JOIN class_sections cs ON cs.id = cdt.class_section_id
+            JOIN classes c ON c.id = cs.class_id
+            JOIN sections sec ON sec.id = cs.section_id
+            JOIN subjects sub ON sub.id = cdt.subject_id
+            WHERE cdt.school_id = $1
+              AND (cdt.effective_teacher_id = $2 OR cdt.effective_teacher_id = $3 
+                   OR cdt.co_teacher_ids @> ARRAY[$2::uuid] OR cdt.co_teacher_ids @> ARRAY[$3::uuid])
+              AND cdt.date = (NOW() AT TIME ZONE COALESCE(sch.timezone, 'Asia/Kolkata'))::date
+
+            UNION
+
+            -- 3. Master Timetable slots
+            SELECT
+                cs.id AS class_section_id,
+                c.name AS class_name,
+                sec.name AS section_name,
+                c.sequence AS class_seq,
+                sub.id AS subject_id,
+                sub.name AS subject_name,
+                ts.period_number,
+                false AS is_daily_roll_call
+            FROM timetable_slots ts
+            JOIN class_sections cs ON cs.id = ts.class_section_id
+            JOIN classes c ON c.id = cs.class_id
+            JOIN sections sec ON sec.id = cs.section_id
+            JOIN subjects sub ON sub.id = ts.subject_id
+            WHERE ts.school_id = $1
+              AND (ts.teacher_staff_id = $2 OR ts.teacher_staff_id = $3 
+                   OR ts.co_teacher_staff_ids @> ARRAY[$2::uuid] OR ts.co_teacher_staff_ids @> ARRAY[$3::uuid])
+              AND ts.status = 'ACTIVE'
+        ) AS t
+        ORDER BY is_daily_roll_call DESC, class_seq ASC, section_name ASC, period_number ASC NULLS LAST, subject_name ASC
+        LIMIT 15
+        "#,
+    )
+    .bind(school_id)
+    .bind(staff_id)
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    for (idx, r) in rows.into_iter().enumerate() {
+        let cs_id: Uuid = r.get("class_section_id");
+        let c_name: String = r.get("class_name");
+        let s_name: String = r.get("section_name");
+        let sub_id: Option<Uuid> = r.try_get("subject_id").ok();
+        let sub_name: String = r.get("subject_name");
+        let period_num: Option<i32> = r.try_get("period_number").ok();
+        let is_daily: bool = r.get("is_daily_roll_call");
+
+        let display = if is_daily {
+            format!("{c_name} - Section {s_name} | 📋 Daily Roll Call (Class Teacher)")
+        } else if let Some(p) = period_num {
+            format!("{c_name} - Section {s_name} | 📚 {sub_name} (Period {p})")
+        } else {
+            format!("{c_name} - Section {s_name} | 📚 {sub_name}")
+        };
+
+        options.push(AvailableClassOption {
+            index: idx + 1,
+            class_section_id: cs_id,
+            class_name: c_name,
+            section_name: s_name,
+            subject_id: sub_id,
+            subject_name: sub_name,
+            period_number: period_num,
+            is_daily_roll_call: is_daily,
+            display,
+        });
     }
 
     options
 }
 
 /// Initiates the teacher attendance workflow.
-/// 1. Checks current time & timetable for active class.
-/// 2. If active, prompts directly for absent roll numbers.
-/// 3. If no active period, prompts with list of available classes.
+/// 1. Verifies caller is NOT a School Admin (strict institutional restriction).
+/// 2. Verifies teacher has attendance:record or attendance:mark capability.
+/// 3. Checks current time & timetable for active scheduled period.
+/// 4. If active, prompts directly for absent roll numbers.
+/// 5. If no active period, prompts with ONLY the teacher's assigned classes and subjects.
 pub async fn start_attendance_flow(pool: &PgPool, context: &WhatsAppUserContext) -> String {
     let name = context.display_name.as_deref().unwrap_or("Teacher");
+    let app_url = std::env::var("APP_URL")
+        .unwrap_or_else(|_| "https://my-frontend-kappa-five.vercel.app".to_string());
+    let clean_url = app_url.trim_end_matches('/');
 
-    // Look up staff record for this user
+    // 1. Strict Institutional Rule: School Admins cannot record initial roll-call
+    if context.is_school_admin() {
+        return format!(
+            "🚫 *School Administrators Cannot Mark Attendance*\n\n\
+            Per strict institutional security standards, School Administrators and Super Admins cannot record initial roll-call. Attendance must be entered by designated Class Teachers or Subject Teachers.\n\n\
+            👉 View attendance registers, audit logs, and reports at:\n\
+            {clean_url}/dashboard/attendance"
+        );
+    }
+
+    // 2. Capability check: Teachers must possess attendance:record or attendance:mark
+    if !context.has_capability("attendance:record") && !context.has_capability("attendance:mark") {
+        return format!(
+            "🚫 *Permission Denied*\n\n\
+            Your account does not possess the required *attendance:record* capability to mark attendance. \
+            Please contact your school administrator."
+        );
+    }
+
+    // 3. Look up staff record for this user
     let staff_id_opt: Option<Uuid> =
         sqlx::query_scalar("SELECT id FROM staff WHERE user_id = $1 AND school_id = $2 LIMIT 1")
             .bind(context.user_id)
@@ -308,49 +359,61 @@ pub async fn start_attendance_flow(pool: &PgPool, context: &WhatsAppUserContext)
             .await
             .unwrap_or(None);
 
-    // 1. Check if teacher has an active scheduled period right now in timetable
-    if let Some(staff_id) = staff_id_opt {
-        if let Some(active_slot) = check_active_period(pool, context.school_id, staff_id).await {
-            let payload = serde_json::json!({
-                "class_section_id": active_slot.class_section_id,
-                "class_name": active_slot.class_name,
-                "section_name": active_slot.section_name,
-                "period_number": active_slot.period_number,
-                "subject_id": active_slot.subject_id,
-                "subject_name": active_slot.subject_name,
-            });
-
-            let _ = WhatsAppRepository::set_conversation_state(
-                pool,
-                context.session_id,
-                "ATTENDANCE_WAITING_FOR_ABSENTEES",
-                payload,
-            )
-            .await;
-
+    let staff_id = match staff_id_opt {
+        Some(sid) => sid,
+        None => {
             return format!(
-                "📅 *Found active class in your timetable!*\n\n\
-                🏫 *Class*: {} - Section {}\n\
-                📚 *Subject*: {} (Period {}, {} - {})\n\n\
-                Please send the list of absent roll numbers in the format:\n\
-                👉 *1, 2, 55 absent*\n\n\
-                _(Or reply *all present* if everyone is present, or *cancel* to abort)_",
-                active_slot.class_name,
-                active_slot.section_name,
-                active_slot.subject_name,
-                active_slot.period_number,
-                active_slot.start_time,
-                active_slot.end_time
+                "📋 *Attendance - {name}*\n\n\
+                ⚠️ No teacher staff profile was found linked to your account in this school. Please contact the administrator."
             );
         }
+    };
+
+    // 4. Check if teacher has an active scheduled period right now in timetable
+    if let Some(active_slot) = check_active_period(pool, context.school_id, staff_id).await {
+        let payload = serde_json::json!({
+            "class_section_id": active_slot.class_section_id,
+            "class_name": active_slot.class_name,
+            "section_name": active_slot.section_name,
+            "period_number": active_slot.period_number,
+            "subject_id": active_slot.subject_id,
+            "subject_name": active_slot.subject_name,
+            "is_daily_roll_call": false,
+        });
+
+        let _ = WhatsAppRepository::set_conversation_state(
+            pool,
+            context.session_id,
+            "ATTENDANCE_WAITING_FOR_ABSENTEES",
+            payload,
+        )
+        .await;
+
+        return format!(
+            "📅 *Found active class in your timetable!*\n\n\
+            🏫 *Class*: {} - Section {}\n\
+            📚 *Subject*: {} (Period {}, {} - {})\n\n\
+            Please send the list of absent roll numbers in the format:\n\
+            👉 *1, 2, 55 absent*\n\n\
+            _(Or reply *all present* if everyone is present, or *cancel* to abort)_",
+            active_slot.class_name,
+            active_slot.section_name,
+            active_slot.subject_name,
+            active_slot.period_number,
+            active_slot.start_time,
+            active_slot.end_time
+        );
     }
 
-    // 2. No active slot right now -> Prompt teacher to select a class
-    let options = get_teacher_available_classes(pool, context.school_id, staff_id_opt).await;
+    // 5. No active slot right now -> Show ONLY the teacher's assigned classes & subjects
+    let options =
+        get_teacher_available_classes(pool, context.school_id, staff_id, context.user_id).await;
     if options.is_empty() {
         return format!(
             "📋 *Attendance - {name}*\n\n\
-            ⚠️ No classes found assigned to your profile. Please contact the school administrator."
+            ⏰ *No active period scheduled in your timetable right now.*\n\n\
+            ⚠️ No classes or subjects are assigned to your teacher profile for attendance recording.\n\n\
+            Please contact your school administrator or timetable coordinator to assign your classes or subjects."
         );
     }
 
@@ -383,9 +446,9 @@ pub async fn start_attendance_flow(pool: &PgPool, context: &WhatsAppUserContext)
 
     format!(
         "⏰ *No active period scheduled in your timetable right now.*\n\n\
-        Which class would you like to take attendance for?\n\n\
-        {}\n\
-        👉 Reply with the number (e.g. *1*) or class name (e.g. *Class 1 A*), or send *cancel* to abort.",
+        Which class and subject would you like to take attendance for?\n\n\
+        {}\n\n\
+        👉 Reply with the number (e.g. *1*) or class/subject name, or send *cancel* to abort.",
         class_list_text.trim_end()
     )
 }
@@ -588,6 +651,12 @@ pub async fn record_attendance_for_roster(
         } else {
             format!("Period {p}")
         }
+    } else if let Some(sub) = subject_name {
+        if sub != "Daily Roll Call" {
+            format!("Daily Roll Call ({sub})")
+        } else {
+            "Daily Roll Call".to_string()
+        }
     } else {
         "Daily Roll Call".to_string()
     };
@@ -697,9 +766,10 @@ pub async fn handle_attendance_conversation_step(
                     "class_section_id": selected.class_section_id,
                     "class_name": selected.class_name,
                     "section_name": selected.section_name,
-                    "period_number": null,
-                    "subject_id": null,
-                    "subject_name": null,
+                    "period_number": selected.period_number,
+                    "subject_id": selected.subject_id,
+                    "subject_name": selected.subject_name,
+                    "is_daily_roll_call": selected.is_daily_roll_call,
                 });
 
                 let _ = WhatsAppRepository::set_conversation_state(
@@ -710,17 +780,26 @@ pub async fn handle_attendance_conversation_step(
                 )
                 .await;
 
+                let session_display = if selected.is_daily_roll_call {
+                    "📋 *Session*: Daily Roll Call (Class Teacher)".to_string()
+                } else if let Some(p) = selected.period_number {
+                    format!("📚 *Subject*: {} (Period {p})", selected.subject_name)
+                } else {
+                    format!("📚 *Subject*: {}", selected.subject_name)
+                };
+
                 format!(
-                    "✅ Selected: *{} - Section {}*\n\n\
+                    "✅ Selected: *{} - Section {}*\n\
+                    {}\n\n\
                     Please send the absent roll numbers in the format:\n\
                     👉 *1, 2, 55 absent*\n\n\
                     _(Or send *all present* if everyone is present, or *cancel* to abort)_",
-                    selected.class_name, selected.section_name
+                    selected.class_name, selected.section_name, session_display
                 )
             } else {
                 format!(
                     "⚠️ Invalid selection: \"{}\".\n\n\
-                    Please reply with the class number (e.g. *1*) or class name (e.g. *Class 1 A*), or send *cancel* to abort.",
+                    Please reply with the class number (e.g. *1*) or class/subject name, or send *cancel* to abort.",
                     trimmed
                 )
             }

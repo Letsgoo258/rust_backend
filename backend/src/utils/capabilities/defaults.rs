@@ -11,7 +11,7 @@ pub fn default_enabled_keys(role_code: &str) -> HashSet<&'static str> {
         "SUPER_ADMIN" | "SCHOOL_ADMIN" | "HEADMASTER" | "PRINCIPAL" => {
             for (key, _, _, _) in catalogue() {
                 // School Admins and Super Admins are strictly prohibited from initial attendance recording
-                if key != "attendance:record" {
+                if key != "attendance:record" && key != "attendance:mark" {
                     set.insert(key);
                 }
             }
@@ -36,6 +36,7 @@ pub fn default_enabled_keys(role_code: &str) -> HashSet<&'static str> {
             set.insert("attendance:view");
             set.insert("attendance:edit_class");
             set.insert("attendance:bulk_edit");
+            set.insert("attendance:delete");
             set.insert("attendance:resolve_tickets");
         }
 
@@ -48,6 +49,8 @@ pub fn default_enabled_keys(role_code: &str) -> HashSet<&'static str> {
             set.insert("exams:enter_marks");
             set.insert("attendance:view");
             set.insert("attendance:record");
+            set.insert("attendance:mark");
+            set.insert("attendance:edit");
             set.insert("attendance:edit_subject");
         }
 
@@ -71,6 +74,8 @@ pub fn default_enabled_keys(role_code: &str) -> HashSet<&'static str> {
             set.insert("exams:enter_marks");
             set.insert("attendance:view");
             set.insert("attendance:record");
+            set.insert("attendance:mark");
+            set.insert("attendance:edit");
             set.insert("attendance:edit_class");
             set.insert("attendance:edit_subject");
         }
@@ -84,6 +89,8 @@ pub fn default_enabled_keys(role_code: &str) -> HashSet<&'static str> {
             set.insert("exams:enter_marks");
             set.insert("attendance:view");
             set.insert("attendance:record");
+            set.insert("attendance:mark");
+            set.insert("attendance:edit");
             set.insert("attendance:edit_subject");
         }
 
@@ -93,6 +100,8 @@ pub fn default_enabled_keys(role_code: &str) -> HashSet<&'static str> {
             set.insert("academics:view");
             set.insert("attendance:view");
             set.insert("attendance:record");
+            set.insert("attendance:mark");
+            set.insert("attendance:edit");
             set.insert("attendance:edit_subject");
         }
 

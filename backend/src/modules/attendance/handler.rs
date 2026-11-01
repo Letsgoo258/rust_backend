@@ -279,4 +279,22 @@ impl AttendanceHandler {
             "slots": slots
         })))
     }
+
+    /// Delete an attendance session and its records
+    pub async fn delete_session(
+        auth_session: AuthSession,
+        State(state): State<AppState>,
+        Path(session_id): Path<Uuid>,
+    ) -> Result<impl IntoResponse, AppError> {
+        let user = auth_session
+            .user
+            .ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+
+        AttendanceService::delete_session(&state.db, &user, session_id).await?;
+
+        Ok(Json(serde_json::json!({
+            "success": true,
+            "message": "Attendance session and associated student records deleted successfully."
+        })))
+    }
 }

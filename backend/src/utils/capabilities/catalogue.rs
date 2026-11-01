@@ -189,6 +189,12 @@ pub fn catalogue() -> Vec<(&'static str, &'static str, &'static str, &'static st
             "Record and submit class roll-call and period attendance (Teachers only)",
         ),
         (
+            "attendance:mark",
+            "Mark / Take Class Attendance",
+            "Attendance",
+            "Direct alias for recording class roll-call and period attendance (Teachers only)",
+        ),
+        (
             "attendance:edit_class",
             "Class Teacher Attendance Edit",
             "Attendance",
@@ -201,10 +207,22 @@ pub fn catalogue() -> Vec<(&'static str, &'static str, &'static str, &'static st
             "Edit attendance for designated subject period within un-frozen period",
         ),
         (
+            "attendance:edit",
+            "Edit Attendance Records",
+            "Attendance",
+            "Unified edit capability for class and subject attendance within policy window",
+        ),
+        (
             "attendance:bulk_edit",
             "Administrative Bulk Edit Attendance",
             "Attendance",
             "School Admin bulk edit or correction of attendance across classes with mandatory justification",
+        ),
+        (
+            "attendance:delete",
+            "Delete / Void Attendance Sessions",
+            "Attendance",
+            "Administrative capability to delete or void mistakenly created attendance sessions",
         ),
         (
             "attendance:manage_config",

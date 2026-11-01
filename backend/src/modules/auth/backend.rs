@@ -65,6 +65,13 @@ pub struct UserMeResponse {
 impl User {
     /// Instant O(1) in-memory check without any database queries or compute overhead.
     pub fn has_capability(&self, key: &str) -> bool {
+        let key_norm = key.replace('.', ":");
+        if key_norm == "attendance:record" || key_norm == "attendance:mark" {
+            // School Admins and Super Admins are strictly prohibited from initial attendance recording
+            if self.is_school_admin() {
+                return false;
+            }
+        }
         if self
             .roles
             .iter()
@@ -72,9 +79,19 @@ impl User {
         {
             return true;
         }
-        self.capabilities
-            .iter()
-            .any(|c| c.eq_ignore_ascii_case(key))
+        self.capabilities.iter().any(|c| {
+            c.eq_ignore_ascii_case(key)
+                || c.eq_ignore_ascii_case(&key_norm)
+                || (key_norm == "attendance:mark" && c.eq_ignore_ascii_case("attendance:record"))
+                || (key_norm == "attendance:record" && c.eq_ignore_ascii_case("attendance:mark"))
+                || (key_norm == "attendance:edit"
+                    && (c.eq_ignore_ascii_case("attendance:edit_class")
+                        || c.eq_ignore_ascii_case("attendance:edit_subject")))
+                || (key_norm == "attendance:edit_class"
+                    && c.eq_ignore_ascii_case("attendance:edit"))
+                || (key_norm == "attendance:edit_subject"
+                    && c.eq_ignore_ascii_case("attendance:edit"))
+        })
     }
 
     /// Check if user has any of the requested capabilities.

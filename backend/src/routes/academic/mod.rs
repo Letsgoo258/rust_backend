@@ -82,8 +82,35 @@ pub fn router() -> Router<AppState> {
             post(crate::modules::academic::timetable::TimetableHandler::sync_daily_timetable),
         )
         .route(
+            "/timetable/check-clash",
+            post(crate::modules::academic::timetable::TimetableHandler::check_clash),
+        )
+        .route(
             "/timetable/config",
             get(crate::modules::academic::timetable::TimetableHandler::get_timetable_config)
                 .post(crate::modules::academic::timetable::TimetableHandler::save_timetable_config),
+        )
+        // Elective Groups & Student Segregation
+        .route(
+            "/electives/groups",
+            get(crate::modules::academic::electives::ElectiveHandler::list_groups)
+                .post(crate::modules::academic::electives::ElectiveHandler::create_group),
+        )
+        .route(
+            "/electives/groups/:id",
+            put(crate::modules::academic::electives::ElectiveHandler::update_group)
+                .delete(crate::modules::academic::electives::ElectiveHandler::delete_group),
+        )
+        .route(
+            "/electives/enrollments",
+            get(crate::modules::academic::electives::ElectiveHandler::get_enrollments),
+        )
+        .route(
+            "/electives/enrollments/bulk",
+            post(crate::modules::academic::electives::ElectiveHandler::bulk_assign),
+        )
+        .route(
+            "/electives/matrix",
+            get(crate::modules::academic::electives::ElectiveHandler::get_matrix),
         )
 }

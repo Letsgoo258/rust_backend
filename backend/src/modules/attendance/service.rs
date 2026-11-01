@@ -27,8 +27,10 @@ impl AttendanceService {
         pool: &PgPool,
         school_id: Uuid,
         class_section_id: Uuid,
+        subject_id: Option<Uuid>,
     ) -> Result<Vec<StudentRosterItem>, AppError> {
-        AttendanceRepository::get_enrolled_roster(pool, school_id, class_section_id).await
+        AttendanceRepository::get_enrolled_roster(pool, school_id, class_section_id, subject_id)
+            .await
     }
 
     /// Record initial class or period attendance
@@ -88,6 +90,7 @@ impl AttendanceService {
             payload.class_section_id,
             date,
             payload.period_number,
+            payload.subject_id,
         )
         .await?;
 

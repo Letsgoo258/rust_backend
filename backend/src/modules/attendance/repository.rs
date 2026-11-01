@@ -43,11 +43,12 @@ impl AttendanceRepository {
         }
     }
 
-    /// Retrieve active roster of students enrolled in the class section
+    /// Retrieve active roster of students enrolled in the class section, optionally filtered by elective subject
     pub async fn get_enrolled_roster(
         pool: &PgPool,
         school_id: Uuid,
         class_section_id: Uuid,
+        subject_id: Option<Uuid>,
     ) -> Result<Vec<StudentRosterItem>, AppError> {
         let rows = sqlx::query(
             r#"
@@ -66,6 +67,17 @@ impl AttendanceRepository {
             WHERE (u.class_section_id = $1 OR EXISTS (
                 SELECT 1 FROM enrollments e WHERE e.student_id = u.id AND e.class_section_id = $1
             ))
+              AND (
+                  $3::uuid IS NULL
+                  OR NOT EXISTS (
+                      SELECT 1 FROM student_subject_enrollments sse
+                      WHERE sse.school_id = $2 AND sse.class_section_id = $1 AND sse.subject_id = $3 AND sse.status = 'ACTIVE'
+                  )
+                  OR EXISTS (
+                      SELECT 1 FROM student_subject_enrollments sse
+                      WHERE sse.school_id = $2 AND sse.student_id = u.id AND sse.class_section_id = $1 AND sse.subject_id = $3 AND sse.status = 'ACTIVE'
+                  )
+              )
               AND u.school_id = $2
               AND u.status = 'ACTIVE'
             ORDER BY COALESCE(NULLIF(u.admission_number, ''), '999999'), full_name ASC
@@ -73,6 +85,7 @@ impl AttendanceRepository {
         )
         .bind(class_section_id)
         .bind(school_id)
+        .bind(subject_id)
         .fetch_all(pool)
         .await?;
 
@@ -90,13 +103,14 @@ impl AttendanceRepository {
         Ok(list)
     }
 
-    /// Check if an attendance session already exists for this slot
+    /// Check if an attendance session already exists for this slot and subject
     pub async fn get_existing_session_id(
         pool: &PgPool,
         school_id: Uuid,
         class_section_id: Uuid,
         date: NaiveDate,
         period_number: Option<i32>,
+        subject_id: Option<Uuid>,
     ) -> Result<Option<(Uuid, Uuid, String, bool, DateTime<Utc>)>, AppError> {
         let row = sqlx::query_as::<_, (Uuid, Uuid, String, bool, DateTime<Utc>)>(
             r#"
@@ -104,6 +118,7 @@ impl AttendanceRepository {
             FROM attendance_sessions
             WHERE school_id = $1 AND class_section_id = $2 AND date = $3
               AND COALESCE(period_number, 0) = COALESCE($4, 0)
+              AND COALESCE(subject_id, '00000000-0000-0000-0000-000000000000'::uuid) = COALESCE($5, '00000000-0000-0000-0000-000000000000'::uuid)
             LIMIT 1
             "#,
         )
@@ -111,6 +126,7 @@ impl AttendanceRepository {
         .bind(class_section_id)
         .bind(date)
         .bind(period_number)
+        .bind(subject_id)
         .fetch_optional(pool)
         .await?;
 
@@ -385,7 +401,7 @@ impl AttendanceRepository {
                 $7, $8, $9, $10,
                 ARRAY[$9::uuid], $11, 'RECORDED', false, NOW(), NOW()
             )
-            ON CONFLICT (school_id, academic_year_id, class_section_id, date, COALESCE(period_number, 0)) DO UPDATE SET
+            ON CONFLICT (school_id, academic_year_id, class_section_id, date, COALESCE(period_number, 0), COALESCE(subject_id, '00000000-0000-0000-0000-000000000000'::uuid)) DO UPDATE SET
                 co_marked_by = array_append(
                     array_remove(attendance_sessions.co_marked_by, EXCLUDED.marked_by),
                     EXCLUDED.marked_by

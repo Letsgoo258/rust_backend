@@ -29,22 +29,32 @@ pub struct ListSessionsQuery {
     pub class_section_id: Option<Uuid>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct RosterQuery {
+    pub subject_id: Option<Uuid>,
+}
+
 pub struct AttendanceHandler;
 
 impl AttendanceHandler {
-    /// Retrieve enrolled students for roll-call
+    /// Retrieve enrolled students for roll-call, optionally filtered by subject
     pub async fn get_class_roster(
         auth_session: AuthSession,
         State(state): State<AppState>,
         Path(class_section_id): Path<Uuid>,
+        Query(q): Query<RosterQuery>,
     ) -> Result<impl IntoResponse, AppError> {
         let user = auth_session
             .user
             .ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
 
-        let roster =
-            AttendanceService::get_class_roster(&state.db, user.school_id, class_section_id)
-                .await?;
+        let roster = AttendanceService::get_class_roster(
+            &state.db,
+            user.school_id,
+            class_section_id,
+            q.subject_id,
+        )
+        .await?;
 
         Ok(Json(serde_json::json!({
             "success": true,

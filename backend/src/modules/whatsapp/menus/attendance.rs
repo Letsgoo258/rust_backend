@@ -468,24 +468,26 @@ pub async fn record_attendance_for_roster(
     let name = context.display_name.as_deref().unwrap_or("Teacher");
 
     // 1. Fetch active enrolled roster
-    let roster =
-        match AttendanceRepository::get_enrolled_roster(pool, context.school_id, class_section_id)
-            .await
-        {
-            Ok(r) if !r.is_empty() => r,
-            Ok(_) => {
-                let _ =
-                    WhatsAppRepository::clear_conversation_state(pool, context.session_id).await;
-                return format!(
+    let roster = match AttendanceRepository::get_enrolled_roster(
+        pool,
+        context.school_id,
+        class_section_id,
+        subject_id,
+    )
+    .await
+    {
+        Ok(r) if !r.is_empty() => r,
+        Ok(_) => {
+            let _ = WhatsAppRepository::clear_conversation_state(pool, context.session_id).await;
+            return format!(
                 "⚠️ No active students found enrolled in *{class_name} - Section {section_name}*."
             );
-            }
-            Err(e) => {
-                let _ =
-                    WhatsAppRepository::clear_conversation_state(pool, context.session_id).await;
-                return format!("❌ Error loading class roster: {e}");
-            }
-        };
+        }
+        Err(e) => {
+            let _ = WhatsAppRepository::clear_conversation_state(pool, context.session_id).await;
+            return format!("❌ Error loading class roster: {e}");
+        }
+    };
 
     // 2. Match students against absent rolls
     let mut records: Vec<StudentAttendanceInput> = Vec::new();

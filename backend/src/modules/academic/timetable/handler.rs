@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::error::AppError;
 use crate::modules::academic::timetable::generator::AutoGenerateRequest;
 use crate::modules::academic::timetable::service::{
-    BatchSaveSlotsPayload, CreateSubstitutionInput, TimetableService,
+    BatchSaveSlotsPayload, CheckClashRequest, CreateSubstitutionInput, TimetableService,
 };
 use crate::modules::auth::backend::AuthSession;
 use crate::state::AppState;
@@ -109,6 +109,20 @@ impl TimetableHandler {
                 "count": saved
             })),
         ))
+    }
+
+    /// POST /api/v1/academic/timetable/check-clash
+    pub async fn check_clash(
+        auth_session: AuthSession,
+        State(state): State<AppState>,
+        Json(req): Json<CheckClashRequest>,
+    ) -> Result<impl IntoResponse, AppError> {
+        let user = auth_session
+            .user
+            .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+        let res = TimetableService::check_clashes(&state.db, user.school_id, &req).await?;
+        Ok((StatusCode::OK, Json(res)))
     }
 
     /// DELETE /api/v1/academic/timetable/slots/:id

@@ -31,6 +31,8 @@ pub struct TimetableSlotRow {
     pub is_shared: bool,
     pub room_id: Option<Uuid>,
     pub room_name: Option<String>,
+    pub elective_group_id: Option<Uuid>,
+    pub is_elective_slot: bool,
     pub status: String,
 }
 
@@ -48,6 +50,36 @@ pub struct SaveSlotInput {
     #[serde(default)]
     pub is_shared: bool,
     pub room_id: Option<Uuid>,
+    pub elective_group_id: Option<Uuid>,
+    #[serde(default)]
+    pub is_elective_slot: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckClashRequest {
+    pub day_of_week: i32,
+    pub period_number: i32,
+    pub teacher_staff_id: Uuid,
+    pub room_id: Option<Uuid>,
+    pub exclude_slot_id: Option<Uuid>,
+    pub class_section_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClashDetail {
+    pub clash_type: String,
+    pub message: String,
+    pub class_name: String,
+    pub section_name: String,
+    pub subject_name: String,
+    pub period_number: i32,
+    pub day_of_week: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckClashResponse {
+    pub has_clash: bool,
+    pub clashes: Vec<ClashDetail>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -146,6 +178,8 @@ impl TimetableService {
                 COALESCE(ts.co_teacher_staff_ids, '{}') as co_teacher_staff_ids,
                 COALESCE(ts.is_shared, false) as is_shared,
                 ts.room_id, r.name as room_name,
+                ts.elective_group_id,
+                COALESCE(ts.is_elective_slot, false) as is_elective_slot,
                 ts.status
             FROM timetable_slots ts
             JOIN class_sections cs ON ts.class_section_id = cs.id
@@ -187,6 +221,8 @@ impl TimetableService {
                 is_shared: r.try_get("is_shared").unwrap_or(false),
                 room_id: r.get("room_id"),
                 room_name: r.get("room_name"),
+                elective_group_id: r.try_get("elective_group_id").ok().flatten(),
+                is_elective_slot: r.try_get("is_elective_slot").unwrap_or(false),
                 status: r.get("status"),
             })
             .collect();
@@ -214,6 +250,8 @@ impl TimetableService {
                 COALESCE(ts.co_teacher_staff_ids, '{}') as co_teacher_staff_ids,
                 COALESCE(ts.is_shared, false) as is_shared,
                 ts.room_id, r.name as room_name,
+                ts.elective_group_id,
+                COALESCE(ts.is_elective_slot, false) as is_elective_slot,
                 ts.status
             FROM timetable_slots ts
             JOIN class_sections cs ON ts.class_section_id = cs.id
@@ -258,11 +296,130 @@ impl TimetableService {
                 is_shared: r.try_get("is_shared").unwrap_or(false),
                 room_id: r.get("room_id"),
                 room_name: r.get("room_name"),
+                elective_group_id: r.try_get("elective_group_id").ok().flatten(),
+                is_elective_slot: r.try_get("is_elective_slot").unwrap_or(false),
                 status: r.get("status"),
             })
             .collect();
 
         Ok(slots)
+    }
+
+    /// Check for clashes across class sections for a given day and period
+    pub async fn check_clashes(
+        pool: &PgPool,
+        school_id: Uuid,
+        req: &CheckClashRequest,
+    ) -> Result<CheckClashResponse, AppError> {
+        let mut clashes = Vec::new();
+
+        // 1. Teacher clash: check if teacher is assigned to another class section in the same slot
+        let teacher_rows = sqlx::query(
+            r#"
+            SELECT
+                c.name as class_name, s.name as section_name, subj.name as subject_name,
+                ts.period_number, ts.day_of_week, COALESCE(ts.is_shared, false) as is_shared
+            FROM timetable_slots ts
+            JOIN class_sections cs ON ts.class_section_id = cs.id
+            JOIN classes c ON cs.class_id = c.id
+            JOIN sections s ON cs.section_id = s.id
+            JOIN subjects subj ON ts.subject_id = subj.id
+            WHERE ts.school_id = $1
+              AND ts.day_of_week = $2
+              AND ts.period_number = $3
+              AND (ts.teacher_staff_id = $4 OR ts.co_teacher_staff_ids @> ARRAY[$4::uuid])
+              AND ($5::uuid IS NULL OR ts.id != $5)
+              AND ($6::uuid IS NULL OR ts.class_section_id != $6)
+              AND ts.status = 'ACTIVE'
+            "#,
+        )
+        .bind(school_id)
+        .bind(req.day_of_week)
+        .bind(req.period_number)
+        .bind(req.teacher_staff_id)
+        .bind(req.exclude_slot_id)
+        .bind(req.class_section_id)
+        .fetch_all(pool)
+        .await?;
+
+        for r in teacher_rows {
+            let is_shared: bool = r.get("is_shared");
+            if !is_shared {
+                let class_name: String = r.get("class_name");
+                let section_name: String = r.get("section_name");
+                let subject_name: String = r.get("subject_name");
+                clashes.push(ClashDetail {
+                    clash_type: "TEACHER".into(),
+                    message: format!(
+                        "Teacher is already scheduled for {} - {} ({}) in Period {}",
+                        class_name, section_name, subject_name, req.period_number
+                    ),
+                    class_name,
+                    section_name,
+                    subject_name,
+                    period_number: req.period_number,
+                    day_of_week: req.day_of_week,
+                });
+            }
+        }
+
+        // 2. Room clash: check if room is booked by another class section in the same slot
+        if let Some(room_id) = req.room_id {
+            let room_rows = sqlx::query(
+                r#"
+                SELECT
+                    c.name as class_name, s.name as section_name, subj.name as subject_name,
+                    r.name as room_name, ts.period_number, ts.day_of_week,
+                    COALESCE(ts.is_shared, false) as is_shared
+                FROM timetable_slots ts
+                JOIN class_sections cs ON ts.class_section_id = cs.id
+                JOIN classes c ON cs.class_id = c.id
+                JOIN sections s ON cs.section_id = s.id
+                JOIN subjects subj ON ts.subject_id = subj.id
+                JOIN rooms r ON ts.room_id = r.id
+                WHERE ts.school_id = $1
+                  AND ts.day_of_week = $2
+                  AND ts.period_number = $3
+                  AND ts.room_id = $4
+                  AND ($5::uuid IS NULL OR ts.id != $5)
+                  AND ($6::uuid IS NULL OR ts.class_section_id != $6)
+                  AND ts.status = 'ACTIVE'
+                "#,
+            )
+            .bind(school_id)
+            .bind(req.day_of_week)
+            .bind(req.period_number)
+            .bind(room_id)
+            .bind(req.exclude_slot_id)
+            .bind(req.class_section_id)
+            .fetch_all(pool)
+            .await?;
+
+            for r in room_rows {
+                let is_shared: bool = r.get("is_shared");
+                if !is_shared {
+                    let class_name: String = r.get("class_name");
+                    let section_name: String = r.get("section_name");
+                    let subject_name: String = r.get("subject_name");
+                    let room_name: String = r.get("room_name");
+                    clashes.push(ClashDetail {
+                        clash_type: "ROOM".into(),
+                        message: format!(
+                            "Room {} is already occupied by {} - {} ({}) in Period {}",
+                            room_name, class_name, section_name, subject_name, req.period_number
+                        ),
+                        class_name,
+                        section_name,
+                        subject_name,
+                        period_number: req.period_number,
+                        day_of_week: req.day_of_week,
+                    });
+                }
+            }
+        }
+
+        let has_clash = !clashes.is_empty();
+        Ok(CheckClashResponse { has_clash, clashes })
     }
 
     /// Batch upsert timetable slots deterministically with deadlock elimination
@@ -299,23 +456,101 @@ impl TimetableService {
                 .or_else(|_| NaiveTime::parse_from_str(&slot.end_time, "%H:%M"))
                 .map_err(|e| AppError::BadRequest(format!("Invalid end_time: {e}")))?;
 
-            // Upsert with atomic on conflict
+            // 1. Clash Check: unless slot is marked is_shared, ensure teacher & room have no cross-section clashes
+            if !slot.is_shared {
+                let clash_res = Self::check_clashes(
+                    pool,
+                    school_id,
+                    &CheckClashRequest {
+                        day_of_week: slot.day_of_week,
+                        period_number: slot.period_number,
+                        teacher_staff_id: slot.teacher_staff_id,
+                        room_id: slot.room_id,
+                        exclude_slot_id: slot.id,
+                        class_section_id: Some(payload.class_section_id),
+                    },
+                )
+                .await?;
+
+                if clash_res.has_clash {
+                    return Err(AppError::BadRequest(format!(
+                        "Schedule conflict: {}",
+                        clash_res.clashes[0].message
+                    )));
+                }
+            }
+
+            // 2. If slot.id is provided, update existing slot directly
+            if let Some(slot_id) = slot.id {
+                let exists: bool = sqlx::query_scalar(
+                    "SELECT EXISTS(SELECT 1 FROM timetable_slots WHERE id = $1 AND school_id = $2)",
+                )
+                .bind(slot_id)
+                .bind(school_id)
+                .fetch_one(&mut *tx)
+                .await?;
+
+                if exists {
+                    sqlx::query(
+                        r#"
+                        UPDATE timetable_slots
+                        SET
+                            day_of_week = $1,
+                            period_number = $2,
+                            start_time = $3,
+                            end_time = $4,
+                            subject_id = $5,
+                            teacher_staff_id = $6,
+                            co_teacher_staff_ids = $7,
+                            is_shared = $8,
+                            room_id = $9,
+                            elective_group_id = $10,
+                            is_elective_slot = $11,
+                            status = 'ACTIVE',
+                            updated_at = NOW()
+                        WHERE id = $12 AND school_id = $13
+                        "#,
+                    )
+                    .bind(slot.day_of_week)
+                    .bind(slot.period_number)
+                    .bind(start)
+                    .bind(end)
+                    .bind(slot.subject_id)
+                    .bind(slot.teacher_staff_id)
+                    .bind(&slot.co_teacher_staff_ids)
+                    .bind(slot.is_shared)
+                    .bind(slot.room_id)
+                    .bind(slot.elective_group_id)
+                    .bind(slot.is_elective_slot)
+                    .bind(slot_id)
+                    .bind(school_id)
+                    .execute(&mut *tx)
+                    .await?;
+
+                    count += 1;
+                    continue;
+                }
+            }
+
+            // 3. Otherwise upsert on (class_section_id, day_of_week, period_number, subject_id)
             sqlx::query(
                 r#"
                 INSERT INTO timetable_slots (
                     school_id, academic_year_id, class_section_id,
                     day_of_week, period_number, start_time, end_time,
-                    subject_id, teacher_staff_id, co_teacher_staff_ids, is_shared, room_id, status
+                    subject_id, teacher_staff_id, co_teacher_staff_ids, is_shared, room_id,
+                    elective_group_id, is_elective_slot, status
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'ACTIVE')
-                ON CONFLICT (class_section_id, day_of_week, period_number) DO UPDATE SET
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'ACTIVE')
+                ON CONFLICT (class_section_id, day_of_week, period_number, subject_id) DO UPDATE SET
                     start_time = EXCLUDED.start_time,
                     end_time = EXCLUDED.end_time,
-                    subject_id = EXCLUDED.subject_id,
                     teacher_staff_id = EXCLUDED.teacher_staff_id,
                     co_teacher_staff_ids = EXCLUDED.co_teacher_staff_ids,
                     is_shared = EXCLUDED.is_shared,
                     room_id = EXCLUDED.room_id,
+                    elective_group_id = EXCLUDED.elective_group_id,
+                    is_elective_slot = EXCLUDED.is_elective_slot,
                     status = 'ACTIVE',
                     updated_at = NOW()
                 "#,
@@ -332,6 +567,8 @@ impl TimetableService {
             .bind(&slot.co_teacher_staff_ids)
             .bind(slot.is_shared)
             .bind(slot.room_id)
+            .bind(slot.elective_group_id)
+            .bind(slot.is_elective_slot)
             .execute(&mut *tx)
             .await?;
 

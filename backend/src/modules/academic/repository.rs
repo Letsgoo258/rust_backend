@@ -1191,6 +1191,17 @@ impl AcademicRepository {
                   OR cs.class_teacher_staff_id IN (
                       SELECT id FROM staff WHERE user_id = $2 AND school_id = $1
                   )
+                  OR cs.id IN (
+                      SELECT ts.class_section_id
+                      FROM timetable_slots ts
+                      WHERE ts.school_id = $1
+                        AND (
+                            ts.teacher_staff_id = $2
+                            OR ts.teacher_staff_id IN (SELECT id FROM staff WHERE user_id = $2 AND school_id = $1)
+                            OR ts.co_teacher_staff_ids @> ARRAY[(SELECT id FROM staff WHERE user_id = $2 AND school_id = $1)]
+                        )
+                        AND ts.status = 'ACTIVE'
+                  )
               )
             "#,
         )
@@ -1203,10 +1214,13 @@ impl AcademicRepository {
             .into_iter()
             .filter(|c| {
                 if is_admin {
-                    c.class_teacher_staff_id.is_some()
+                    true
+                } else if !user_section_ids.is_empty() {
+                    user_section_ids.contains(&c.class_section_id)
                         || Some(c.class_section_id) == requested_section_id
                 } else {
-                    user_section_ids.contains(&c.class_section_id)
+                    // Fallback so teachers can access active class divisions
+                    true
                 }
             })
             .map(|c| MyClassSectionInfo {
@@ -1224,9 +1238,20 @@ impl AcademicRepository {
             .collect();
 
         let active_section_id: Option<Uuid> = if let Some(req_id) = requested_section_id {
-            Some(req_id)
-        } else if !is_admin {
-            user_section_ids.first().copied()
+            if assigned_classes
+                .iter()
+                .any(|c| c.class_section_id == req_id)
+            {
+                Some(req_id)
+            } else {
+                assigned_classes.first().map(|c| c.class_section_id)
+            }
+        } else if !is_admin && !user_section_ids.is_empty() {
+            user_section_ids
+                .iter()
+                .find(|id| assigned_classes.iter().any(|c| c.class_section_id == **id))
+                .copied()
+                .or_else(|| assigned_classes.first().map(|c| c.class_section_id))
         } else {
             assigned_classes.first().map(|c| c.class_section_id)
         };

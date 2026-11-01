@@ -932,20 +932,17 @@ pub async fn get_my_class(
         .user
         .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
 
-    let is_class_teacher = user
-        .roles
-        .iter()
-        .any(|r| r.eq_ignore_ascii_case("CLASS_TEACHER"))
-        || user.is_class_teacher
-        || user.is_school_admin()
-        || user
-            .roles
-            .iter()
-            .any(|r| r.eq_ignore_ascii_case("SUPER_ADMIN"));
+    let is_class_teacher = user.roles.iter().any(|r| {
+        r.eq_ignore_ascii_case("CLASS_TEACHER")
+            || r.eq_ignore_ascii_case("TEACHER")
+            || r.eq_ignore_ascii_case("SUPER_ADMIN")
+    }) || user.is_class_teacher
+        || user.has_assigned_class_teacher
+        || user.is_school_admin();
 
     if !is_class_teacher {
         return Err(AppError::Forbidden(
-            "Access denied: My Class is strictly reserved for users with the CLASS_TEACHER role or assigned Class Teachers."
+            "Access denied: My Class is strictly reserved for users with teaching or administrative privileges."
                 .into(),
         ));
     }

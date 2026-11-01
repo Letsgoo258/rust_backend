@@ -23,13 +23,13 @@ pub async fn handle_profile_query(
     let expires_formatted = session.expires_at.format("%d %b %Y, %H:%M UTC").to_string();
     let cap_count = context.capabilities.len();
 
-    let school_name: String =
-        sqlx::query_scalar!("SELECT name FROM schools WHERE id = $1", context.school_id)
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| "ERAVAYA School".to_string());
+    let school_name: String = sqlx::query_scalar("SELECT name FROM schools WHERE id = $1")
+        .bind(context.school_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "ERAVAYA School".to_string());
 
     format!(
         "👤 *Account Profile & Capabilities*\n\n\

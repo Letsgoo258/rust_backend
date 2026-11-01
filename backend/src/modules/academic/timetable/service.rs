@@ -514,19 +514,19 @@ impl TimetableService {
         let (slot_id, day_of_week, period_number, orig_teacher_id) = slot;
 
         // 2. Validate substitute teacher: make sure they do not have a teaching slot or active substitution at this period
-        let has_regular_clash: bool = sqlx::query_scalar!(
+        let has_regular_clash: bool = sqlx::query_scalar::<_, bool>(
             r#"
             SELECT EXISTS(
                 SELECT 1 FROM timetable_slots
                 WHERE school_id = $1 AND teacher_staff_id = $2
                   AND day_of_week = $3 AND period_number = $4 AND status = 'ACTIVE'
-            ) as "exists!"
+            )
             "#,
-            school_id,
-            input.substitute_teacher_id,
-            day_of_week,
-            period_number
         )
+        .bind(school_id)
+        .bind(input.substitute_teacher_id)
+        .bind(day_of_week)
+        .bind(period_number)
         .fetch_one(pool)
         .await?;
 

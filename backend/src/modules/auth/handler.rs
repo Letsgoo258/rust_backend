@@ -1129,28 +1129,28 @@ pub async fn request_password_reset(
 ) -> Result<impl axum::response::IntoResponse, AppError> {
     let email = payload.email.trim().to_lowercase();
 
-    let user = sqlx::query!(
+    let user = sqlx::query_as::<_, (uuid::Uuid, String, Option<String>)>(
         "SELECT id, username, phone FROM users WHERE LOWER(email) = LOWER($1) AND status NOT IN ('DELETED', 'SUSPENDED') LIMIT 1",
-        email
     )
+    .bind(&email)
     .fetch_optional(&state.db)
     .await?;
 
-    if let Some(user_record) = user {
+    if let Some((user_id, username, phone)) = user {
         use argon2::password_hash::rand_core::{OsRng, RngCore};
         let code = format!("{:06}", OsRng.next_u32() % 1_000_000);
         let token = uuid::Uuid::new_v4().to_string();
         let token_hash = crate::utils::password::hash_password(&token).unwrap_or(token.clone());
         let expires_at = time::OffsetDateTime::now_utc() + time::Duration::minutes(15);
 
-        sqlx::query!(
+        sqlx::query(
             "INSERT INTO password_resets (user_id, email, token_hash, code, expires_at) VALUES ($1, $2, $3, $4, $5)",
-            user_record.id,
-            email,
-            token_hash,
-            code,
-            expires_at
         )
+        .bind(user_id)
+        .bind(&email)
+        .bind(&token_hash)
+        .bind(&code)
+        .bind(expires_at)
         .execute(&state.db)
         .await?;
 
@@ -1168,7 +1168,7 @@ pub async fn request_password_reset(
              <p>Your verification code is: <strong>{}</strong></p>\
              <p>Or click this link to reset your password: <a href=\"{}\">Reset Password</a></p>\
              <p>This code will expire in 15 minutes.</p>",
-            user_record.username, code, reset_url
+            username, code, reset_url
         );
 
         let email_to_send = email.clone();
@@ -1184,13 +1184,13 @@ pub async fn request_password_reset(
             }
         });
 
-        if let Some(ref phone) = user_record.phone {
-            let clean_phone: String = phone.chars().filter(|c| c.is_ascii_digit()).collect();
+        if let Some(ref phone_str) = phone {
+            let clean_phone: String = phone_str.chars().filter(|c| c.is_ascii_digit()).collect();
             if !clean_phone.is_empty() {
                 let jid = format!("{clean_phone}@s.whatsapp.net");
                 let wa_msg = format!(
                     "🔐 *ERAVAYA Password Reset*\n\nHello {},\nYour password reset code is: *{}*\n\nReset link: {}\n\nThis code will expire in 15 minutes.",
-                    user_record.username, code, reset_url
+                    username, code, reset_url
                 );
                 let pool = state.db.clone();
                 tokio::spawn(async move {
@@ -1206,10 +1206,10 @@ pub async fn request_password_reset(
         crate::utils::audit::log_action(
             &state.db,
             None,
-            Some(user_record.id),
+            Some(user_id),
             "CRITICAL_PASSWORD_RESET_REQUEST",
             Some("PASSWORD_RESET"),
-            Some(user_record.id),
+            Some(user_id),
             Some(serde_json::json!({
                 "email": email,
                 "verification_code": code,
@@ -1225,10 +1225,10 @@ pub async fn request_password_reset(
         println!("============================================================");
         println!("🔐 [FORGOT PASSWORD RESET REQUEST DISPATCHED]");
         println!("Target Email: {}", email);
-        println!("User: {}", user_record.username);
+        println!("User: {}", username);
         println!("Verification Code (OTP): {}", code);
         println!("Reset URL: {}", reset_url);
-        if let Some(ref ph) = user_record.phone {
+        if let Some(ref ph) = phone {
             println!("Target WhatsApp / Phone: {}", ph);
         }
         println!("============================================================");
@@ -1270,17 +1270,17 @@ pub async fn confirm_password_reset(
     let email = payload.email.trim().to_lowercase();
     let code = payload.code.trim();
 
-    let record = sqlx::query!(
+    let record = sqlx::query_as::<_, (uuid::Uuid, uuid::Uuid, time::OffsetDateTime)>(
         "SELECT id, user_id, expires_at FROM password_resets \
          WHERE LOWER(email) = LOWER($1) AND code = $2 AND used_at IS NULL \
          ORDER BY created_at DESC LIMIT 1",
-        email,
-        code
     )
+    .bind(&email)
+    .bind(code)
     .fetch_optional(&state.db)
     .await?;
 
-    let reset_record = match record {
+    let (reset_id, reset_user_id, reset_expires_at) = match record {
         Some(r) => r,
         None => {
             return Err(AppError::BadRequest(
@@ -1289,7 +1289,7 @@ pub async fn confirm_password_reset(
         }
     };
 
-    if reset_record.expires_at < time::OffsetDateTime::now_utc() {
+    if reset_expires_at < time::OffsetDateTime::now_utc() {
         return Err(AppError::BadRequest(
             "Password reset code has expired. Please request a new one.".into(),
         ));
@@ -1299,29 +1299,27 @@ pub async fn confirm_password_reset(
 
     let mut tx = state.db.begin().await?;
 
-    sqlx::query!(
+    sqlx::query(
         "UPDATE users SET password_hash = $1, status = CASE WHEN status = 'INACTIVE' THEN 'ACTIVE' ELSE status END, email_verified = true, updated_at = now() WHERE id = $2",
-        new_password_hash,
-        reset_record.user_id
     )
+    .bind(&new_password_hash)
+    .bind(reset_user_id)
     .execute(&mut *tx)
     .await?;
 
-    sqlx::query!(
-        "UPDATE password_resets SET used_at = now() WHERE id = $1",
-        reset_record.id
-    )
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("UPDATE password_resets SET used_at = now() WHERE id = $1")
+        .bind(reset_id)
+        .execute(&mut *tx)
+        .await?;
 
     tx.commit().await?;
 
-    crate::modules::auth::backend::invalidate_user_cache(&reset_record.user_id);
+    crate::modules::auth::backend::invalidate_user_cache(&reset_user_id);
 
     crate::utils::audit::log_action(
         &state.db,
         None,
-        Some(reset_record.user_id),
+        Some(reset_user_id),
         "PASSWORD_RESET_SUCCESS",
         None,
         None,

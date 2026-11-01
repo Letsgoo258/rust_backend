@@ -220,18 +220,24 @@ impl UserRepository {
                 u.created_at::TEXT as created_at
             FROM users u
             LEFT JOIN enrollments e ON e.student_id = u.id AND e.status = 'ACTIVE'
-            LEFT JOIN class_sections cs ON (cs.id = e.class_section_id OR (e.class_section_id IS NULL AND cs.id = u.class_section_id))
+            LEFT JOIN class_sections cs ON cs.id = COALESCE(e.class_section_id, u.class_section_id)
             LEFT JOIN classes c ON cs.class_id = c.id
             LEFT JOIN sections sec ON cs.section_id = sec.id
             LEFT JOIN staff st ON st.user_id = u.id
             LEFT JOIN student_guardians sg ON sg.student_id = u.id
             LEFT JOIN guardians g ON sg.guardian_id = g.id
-            LEFT JOIN LATERAL (
-                SELECT COALESCE(array_agg(DISTINCT roles.code::TEXT) FILTER (WHERE roles.code IS NOT NULL), ARRAY[]::TEXT[]) as roles
+            LEFT JOIN (
+                SELECT ur2.user_id,
+                       COALESCE(array_agg(DISTINCT roles.code::TEXT) FILTER (WHERE roles.code IS NOT NULL), ARRAY[]::TEXT[]) as roles
                 FROM user_roles ur2
                 JOIN roles ON roles.id = ur2.role_id
-                WHERE ur2.user_id = u.id
-            ) r ON TRUE
+                WHERE ur2.user_id IN (SELECT id FROM users WHERE school_id = ",
+        );
+        qb.push_bind(school_id);
+        qb.push(
+            ")
+                GROUP BY ur2.user_id
+            ) r ON r.user_id = u.id
             WHERE u.school_id = ",
         );
         qb.push_bind(school_id);

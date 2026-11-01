@@ -113,4 +113,18 @@ pub fn router() -> Router<AppState> {
             "/electives/matrix",
             get(crate::modules::academic::electives::ElectiveHandler::get_matrix),
         )
+        // Academic Calendar & Holidays
+        .route(
+            "/calendar",
+            get(crate::modules::academic::calendar::CalendarHandler::list_calendar)
+                .post(crate::modules::academic::calendar::CalendarHandler::create_calendar_entry),
+        )
+        .route(
+            "/calendar/:id",
+            delete(crate::modules::academic::calendar::CalendarHandler::delete_calendar_entry),
+        )
+        .route(
+            "/calendar/check",
+            get(crate::modules::academic::calendar::CalendarHandler::check_holiday),
+        )
 }

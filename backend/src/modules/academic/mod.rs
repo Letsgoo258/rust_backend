@@ -1,3 +1,4 @@
+pub mod calendar;
 pub mod electives;
 pub mod handler;
 pub mod repository;

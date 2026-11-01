@@ -50,6 +50,10 @@ pub struct AvailableClassOption {
     pub subject_name: String,
     pub period_number: Option<i32>,
     pub is_daily_roll_call: bool,
+    #[serde(default)]
+    pub is_holiday: bool,
+    #[serde(default)]
+    pub holiday_title: Option<String>,
     pub display: String,
 }
 
@@ -325,13 +329,25 @@ pub async fn check_active_period(
     })
 }
 
-/// Retrieve available classes and subjects strictly assigned to the teacher.
-/// NO fallback to other school classes. If teacher has no assigned classes/subjects, returns empty.
+/// Retrieve available classes and subjects strictly assigned to the teacher for today.
 pub async fn get_teacher_available_classes(
     pool: &PgPool,
     school_id: Uuid,
     staff_id: Uuid,
     user_id: Uuid,
+) -> Vec<AvailableClassOption> {
+    let local_date = get_school_local_date(pool, school_id).await;
+    get_teacher_available_classes_for_date(pool, school_id, staff_id, user_id, local_date).await
+}
+
+/// Retrieve available classes and subjects strictly assigned to the teacher for a specific target date,
+/// checking holiday status for each class section.
+pub async fn get_teacher_available_classes_for_date(
+    pool: &PgPool,
+    school_id: Uuid,
+    staff_id: Uuid,
+    user_id: Uuid,
+    target_date: NaiveDate,
 ) -> Vec<AvailableClassOption> {
     let mut options = Vec::new();
 
@@ -375,7 +391,7 @@ pub async fn get_teacher_available_classes(
             WHERE cdt.school_id = $1
               AND (cdt.effective_teacher_id = $2 OR cdt.effective_teacher_id = $3 
                    OR cdt.co_teacher_ids @> ARRAY[$2::uuid] OR cdt.co_teacher_ids @> ARRAY[$3::uuid])
-              AND cdt.date = (NOW() AT TIME ZONE COALESCE(sch.timezone, 'Asia/Kolkata'))::date
+              AND cdt.date = $4
 
             UNION
 
@@ -406,6 +422,7 @@ pub async fn get_teacher_available_classes(
     .bind(school_id)
     .bind(staff_id)
     .bind(user_id)
+    .bind(target_date)
     .fetch_all(pool)
     .await
     .unwrap_or_default();
@@ -419,7 +436,27 @@ pub async fn get_teacher_available_classes(
         let period_num: Option<i32> = r.try_get("period_number").ok();
         let is_daily: bool = r.get("is_daily_roll_call");
 
-        let display = if is_daily {
+        // Check if this class section has a holiday on target_date
+        let holiday_info =
+            crate::modules::academic::calendar::CalendarRepository::check_date_holiday(
+                pool,
+                school_id,
+                target_date,
+                None,
+                Some(cs_id),
+            )
+            .await
+            .ok();
+
+        let (is_holiday, holiday_title) = match holiday_info {
+            Some(h) if h.is_holiday => (true, h.title),
+            _ => (false, None),
+        };
+
+        let display = if is_holiday {
+            let h_name = holiday_title.as_deref().unwrap_or("Holiday");
+            format!("{c_name} - Section {s_name} | 🏖️ Holiday ({h_name})")
+        } else if is_daily {
             format!("{c_name} - Section {s_name} | 📋 Daily Roll Call (Class Teacher)")
         } else if let Some(p) = period_num {
             format!("{c_name} - Section {s_name} | 📚 {sub_name} (Period {p})")
@@ -436,6 +473,8 @@ pub async fn get_teacher_available_classes(
             subject_name: sub_name,
             period_number: period_num,
             is_daily_roll_call: is_daily,
+            is_holiday,
+            holiday_title,
             display,
         });
     }
@@ -500,6 +539,38 @@ pub async fn start_attendance_flow(pool: &PgPool, context: &WhatsAppUserContext)
     let is_weekend = is_sunday || weekday == chrono::Weekday::Sat;
     let formatted_today = local_date.format("%d %b %Y (%A)").to_string();
 
+    // Check if today is a declared School-Wide Holiday
+    let school_holiday =
+        crate::modules::academic::calendar::CalendarRepository::check_date_holiday(
+            pool,
+            context.school_id,
+            local_date,
+            None,
+            None,
+        )
+        .await
+        .ok();
+
+    if let Some(h) = &school_holiday {
+        if h.is_holiday && h.applies_to_all_classes {
+            let h_title = h.title.as_deref().unwrap_or("School Holiday");
+            let desc = h.description.as_deref().unwrap_or("");
+            let desc_text = if !desc.is_empty() {
+                format!("\n_{desc}_\n")
+            } else {
+                String::new()
+            };
+
+            return format!(
+                "📅 *Date*: {formatted_today}\n\
+                🏖️ *School-Wide Holiday: {h_title}*{desc_text}\n\n\
+                The entire school is observing a declared holiday today. Timetable sessions and class roll-calls are suspended.\n\n\
+                👉 To mark attendance for a past working day, reply *yesterday* or *date YYYY-MM-DD* (e.g. *date 2026-10-31*).\n\
+                👉 Reply *cancel* or *abort* to exit."
+            );
+        }
+    }
+
     // 5. Check if teacher has an active scheduled period right now in timetable
     if let Some(active_slot) = check_active_period(pool, context.school_id, staff_id).await {
         let payload = serde_json::json!({
@@ -539,9 +610,15 @@ pub async fn start_attendance_flow(pool: &PgPool, context: &WhatsAppUserContext)
         );
     }
 
-    // 6. No active slot right now -> Show ONLY the teacher's assigned classes & subjects
-    let options =
-        get_teacher_available_classes(pool, context.school_id, staff_id, context.user_id).await;
+    // 6. No active slot right now -> Show ONLY the teacher's assigned classes & subjects for local_date
+    let options = get_teacher_available_classes_for_date(
+        pool,
+        context.school_id,
+        staff_id,
+        context.user_id,
+        local_date,
+    )
+    .await;
     if options.is_empty() {
         let time_info = if is_sunday {
             format!("📅 *Today is {formatted_today} (Sunday - Non-Working / Weekend)*\n⏰ *No timetable classes scheduled today.*")
@@ -556,6 +633,22 @@ pub async fn start_attendance_flow(pool: &PgPool, context: &WhatsAppUserContext)
             {time_info}\n\n\
             ⚠️ No classes or subjects are assigned to your teacher profile for attendance recording.\n\n\
             Please contact your school administrator or timetable coordinator to assign your classes or subjects."
+        );
+    }
+
+    // If all classes assigned to this teacher are observing a holiday today:
+    let all_holiday = !options.is_empty() && options.iter().all(|o| o.is_holiday);
+    if all_holiday {
+        let first_title = options[0]
+            .holiday_title
+            .as_deref()
+            .unwrap_or("Class Holiday");
+        return format!(
+            "📅 *Date*: {formatted_today}\n\
+            🏖️ *All Your Assigned Classes Are On Holiday: {first_title}*\n\n\
+            All classes assigned to your profile have a declared holiday today. Attendance cannot be recorded.\n\n\
+            👉 To mark attendance for a past working day, reply *yesterday* or *date YYYY-MM-DD*.\n\
+            👉 Reply *cancel* or *abort* to exit."
         );
     }
 
@@ -920,8 +1013,63 @@ pub async fn handle_attendance_conversation_step(
             match parse_date_input(trimmed, today) {
                 Ok(Some(new_date)) => {
                     let new_date_str = new_date.format("%d %b %Y (%A)").to_string();
+
+                    // Check if new_date is a School-Wide Holiday
+                    let holiday_chk =
+                        crate::modules::academic::calendar::CalendarRepository::check_date_holiday(
+                            pool,
+                            context.school_id,
+                            new_date,
+                            None,
+                            None,
+                        )
+                        .await
+                        .ok();
+
+                    if let Some(h) = &holiday_chk {
+                        if h.is_holiday && h.applies_to_all_classes {
+                            let h_title = h.title.as_deref().unwrap_or("School Holiday");
+                            let desc = h.description.as_deref().unwrap_or("");
+                            let desc_text = if !desc.is_empty() {
+                                format!("\n_{desc}_\n")
+                            } else {
+                                String::new()
+                            };
+                            return format!(
+                                "📅 *Date Selected: {new_date_str}*\n\
+                                🏖️ *School-Wide Holiday: {h_title}*{desc_text}\n\n\
+                                The entire school was observing a declared holiday on this date. Attendance cannot be recorded.\n\n\
+                                👉 Reply with another working date (e.g. *date YYYY-MM-DD*) or *cancel* to abort."
+                            );
+                        }
+                    }
+
+                    // Re-fetch classes for this teacher on new_date with holiday awareness
+                    let sid_opt: Option<Uuid> = sqlx::query_scalar(
+                        "SELECT id FROM staff WHERE user_id = $1 AND school_id = $2 LIMIT 1",
+                    )
+                    .bind(context.user_id)
+                    .bind(context.school_id)
+                    .fetch_optional(pool)
+                    .await
+                    .ok()
+                    .flatten();
+
+                    let fresh_options = if let Some(sid) = sid_opt {
+                        get_teacher_available_classes_for_date(
+                            pool,
+                            context.school_id,
+                            sid,
+                            context.user_id,
+                            new_date,
+                        )
+                        .await
+                    } else {
+                        options.clone()
+                    };
+
                     let updated_payload = serde_json::json!({
-                        "options": options,
+                        "options": fresh_options,
                         "target_date": new_date.to_string(),
                     });
                     let _ = WhatsAppRepository::set_conversation_state(
@@ -933,7 +1081,7 @@ pub async fn handle_attendance_conversation_step(
                     .await;
 
                     let mut class_list_text = String::new();
-                    for opt in &options {
+                    for opt in &fresh_options {
                         let num_emoji = match opt.index {
                             1 => "1️⃣",
                             2 => "2️⃣",
@@ -1017,6 +1165,20 @@ pub async fn handle_attendance_conversation_step(
             };
 
             if let Some(selected) = selected_opt {
+                if selected.is_holiday {
+                    let h_title = selected.holiday_title.as_deref().unwrap_or("Holiday");
+                    let formatted_d = target_date.format("%d %b %Y (%A)").to_string();
+                    return format!(
+                        "🏖️ *Holiday Declared: {} - Section {}*\n\n\
+                        This class is observing a declared holiday (*{}*) on {}.\n\
+                        Attendance recording is disabled on holidays.\n\n\
+                        👉 To select another class, reply with its number.\n\
+                        👉 To change date, reply *yesterday* or *date YYYY-MM-DD*.\n\
+                        👉 Reply *cancel* to abort.",
+                        selected.class_name, selected.section_name, h_title, formatted_d
+                    );
+                }
+
                 let next_payload = serde_json::json!({
                     "class_section_id": selected.class_section_id,
                     "class_name": selected.class_name,

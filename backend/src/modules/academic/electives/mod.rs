@@ -290,7 +290,7 @@ impl ElectiveService {
                     SELECT e.roll_number FROM enrollments e
                     WHERE e.student_id = u.id AND e.class_section_id = $2
                     ORDER BY e.created_at DESC LIMIT 1
-                ), u.admission_number, '') as roll_number,
+                ), '') as roll_number,
                 sse.subject_id, s.name as subject_name,
                 sse.elective_group_id, sse.class_section_id, sse.status
             FROM student_subject_enrollments sse
@@ -428,7 +428,7 @@ impl ElectiveService {
                     SELECT e.roll_number FROM enrollments e
                     WHERE e.student_id = u.id AND (e.class_section_id = $2 OR e.class_section_id = u.class_section_id)
                     ORDER BY e.created_at DESC LIMIT 1
-                ), u.admission_number, '') as roll_number,
+                ), '') as roll_number,
                 COALESCE(
                     (SELECT array_agg(sse.subject_id)
                      FROM student_subject_enrollments sse

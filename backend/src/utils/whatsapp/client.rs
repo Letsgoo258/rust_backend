@@ -97,15 +97,53 @@ impl WhatsAppClient {
         let on_msg = move |ctx: MessageContext| {
             let tx = tx.clone();
             async move {
+                // 1. Ignore outgoing messages sent from the owner's phone or companion devices
+                if ctx.info.source.is_from_me {
+                    return;
+                }
+
+                // 2. Ignore group chats - ERAVAYA bot operates exclusively in 1-on-1 private DMs
+                let chat_str = ctx.info.source.chat.to_string();
+                if ctx.info.source.is_group || chat_str.ends_with("@g.us") {
+                    return;
+                }
+
+                // 3. Ignore WhatsApp status stories, broadcast channels, and newsletters
+                if chat_str == "status@broadcast"
+                    || chat_str.ends_with("@broadcast")
+                    || chat_str.ends_with("@newsletter")
+                {
+                    return;
+                }
+
+                // 4. Ignore edited, pinned, or revoked messages
+                if !matches!(ctx.info.edit, wacore::types::message::EditAttribute::Empty) {
+                    return;
+                }
+
+                // 5. Drop stale / offline backlog messages older than 2 minutes (prevents startup flood / replay storms)
+                let age_secs = Utc::now()
+                    .signed_duration_since(ctx.info.timestamp)
+                    .num_seconds();
+                if age_secs > 120 || age_secs < -30 {
+                    tracing::debug!(
+                        age = age_secs,
+                        id = %ctx.info.id,
+                        sender = %ctx.info.source.sender,
+                        "Dropping stale/backlog WhatsApp message"
+                    );
+                    return;
+                }
+
                 if let Some(text) = ctx.message.text_content() {
                     let sender_alt = ctx.info.source.sender_alt.as_ref().map(|j| j.to_string());
                     let event = crate::modules::whatsapp::InboundMessageEvent {
                         sender_jid: ctx.info.source.sender.to_string(),
                         sender_alt,
-                        chat_jid: ctx.info.source.chat.to_string(),
+                        chat_jid: chat_str,
                         raw_id: ctx.info.id.to_string(),
                         text: text.to_string(),
-                        timestamp: Utc::now(),
+                        timestamp: ctx.info.timestamp,
                     };
                     let _ = tx.send(event);
                 }

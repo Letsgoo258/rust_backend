@@ -1,8 +1,9 @@
 use chrono::NaiveDate;
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
+use crate::modules::academic::timetable::repository::TimetableRepository;
 use crate::utils::whatsapp::QueueManager;
 
 /// Formats a phone string into a valid WhatsApp JID (e.g. "919876543210@s.whatsapp.net")
@@ -34,51 +35,16 @@ pub async fn queue_substitution_notifications(
     date: NaiveDate,
     reason: Option<&str>,
 ) {
-    // 1. Fetch substitution contextual details in a single query
-    let row = match sqlx::query(
-        r#"
-        SELECT
-            ts.period_number,
-            ts.start_time::text as start_time,
-            ts.end_time::text as end_time,
-            c.name as class_name,
-            s.name as section_name,
-            subj.name as subject_name,
-            subj.code as subject_code,
-            -- Original faculty
-            st_orig.id as orig_staff_id,
-            u_orig.id as orig_user_id,
-            COALESCE(NULLIF(u_orig.display_name, ''), u_orig.username, 'Teacher') as orig_teacher_name,
-            u_orig.email as orig_email,
-            u_orig.phone as orig_phone,
-            -- Substitute faculty
-            st_sub.id as sub_staff_id,
-            u_sub.id as sub_user_id,
-            COALESCE(NULLIF(u_sub.display_name, ''), u_sub.username, 'Teacher') as sub_teacher_name,
-            u_sub.email as sub_email,
-            u_sub.phone as sub_phone,
-            -- School
-            sch.name as school_name
-        FROM timetable_slots ts
-        JOIN class_sections cs ON ts.class_section_id = cs.id
-        JOIN classes c ON cs.class_id = c.id
-        JOIN sections s ON cs.section_id = s.id
-        JOIN subjects subj ON ts.subject_id = subj.id
-        JOIN schools sch ON ts.school_id = sch.id
-        JOIN staff st_orig ON ts.teacher_staff_id = st_orig.id
-        JOIN users u_orig ON st_orig.user_id = u_orig.id
-        JOIN staff st_sub ON st_sub.id = $2
-        JOIN users u_sub ON st_sub.user_id = u_sub.id
-        WHERE ts.id = $1 AND ts.school_id = $3
-        "#,
+    // 1. Fetch substitution contextual details from repository
+    let ctx = match TimetableRepository::get_substitution_notification_context(
+        pool,
+        school_id,
+        slot_id,
+        substitute_staff_id,
     )
-    .bind(slot_id)
-    .bind(substitute_staff_id)
-    .bind(school_id)
-    .fetch_optional(pool)
     .await
     {
-        Ok(Some(r)) => r,
+        Ok(Some(c)) => c,
         Ok(None) => {
             warn!(slot_id = %slot_id, "Cannot find timetable slot context to queue substitution notifications");
             return;
@@ -89,26 +55,24 @@ pub async fn queue_substitution_notifications(
         }
     };
 
-    let period_number: i32 = row.get("period_number");
-    let start_time: String = row.get("start_time");
-    let end_time: String = row.get("end_time");
-    let start_short = &start_time[..start_time.len().min(5)];
-    let end_short = &end_time[..end_time.len().min(5)];
-    let class_name: String = row.get("class_name");
-    let section_name: String = row.get("section_name");
-    let subject_name: String = row.get("subject_name");
-    let subject_code: String = row.get("subject_code");
-    let school_name: String = row.get("school_name");
+    let period_number = ctx.period_number;
+    let start_short = &ctx.start_time[..ctx.start_time.len().min(5)];
+    let end_short = &ctx.end_time[..ctx.end_time.len().min(5)];
+    let class_name = ctx.class_name;
+    let section_name = ctx.section_name;
+    let subject_name = ctx.subject_name;
+    let subject_code = ctx.subject_code;
+    let school_name = ctx.school_name;
 
-    let sub_user_id: Uuid = row.get("sub_user_id");
-    let sub_teacher_name: String = row.get("sub_teacher_name");
-    let sub_email: Option<String> = row.get("sub_email");
-    let sub_phone: Option<String> = row.get("sub_phone");
+    let sub_user_id = ctx.sub_user_id;
+    let sub_teacher_name = ctx.sub_teacher_name;
+    let sub_email = ctx.sub_email;
+    let sub_phone = ctx.sub_phone;
 
-    let orig_user_id: Uuid = row.get("orig_user_id");
-    let orig_teacher_name: String = row.get("orig_teacher_name");
-    let orig_email: Option<String> = row.get("orig_email");
-    let orig_phone: Option<String> = row.get("orig_phone");
+    let orig_user_id = ctx.orig_user_id;
+    let orig_teacher_name = ctx.orig_teacher_name;
+    let orig_email = ctx.orig_email;
+    let orig_phone = ctx.orig_phone;
 
     let display_reason = reason.unwrap_or("Academic substitution arrangement");
 

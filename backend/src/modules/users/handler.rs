@@ -23,8 +23,22 @@ pub async fn get_users_list(
 
     // Dynamically and safely sanitize incoming query parameters against the configured page schema
     let sanitized_filters = FilterEngine::sanitize_params("users", &raw_query);
-    let (users, total_count) =
-        UserRepository::list_users(&state.db, user.school_id, &sanitized_filters).await?;
+
+    // If caller is NOT a school admin / super admin (e.g. is TEACHER or CLASS_TEACHER),
+    // scope visible students to only the classes/sections they teach or manage.
+    let requester_teacher_user_id = if user.is_school_admin() {
+        None
+    } else {
+        Some(user.id)
+    };
+
+    let (users, total_count) = UserRepository::list_users(
+        &state.db,
+        user.school_id,
+        &sanitized_filters,
+        requester_teacher_user_id,
+    )
+    .await?;
 
     Ok((
         StatusCode::OK,

@@ -106,7 +106,64 @@ impl UserRepository {
         admission_number: &str,
         class_name: &str,
         search: &str,
+        class_section_id: Option<Uuid>,
+        requester_teacher_user_id: Option<Uuid>,
     ) {
+        // Teacher / Class Teacher Scope: If requester is a non-admin teacher, restrict student queries
+        // to students in sections they teach or where they are the assigned class teacher.
+        if let Some(teacher_uid) = requester_teacher_user_id {
+            qb.push(
+                " AND (
+                    -- If user is NOT a student, allow viewing (e.g. colleagues/staff/admins)
+                    (NOT (EXISTS (SELECT 1 FROM user_roles ur_chk JOIN roles r_chk ON ur_chk.role_id = r_chk.id WHERE ur_chk.user_id = u.id AND r_chk.code = 'STUDENT') OR u.admission_number IS NOT NULL))
+                    OR
+                    -- If user IS a student, they must belong to a section taught or managed by this teacher
+                    EXISTS (
+                        SELECT 1 FROM class_sections cs_scope
+                        WHERE (cs_scope.id = u.class_section_id OR EXISTS (
+                            SELECT 1 FROM enrollments e_scope 
+                            WHERE e_scope.student_id = u.id AND e_scope.status = 'ACTIVE' AND e_scope.class_section_id = cs_scope.id
+                        ))
+                        AND (
+                            -- Assigned as Class Teacher (by staff.id or direct user_id)
+                            cs_scope.class_teacher_staff_id = (SELECT st_scope.id FROM staff st_scope WHERE st_scope.user_id = "
+            );
+            qb.push_bind(teacher_uid);
+            qb.push(
+                " LIMIT 1)
+                            OR cs_scope.class_teacher_staff_id = ",
+            );
+            qb.push_bind(teacher_uid);
+            qb.push(
+                "
+                            OR cs_scope.id IN (
+                                SELECT ts_scope.class_section_id 
+                                FROM timetable_slots ts_scope 
+                                WHERE (
+                                    ts_scope.teacher_staff_id = (SELECT st_scope2.id FROM staff st_scope2 WHERE st_scope2.user_id = "
+            );
+            qb.push_bind(teacher_uid);
+            qb.push(
+                " LIMIT 1)
+                                    OR ts_scope.teacher_staff_id = ",
+            );
+            qb.push_bind(teacher_uid);
+            qb.push(
+                "
+                                    OR ts_scope.co_teacher_staff_ids @> ARRAY[(SELECT st_scope3.id FROM staff st_scope3 WHERE st_scope3.user_id = "
+            );
+            qb.push_bind(teacher_uid);
+            qb.push(
+                " LIMIT 1)]
+                                )
+                                AND ts_scope.status = 'ACTIVE'
+                            )
+                        )
+                    )
+                )",
+            );
+        }
+
         if !filter_role.is_empty() {
             let upper = filter_role.to_uppercase();
             if upper == "STUDENT" {
@@ -152,6 +209,14 @@ impl UserRepository {
             qb.push(")");
         }
 
+        if let Some(sec_uuid) = class_section_id {
+            qb.push(" AND (u.class_section_id = ");
+            qb.push_bind(sec_uuid);
+            qb.push(" OR EXISTS (SELECT 1 FROM enrollments e_cs WHERE e_cs.student_id = u.id AND e_cs.status = 'ACTIVE' AND e_cs.class_section_id = ");
+            qb.push_bind(sec_uuid);
+            qb.push("))");
+        }
+
         if !search.is_empty() {
             let pat = format!("%{}%", search);
             qb.push(" AND (u.username ILIKE ");
@@ -178,6 +243,7 @@ impl UserRepository {
         pool: &PgPool,
         school_id: Uuid,
         filters: &std::collections::HashMap<String, String>,
+        requester_teacher_user_id: Option<Uuid>,
     ) -> Result<(Vec<UserListItem>, i64), AppError> {
         let filter_role = filters.get("role").map(|s| s.trim()).unwrap_or("");
         let status = filters.get("status").map(|s| s.trim()).unwrap_or("");
@@ -189,6 +255,13 @@ impl UserRepository {
             .unwrap_or("");
         let class_name = filters.get("class_name").map(|s| s.trim()).unwrap_or("");
         let search = filters.get("search").map(|s| s.trim()).unwrap_or("");
+        let class_section_id = filters
+            .get("class_section_id")
+            .and_then(|s| Uuid::parse_str(s.trim()).ok());
+        let limit: i64 = filters
+            .get("limit")
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(300);
 
         let mut qb = QueryBuilder::<sqlx::Postgres>::new(
             "SELECT
@@ -250,12 +323,24 @@ impl UserRepository {
             admission_number,
             class_name,
             search,
+            class_section_id,
+            requester_teacher_user_id,
         );
-        qb.push(" ORDER BY u.created_at DESC LIMIT 300");
+
+        if class_section_id.is_some() {
+            qb.push(" ORDER BY COALESCE(NULLIF(e.roll_number, ''), NULLIF(u.admission_number, ''), '999999'), u.first_name, u.last_name");
+        } else {
+            qb.push(" ORDER BY u.created_at DESC");
+        }
+
+        if limit > 0 {
+            qb.push(" LIMIT ");
+            qb.push_bind(limit);
+        }
 
         let rows = qb.build().fetch_all(pool).await?;
 
-        let total_count = if rows.len() < 300 {
+        let total_count = if limit > 0 && rows.len() < limit as usize {
             rows.len() as i64
         } else {
             let mut count_qb = QueryBuilder::<sqlx::Postgres>::new(
@@ -271,6 +356,8 @@ impl UserRepository {
                 admission_number,
                 class_name,
                 search,
+                class_section_id,
+                requester_teacher_user_id,
             );
             let count_row = count_qb.build().fetch_one(pool).await?;
             count_row.get::<i64, _>(0)

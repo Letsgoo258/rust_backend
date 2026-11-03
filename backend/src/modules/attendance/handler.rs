@@ -13,8 +13,9 @@ use crate::{
     modules::{
         attendance::{
             dto::{
-                AttendanceConfigDto, BulkEditAttendanceRequest, RecordAttendanceRequest,
-                RegisterQuery, ResolveCollisionRequest, UpdateSingleRecordRequest,
+                AttendanceConfigDto, BulkEditAttendanceRequest, RaiseAttendanceTicketRequest,
+                RecordAttendanceRequest, RegisterQuery, ResolveCollisionRequest,
+                UpdateSingleRecordRequest,
             },
             service::AttendanceService,
         },
@@ -264,6 +265,26 @@ impl AttendanceHandler {
         Ok(Json(serde_json::json!({
             "success": true,
             "message": "Collision ticket resolved successfully."
+        })))
+    }
+
+    /// Raise an attendance collision / conflict ticket
+    pub async fn raise_collision_ticket(
+        auth_session: AuthSession,
+        State(state): State<AppState>,
+        Json(payload): Json<RaiseAttendanceTicketRequest>,
+    ) -> Result<impl IntoResponse, AppError> {
+        let user = auth_session
+            .user
+            .ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+
+        let ticket_number =
+            AttendanceService::raise_collision_ticket(&state.db, &user, payload).await?;
+
+        Ok(Json(serde_json::json!({
+            "success": true,
+            "ticket_number": ticket_number,
+            "message": format!("Verification ticket #{} has been raised for administrative resolution.", ticket_number)
         })))
     }
 

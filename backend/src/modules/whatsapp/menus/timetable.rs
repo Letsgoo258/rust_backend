@@ -97,6 +97,23 @@ pub async fn handle_timetable_query(pool: &PgPool, context: &WhatsAppUserContext
         .flatten();
 
         if let Some((staff_id,)) = staff_opt {
+            // First check if current_day_timetable has rows for today; if not, invoke sync_daily_timetable_for_date(CURRENT_DATE)
+            let daily_count: i64 = sqlx::query_scalar(
+                r#"SELECT COUNT(*) FROM current_day_timetable WHERE school_id = $1 AND date = CURRENT_DATE"#,
+            )
+            .bind(context.school_id)
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
+
+            if daily_count == 0 {
+                let _ = sqlx::query_scalar::<_, i32>(
+                    "SELECT sync_daily_timetable_for_date(CURRENT_DATE)",
+                )
+                .fetch_one(pool)
+                .await;
+            }
+
             let today_slots = sqlx::query_as::<
                 _,
                 (
@@ -124,9 +141,11 @@ pub async fn handle_timetable_query(pool: &PgPool, context: &WhatsAppUserContext
                    JOIN class_sections cs ON cdt.class_section_id = cs.id
                    JOIN classes c ON cs.class_id = c.id
                    JOIN sections s ON cs.section_id = s.id
-                   JOIN staff orig_st ON cdt.original_teacher_id = orig_st.id
-                   JOIN users orig_u ON orig_st.user_id = orig_u.id
-                   WHERE cdt.school_id = $1 AND cdt.effective_teacher_id = $2 AND cdt.date = CURRENT_DATE
+                   LEFT JOIN staff orig_st ON cdt.original_teacher_id = orig_st.id
+                   LEFT JOIN users orig_u ON orig_st.user_id = orig_u.id
+                   WHERE cdt.school_id = $1 
+                     AND (cdt.effective_teacher_id = $2 OR cdt.original_teacher_id = $2 OR cdt.co_teacher_ids @> ARRAY[$2::uuid])
+                     AND cdt.date = CURRENT_DATE
                    ORDER BY cdt.period_number ASC"#,
             )
             .bind(context.school_id)
@@ -168,14 +187,16 @@ pub async fn handle_timetable_query(pool: &PgPool, context: &WhatsAppUserContext
         }
     }
 
-    // Student / Parent View: Look up student's class section
+    // Student / Parent View: Look up student's class section via active enrollments or users.class_section_id
     let student_opt = sqlx::query_as::<_, (uuid::Uuid, String, String)>(
         r#"SELECT cs.id, c.name, s.name
-           FROM students stu
-           JOIN class_sections cs ON stu.class_section_id = cs.id
+           FROM users u
+           JOIN enrollments e ON e.student_id = u.id AND e.status = 'ACTIVE'
+           JOIN class_sections cs ON e.class_section_id = cs.id
            JOIN classes c ON cs.class_id = c.id
            JOIN sections s ON cs.section_id = s.id
-           WHERE (stu.user_id = $1 OR stu.id = $1) AND stu.school_id = $2
+           WHERE (u.id = $1 OR u.id IN (SELECT stu.user_id FROM students stu WHERE stu.id = $1))
+             AND u.school_id = $2
            LIMIT 1"#,
     )
     .bind(context.user_id)
@@ -186,18 +207,34 @@ pub async fn handle_timetable_query(pool: &PgPool, context: &WhatsAppUserContext
     .flatten();
 
     if let Some((section_id, c_name, s_name)) = student_opt {
-        let today_slots = sqlx::query_as::<_, (i32, String, String, String, String, bool)>(
+        // Ensure today's timetable is synced
+        let daily_count: i64 = sqlx::query_scalar(
+            r#"SELECT COUNT(*) FROM current_day_timetable WHERE school_id = $1 AND date = CURRENT_DATE"#,
+        )
+        .bind(context.school_id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+
+        if daily_count == 0 {
+            let _ =
+                sqlx::query_scalar::<_, i32>("SELECT sync_daily_timetable_for_date(CURRENT_DATE)")
+                    .fetch_one(pool)
+                    .await;
+        }
+
+        let today_slots = sqlx::query_as::<_, (i32, String, String, String, Option<String>, bool)>(
             r#"SELECT 
                 cdt.period_number,
                 to_char(cdt.start_time, 'HH12:MI AM') as start_str,
                 to_char(cdt.end_time, 'HH12:MI AM') as end_str,
                 sub.name as subject_name,
-                eff_u.name as teacher_name,
+                COALESCE(eff_u.display_name, eff_u.first_name, 'Teacher') as teacher_name,
                 cdt.is_substituted
                FROM current_day_timetable cdt
                JOIN subjects sub ON cdt.subject_id = sub.id
-               JOIN staff eff_st ON cdt.effective_teacher_id = eff_st.id
-               JOIN users eff_u ON eff_st.user_id = eff_u.id
+               LEFT JOIN staff eff_st ON cdt.effective_teacher_id = eff_st.id
+               LEFT JOIN users eff_u ON eff_st.user_id = eff_u.id
                WHERE cdt.school_id = $1 AND cdt.class_section_id = $2 AND cdt.date = CURRENT_DATE
                ORDER BY cdt.period_number ASC"#,
         )
@@ -210,7 +247,8 @@ pub async fn handle_timetable_query(pool: &PgPool, context: &WhatsAppUserContext
         if !today_slots.is_empty() {
             let slot_list = today_slots
                 .into_iter()
-                .map(|(p, st, et, sub, teacher, is_sub)| {
+                .map(|(p, st, et, sub, teacher_opt, is_sub)| {
+                    let teacher = teacher_opt.unwrap_or_else(|| "Teacher".into());
                     if is_sub {
                         format!(
                             "• *Period {p}* ({st} - {et}): {sub}\n  👨‍🏫 {teacher} *(Substitute)*"

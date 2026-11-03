@@ -757,70 +757,130 @@ pub async fn record_attendance_for_roster(
 
     // 2. Match students against absent rolls
     let mut records: Vec<StudentAttendanceInput> = Vec::new();
-    let mut absent_students: Vec<(String, String)> = Vec::new(); // (display_roll, full_name)
+    let mut absent_students: Vec<(i32, String, String)> = Vec::new(); // (numeric_roll, display_roll, full_name)
     let mut matched_absent_rolls: std::collections::HashSet<String> =
         std::collections::HashSet::new();
 
-    for (idx, student) in roster.iter().enumerate() {
-        let index_num = (idx + 1).to_string();
-        let student_roll = student.roll_number.as_deref().unwrap_or("").trim();
-        let student_roll_clean = student_roll.trim_start_matches('0');
-        let admission = student.admission_number.as_deref().unwrap_or("").trim();
+    // Map each student in the roster to effective roll and lookup identifiers
+    struct CandidateStudent {
+        student_id: Uuid,
+        full_name: String,
+        admission_number: String,
+        assigned_roll: Option<String>,
+        effective_roll: String,
+        numeric_sort_key: i32,
+        is_absent: bool,
+    }
 
-        let adm_suffix = admission
-            .rsplit('-')
-            .next()
-            .unwrap_or("")
-            .trim_start_matches('0');
-        let roll_suffix = student_roll
-            .rsplit('-')
-            .next()
-            .unwrap_or("")
-            .trim_start_matches('0');
+    let mut candidates: Vec<CandidateStudent> = roster
+        .iter()
+        .enumerate()
+        .map(|(idx, student)| {
+            let index_num = (idx + 1).to_string();
+            let raw_roll = student.roll_number.as_deref().unwrap_or("").trim();
+            let clean_roll = raw_roll.trim_start_matches('0');
+            let is_valid_custom_roll = !clean_roll.is_empty()
+                && !clean_roll.starts_with("ADM")
+                && !clean_roll.starts_with("TEST");
 
-        let is_absent = absent_rolls.iter().any(|r| {
-            let clean_r = r.trim_start_matches('0');
-            clean_r == index_num
-                || (!student_roll_clean.is_empty() && clean_r == student_roll_clean)
-                || (!roll_suffix.is_empty() && clean_r == roll_suffix)
-                || (!adm_suffix.is_empty() && clean_r == adm_suffix)
-                || admission.eq_ignore_ascii_case(r)
-        });
-
-        if is_absent {
-            for r in absent_rolls {
-                let clean_r = r.trim_start_matches('0');
-                if clean_r == index_num
-                    || (!student_roll_clean.is_empty() && clean_r == student_roll_clean)
-                    || (!roll_suffix.is_empty() && clean_r == roll_suffix)
-                    || (!adm_suffix.is_empty() && clean_r == adm_suffix)
-                    || admission.eq_ignore_ascii_case(r)
-                {
-                    matched_absent_rolls.insert(r.clone());
-                }
-            }
-
-            let display_roll = if !student_roll.is_empty() && !student_roll.starts_with("ADM") {
-                format!("Roll {student_roll_clean}")
-            } else if !roll_suffix.is_empty() {
-                format!("Roll {roll_suffix}")
+            let effective_roll = if is_valid_custom_roll {
+                clean_roll.to_string()
             } else {
-                format!("Roll {index_num}")
+                index_num.clone()
             };
-            absent_students.push((display_roll, student.full_name.clone()));
-            records.push(StudentAttendanceInput {
+
+            let numeric_sort_key = effective_roll.parse::<i32>().unwrap_or((idx + 1) as i32);
+
+            CandidateStudent {
                 student_id: student.student_id,
+                full_name: student.full_name.clone(),
+                admission_number: student
+                    .admission_number
+                    .as_deref()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string(),
+                assigned_roll: if is_valid_custom_roll {
+                    Some(clean_roll.to_string())
+                } else {
+                    None
+                },
+                effective_roll,
+                numeric_sort_key,
+                is_absent: false,
+            }
+        })
+        .collect();
+
+    // Token-driven matching: match each absent token to at most one student
+    for r in absent_rolls {
+        let clean_r = r.trim_start_matches('0');
+        if clean_r.is_empty() {
+            continue;
+        }
+
+        // Priority 1: Match by effective roll (e.g. "3", "9", "32", "45")
+        let mut matched_idx = candidates
+            .iter()
+            .position(|c| !c.is_absent && c.effective_roll == clean_r);
+
+        // Priority 2: Match by explicit assigned roll if different
+        if matched_idx.is_none() {
+            matched_idx = candidates
+                .iter()
+                .position(|c| !c.is_absent && c.assigned_roll.as_deref() == Some(clean_r));
+        }
+
+        // Priority 3: Match by full admission number (e.g. "ADM-2026-0143")
+        if matched_idx.is_none() {
+            matched_idx = candidates
+                .iter()
+                .position(|c| !c.is_absent && c.admission_number.eq_ignore_ascii_case(r));
+        }
+
+        // Priority 4: Match by admission number numeric suffix, ONLY if token length >= 3
+        if matched_idx.is_none() && clean_r.len() >= 3 {
+            matched_idx = candidates.iter().position(|c| {
+                if c.is_absent {
+                    return false;
+                }
+                let adm_suffix = c
+                    .admission_number
+                    .rsplit('-')
+                    .next()
+                    .unwrap_or("")
+                    .trim_start_matches('0');
+                !adm_suffix.is_empty() && adm_suffix == clean_r
+            });
+        }
+
+        if let Some(pos) = matched_idx {
+            candidates[pos].is_absent = true;
+            matched_absent_rolls.insert(r.clone());
+        }
+    }
+
+    // Build attendance records and absent_students list
+    for c in &candidates {
+        if c.is_absent {
+            let display_roll = format!("Roll {}", c.effective_roll);
+            absent_students.push((c.numeric_sort_key, display_roll, c.full_name.clone()));
+            records.push(StudentAttendanceInput {
+                student_id: c.student_id,
                 status: "ABSENT".to_string(),
                 remarks: Some("Marked via WhatsApp".to_string()),
             });
         } else {
             records.push(StudentAttendanceInput {
-                student_id: student.student_id,
+                student_id: c.student_id,
                 status: "PRESENT".to_string(),
                 remarks: None,
             });
         }
     }
+
+    // Sort absent students by numeric roll number for clean, professional receipt display
+    absent_students.sort_by_key(|a| a.0);
 
     // 3. Resolve active academic year
     let academic_year_id =
@@ -932,7 +992,7 @@ pub async fn record_attendance_for_roster(
 
     if !absent_students.is_empty() {
         receipt.push_str("\n*Absent Students*:\n");
-        for (roll, s_name) in &absent_students {
+        for (_num, roll, s_name) in &absent_students {
             receipt.push_str(&format!("• {roll} - {s_name}\n"));
         }
     } else {

@@ -27,6 +27,10 @@ pub fn router() -> Router<AppState> {
         .route("/today-stats", get(AttendanceHandler::get_today_stats))
         .route("/collisions", get(AttendanceHandler::list_collisions))
         .route(
+            "/collisions/raise",
+            post(AttendanceHandler::raise_collision_ticket),
+        )
+        .route(
             "/collisions/:id/resolve",
             post(AttendanceHandler::resolve_collision),
         )

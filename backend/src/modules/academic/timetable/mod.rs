@@ -1,11 +1,14 @@
 pub mod generator;
 pub mod handler;
 pub mod notification;
+pub mod repository;
 pub mod service;
 
 #[allow(unused_imports)]
 pub use generator::{AutoGenerateRequest, AutoGenerateResponse, GeneratedSlot, TimetableGenerator};
 pub use handler::TimetableHandler;
+#[allow(unused_imports)]
+pub use repository::TimetableRepository;
 pub use service::TimetableService;
 
 /// Spawns the background worker that resets and syncs the daily timetable at 01:30 AM every morning.

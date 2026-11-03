@@ -199,3 +199,25 @@ pub struct RegisterQuery {
     pub date: Option<String>,
     pub class_section_id: Option<Uuid>,
 }
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct RecordWithSessionInfo {
+    pub record_id: Uuid,
+    pub session_id: Uuid,
+    pub student_id: Uuid,
+    pub old_status: String,
+    pub marked_by: Uuid,
+    pub is_locked: bool,
+    pub created_at: DateTime<Utc>,
+    pub class_section_id: Uuid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RaiseAttendanceTicketRequest {
+    pub class_section_id: Uuid,
+    pub date: String,
+    pub period_number: Option<i32>,
+    pub reason: String,
+    pub collision_type: Option<String>,
+}

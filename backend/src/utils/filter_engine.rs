@@ -228,7 +228,11 @@ impl FilterEngine {
                 continue;
             }
 
-            if allowed_keys.contains(key.as_str()) || key == "search" {
+            if allowed_keys.contains(key.as_str())
+                || key == "search"
+                || key == "class_section_id"
+                || key == "limit"
+            {
                 sanitized.insert(key.clone(), trimmed.to_string());
             }
         }

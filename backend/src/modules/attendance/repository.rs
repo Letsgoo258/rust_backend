@@ -6,8 +6,8 @@ use crate::{
     error::AppError,
     modules::attendance::dto::{
         AttendanceConfigDto, AttendanceCorrectionLog, AttendanceSessionDetailResponse,
-        AttendanceSessionSummary, CollisionItem, RegisterRow, StudentAttendanceDetail,
-        StudentAttendanceInput, StudentRosterItem, TodayAttendanceStats,
+        AttendanceSessionSummary, CollisionItem, RecordWithSessionInfo, RegisterRow,
+        StudentAttendanceDetail, StudentAttendanceInput, StudentRosterItem, TodayAttendanceStats,
     },
 };
 
@@ -61,7 +61,7 @@ impl AttendanceRepository {
                     FROM enrollments e 
                     WHERE e.student_id = u.id AND (e.class_section_id = $1 OR e.class_section_id = u.class_section_id)
                     ORDER BY e.created_at DESC LIMIT 1
-                ), u.admission_number, '') as roll_number,
+                ), '') as roll_number,
                 u.gender
             FROM users u
             WHERE (u.class_section_id = $1 OR EXISTS (
@@ -923,7 +923,7 @@ impl AttendanceRepository {
                     FROM enrollments e 
                     WHERE e.student_id = u.id AND (e.class_section_id = s.class_section_id OR e.class_section_id = u.class_section_id)
                     ORDER BY e.created_at DESC LIMIT 1
-                ), u.admission_number, '') as roll_number,
+                ), '') as roll_number,
                 u.admission_number,
                 c.name as class_name,
                 sec.name as section_name,
@@ -973,5 +973,240 @@ impl AttendanceRepository {
             .collect();
 
         Ok(list)
+    }
+
+    // =========================================================================
+    // QUERY INTENT:
+    // 1. What: Verifies if an attendance session exists for the school.
+    // 2. Joins & Foreign Keys: attendance_sessions.id, attendance_sessions.school_id
+    // 3. Why & Correctness: Multi-tenant safety check before administrative modifications or deletions.
+    // =========================================================================
+    pub async fn session_exists(
+        pool: &PgPool,
+        school_id: Uuid,
+        session_id: Uuid,
+    ) -> Result<bool, AppError> {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM attendance_sessions WHERE id = $1 AND school_id = $2)",
+        )
+        .bind(session_id)
+        .bind(school_id)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(exists)
+    }
+
+    // =========================================================================
+    // QUERY INTENT:
+    // 1. What: Fetches the existing attendance record ID and status for a student within a session.
+    // 2. Joins & Foreign Keys: attendance_records.attendance_session_id, attendance_records.student_id (users.id)
+    // 3. Why & Correctness: Executes within transaction to check if an update or new insert is required.
+    // =========================================================================
+    pub async fn get_record_for_student(
+        conn: &mut Transaction<'_, Postgres>,
+        session_id: Uuid,
+        student_id: Uuid,
+    ) -> Result<Option<(Uuid, String)>, AppError> {
+        let record = sqlx::query_as::<_, (Uuid, String)>(
+            r#"
+            SELECT id, status 
+            FROM attendance_records 
+            WHERE attendance_session_id = $1 AND student_id = $2
+            "#,
+        )
+        .bind(session_id)
+        .bind(student_id)
+        .fetch_optional(&mut **conn)
+        .await?;
+
+        Ok(record)
+    }
+
+    // =========================================================================
+    // QUERY INTENT:
+    // 1. What: Updates an attendance record's status and remarks with timestamp refreshed.
+    // 2. Joins & Foreign Keys: attendance_records.id
+    // 3. Why & Correctness: Executes within transaction; preserves existing remarks if new remarks is NULL.
+    // =========================================================================
+    pub async fn update_record_status(
+        conn: &mut Transaction<'_, Postgres>,
+        record_id: Uuid,
+        status: &str,
+        remarks: Option<&str>,
+    ) -> Result<(), AppError> {
+        sqlx::query(
+            r#"
+            UPDATE attendance_records
+            SET status = $1, remarks = COALESCE($2, remarks), updated_at = NOW()
+            WHERE id = $3
+            "#,
+        )
+        .bind(status)
+        .bind(remarks)
+        .bind(record_id)
+        .execute(&mut **conn)
+        .await?;
+
+        Ok(())
+    }
+
+    // =========================================================================
+    // QUERY INTENT:
+    // 1. What: Inserts a single attendance record for a student in a session.
+    // 2. Joins & Foreign Keys:
+    //    - student_id -> users.id (Student identity)
+    //    - marked_by -> users.id (Marker identity)
+    //    - attendance_session_id -> attendance_sessions.id
+    // 3. Why & Correctness: Used during administrative bulk correction when a student was missing an initial record.
+    // =========================================================================
+    pub async fn insert_single_record(
+        conn: &mut Transaction<'_, Postgres>,
+        record_id: Uuid,
+        school_id: Uuid,
+        session_id: Uuid,
+        student_id: Uuid,
+        status: &str,
+        marked_by: Uuid,
+        remarks: Option<&str>,
+    ) -> Result<(), AppError> {
+        sqlx::query(
+            r#"
+            INSERT INTO attendance_records (
+                id, school_id, attendance_session_id, student_id,
+                status, marked_at, marked_by, remarks, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, NOW(), $6, $7, NOW(), NOW())
+            "#,
+        )
+        .bind(record_id)
+        .bind(school_id)
+        .bind(session_id)
+        .bind(student_id)
+        .bind(status)
+        .bind(marked_by)
+        .bind(remarks)
+        .execute(&mut **conn)
+        .await?;
+
+        Ok(())
+    }
+
+    // =========================================================================
+    // QUERY INTENT:
+    // 1. What: Retrieves attendance record details along with session metadata for permission & grace period verification.
+    // 2. Joins & Foreign Keys:
+    //    - attendance_records.attendance_session_id -> attendance_sessions.id
+    //    - attendance_records.school_id -> schools.id
+    // 3. Why & Correctness:
+    //    - Enforces tenant isolation on school_id ($2)
+    //    - Provides marked_by, is_locked, and session created_at to validate whether teacher can still edit.
+    // =========================================================================
+    pub async fn get_record_with_session(
+        pool: &PgPool,
+        school_id: Uuid,
+        record_id: Uuid,
+    ) -> Result<Option<RecordWithSessionInfo>, AppError> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+                r.id as record_id, r.attendance_session_id, r.student_id, r.status as old_status,
+                s.marked_by, s.is_locked, s.created_at, s.class_section_id
+            FROM attendance_records r
+            JOIN attendance_sessions s ON r.attendance_session_id = s.id
+            WHERE r.id = $1 AND r.school_id = $2
+            "#,
+        )
+        .bind(record_id)
+        .bind(school_id)
+        .fetch_optional(pool)
+        .await?;
+
+        let info = row.map(|r| RecordWithSessionInfo {
+            record_id: r.get("record_id"),
+            session_id: r.get("attendance_session_id"),
+            student_id: r.get("student_id"),
+            old_status: r.get("old_status"),
+            marked_by: r.get("marked_by"),
+            is_locked: r.get("is_locked"),
+            created_at: r.get("created_at"),
+            class_section_id: r.get("class_section_id"),
+        });
+
+        Ok(info)
+    }
+
+    // =========================================================================
+    // QUERY INTENT:
+    // 1. What: Verifies if a given user is the designated class teacher of the section.
+    // 2. Joins & Foreign Keys:
+    //    - class_sections.class_id -> classes.id
+    //    - class_sections.class_teacher_staff_id references staff.id
+    //    - Subquery (SELECT id FROM staff WHERE user_id = $3 AND school_id = $2) resolves auth user_id to staff.id
+    // 3. Why & Correctness:
+    //    - CRITICAL: class_teacher_staff_id points to staff.id, NOT users.id directly.
+    //    - Resolving user_id -> staff.id guarantees class teacher capabilities work flawlessly.
+    // =========================================================================
+    pub async fn check_is_class_teacher(
+        pool: &PgPool,
+        school_id: Uuid,
+        class_section_id: Uuid,
+        user_id: Uuid,
+    ) -> Result<bool, AppError> {
+        let is_class_teacher: bool = sqlx::query_scalar(
+            r#"
+            SELECT EXISTS(
+                SELECT 1 FROM class_sections cs
+                JOIN classes c ON c.id = cs.class_id
+                WHERE cs.id = $1 AND c.school_id = $2 AND (
+                    cs.class_teacher_staff_id = (
+                        SELECT id FROM staff WHERE user_id = $3 AND school_id = $2
+                    ) OR cs.class_teacher_staff_id = $3
+                )
+            )
+            "#,
+        )
+        .bind(class_section_id)
+        .bind(school_id)
+        .bind(user_id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(false);
+
+        Ok(is_class_teacher)
+    }
+
+    // =========================================================================
+    // QUERY INTENT:
+    // 1. What: Deletes an attendance session and all its associated student records in a single atomic transaction.
+    // 2. Joins & Foreign Keys:
+    //    - attendance_records.attendance_session_id -> attendance_sessions.id
+    //    - attendance_sessions.school_id -> schools.id
+    // 3. Why & Correctness:
+    //    - Ensures transactional integrity: both child records and the parent session are removed atomically.
+    // =========================================================================
+    pub async fn delete_session_and_records(
+        pool: &PgPool,
+        school_id: Uuid,
+        session_id: Uuid,
+    ) -> Result<(), AppError> {
+        let mut tx = pool.begin().await?;
+
+        sqlx::query(
+            "DELETE FROM attendance_records WHERE attendance_session_id = $1 AND school_id = $2",
+        )
+        .bind(session_id)
+        .bind(school_id)
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query("DELETE FROM attendance_sessions WHERE id = $1 AND school_id = $2")
+            .bind(session_id)
+            .bind(school_id)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+
+        Ok(())
     }
 }

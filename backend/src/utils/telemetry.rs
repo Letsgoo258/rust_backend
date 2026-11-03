@@ -341,6 +341,66 @@ impl TelemetryDispatcher {
 // OpenTelemetry & Tracing Subsystem Initializer
 // ---------------------------------------------------------------------------
 
+struct EnterFuture<F> {
+    handle: tokio::runtime::Handle,
+    future: F,
+}
+
+impl<F: std::future::Future> std::future::Future for EnterFuture<F> {
+    type Output = F::Output;
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let this = unsafe { self.get_unchecked_mut() };
+        let _guard = this.handle.enter();
+        let pinned = unsafe { std::pin::Pin::new_unchecked(&mut this.future) };
+        pinned.poll(cx)
+    }
+}
+
+#[derive(Debug)]
+struct TokioSpanExporter<E> {
+    inner: E,
+    handle: tokio::runtime::Handle,
+}
+
+impl<E: opentelemetry_sdk::trace::SpanExporter> opentelemetry_sdk::trace::SpanExporter
+    for TokioSpanExporter<E>
+{
+    fn export(
+        &self,
+        batch: Vec<opentelemetry_sdk::trace::SpanData>,
+    ) -> impl std::future::Future<Output = opentelemetry_sdk::error::OTelSdkResult> + Send {
+        EnterFuture {
+            handle: self.handle.clone(),
+            future: self.inner.export(batch),
+        }
+    }
+
+    fn shutdown_with_timeout(
+        &self,
+        timeout: std::time::Duration,
+    ) -> opentelemetry_sdk::error::OTelSdkResult {
+        let _guard = self.handle.enter();
+        self.inner.shutdown_with_timeout(timeout)
+    }
+
+    fn shutdown(&self) -> opentelemetry_sdk::error::OTelSdkResult {
+        let _guard = self.handle.enter();
+        self.inner.shutdown()
+    }
+
+    fn force_flush(&self) -> opentelemetry_sdk::error::OTelSdkResult {
+        let _guard = self.handle.enter();
+        self.inner.force_flush()
+    }
+
+    fn set_resource(&mut self, resource: &opentelemetry_sdk::Resource) {
+        self.inner.set_resource(resource)
+    }
+}
+
 pub fn init_telemetry() -> Result<Option<SdkTracerProvider>, Box<dyn std::error::Error>> {
     let has_otel_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").is_ok();
 
@@ -359,14 +419,22 @@ pub fn init_telemetry() -> Result<Option<SdkTracerProvider>, Box<dyn std::error:
             }
         }
 
-        if let Ok(exporter) = SpanExporter::builder()
-            .with_http()
-            .with_endpoint(endpoint)
-            .with_headers(headers)
-            .build()
-        {
+        let handle = tokio::runtime::Handle::try_current().ok();
+
+        if let (Some(handle), Ok(exporter)) = (
+            handle,
+            SpanExporter::builder()
+                .with_http()
+                .with_endpoint(endpoint)
+                .with_headers(headers)
+                .build(),
+        ) {
+            let tokio_exporter = TokioSpanExporter {
+                inner: exporter,
+                handle,
+            };
             let batch_processor =
-                opentelemetry_sdk::trace::BatchSpanProcessor::builder(exporter).build();
+                opentelemetry_sdk::trace::BatchSpanProcessor::builder(tokio_exporter).build();
             let provider = SdkTracerProvider::builder()
                 .with_span_processor(batch_processor)
                 .with_resource(

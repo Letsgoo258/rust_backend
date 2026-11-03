@@ -6,10 +6,19 @@ use crate::modules::whatsapp::repository::WhatsAppRepository;
 use crate::utils::capabilities::CapabilityController;
 use crate::utils::whatsapp::send_whatsapp_message;
 use chrono::Utc;
+use dashmap::DashMap;
 use sqlx::PgPool;
 use std::collections::HashSet;
+use std::sync::OnceLock;
 use tracing::{info, warn};
 use uuid::Uuid;
+
+static INVITATION_COOLDOWN_CACHE: OnceLock<DashMap<String, chrono::DateTime<Utc>>> =
+    OnceLock::new();
+
+fn get_invitation_cache() -> &'static DashMap<String, chrono::DateTime<Utc>> {
+    INVITATION_COOLDOWN_CACHE.get_or_init(DashMap::new)
+}
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -140,6 +149,35 @@ impl WhatsAppMessageService {
             || clean == "6"
     }
 
+    /// Detects automated service, banking, OTP, or bot notifications to prevent loop traps.
+    pub fn is_automated_or_bot_message(text: &str) -> bool {
+        let lower = text.to_lowercase();
+        lower.contains("due to inactivity")
+            || lower.contains("whatsapp banking")
+            || lower.contains("session has timed out")
+            || lower.contains("to continue banking")
+            || lower.contains("mini statement")
+            || lower.contains("positive pay")
+            || lower.contains("cheque book")
+            || lower.contains("re-kyc")
+            || lower.contains("fastag")
+            || lower.contains("ppf & ssy")
+            || lower.contains("stop cheque")
+            || lower.contains("do not reply")
+            || lower.contains("noreply")
+            || lower.contains("one time password")
+            || lower.contains("your otp is")
+            || lower.contains("transaction alert")
+            || lower.contains("account balance")
+            || lower.contains("loan account inquiry")
+            || lower.contains("utility bill payment")
+    }
+
+    #[cfg(test)]
+    pub fn clear_invitation_cooldown(jid: &str) {
+        get_invitation_cache().remove(jid);
+    }
+
     pub fn format_unregistered_invitation(_token: &str, _phone: &str) -> (String, String) {
         let app_url = std::env::var("APP_URL")
             .unwrap_or_else(|_| "https://my-frontend-kappa-five.vercel.app".to_string());
@@ -250,13 +288,19 @@ impl WhatsAppMessageService {
                 .collect()
         };
 
-        // 0. Check for admission inquiries (publicly accessible to prospective parents/students without prior ERP login)
+        // 0. Reject automated service / banking / OTP / bot notifications immediately
+        if Self::is_automated_or_bot_message(trimmed) {
+            info!(sender = %sender_jid, "Ignored automated bot/service message");
+            return Vec::new();
+        }
+
+        // 1. Check for admission inquiries (publicly accessible to prospective parents/students without prior ERP login)
         if menus::admissions::is_admission_intent(trimmed) {
             info!(sender = %sender_jid, "Handling admission inquiry from WhatsApp user");
             return menus::admissions::handle_admission_inquiry(pool).await;
         }
 
-        // 1. Check if the incoming message is a link token from ERAVAYA ERP (e.g. "ERA-123456")
+        // 2. Check if the incoming message is a link token from ERAVAYA ERP (e.g. "ERA-123456")
         let upper_token = trimmed.to_uppercase();
         if upper_token.starts_with("ERA-")
             || (upper_token.len() >= 6 && upper_token.len() <= 20 && !upper_token.contains(' '))
@@ -349,15 +393,75 @@ impl WhatsAppMessageService {
             }
         }
 
-        // 2. Check for active WhatsApp user session
+        // 3. Check for active WhatsApp user session
         let session_opt = WhatsAppRepository::get_session_by_jid(pool, sender_jid)
             .await
             .unwrap_or(None);
 
         match session_opt {
             None => {
-                // User is not logged in / not linked. Send 2 separate messages (intro + standalone login link).
-                info!(sender = %sender_jid, "Unauthenticated user. Prompting ERP login");
+                // Strictly guard unauthenticated messages:
+                // Only reply if the sender explicitly provided a greeting or help/login keyword.
+                // Never reply to casual conversations, numbers without context, bills, or status replies.
+                let is_intentional = Self::is_greeting(trimmed)
+                    || Self::is_help_request(trimmed)
+                    || trimmed.eq_ignore_ascii_case("login")
+                    || trimmed.eq_ignore_ascii_case("connect")
+                    || trimmed.eq_ignore_ascii_case("link");
+
+                if !is_intentional {
+                    info!(
+                        sender = %sender_jid,
+                        text = %trimmed,
+                        "Ignored unauthenticated message without explicit greeting/help intent"
+                    );
+                    return Vec::new();
+                }
+
+                // Rate-limit invitation messages: at most 1 invitation per JID every 24 hours
+                let already_invited = {
+                    let in_cache = if let Some(entry) = get_invitation_cache().get(sender_jid) {
+                        Utc::now().signed_duration_since(*entry.value()).num_hours() < 24
+                    } else {
+                        false
+                    };
+
+                    if in_cache {
+                        true
+                    } else {
+                        let db_check = sqlx::query_scalar::<_, bool>(
+                            r#"
+                            SELECT EXISTS (
+                                SELECT 1 FROM whatsapp_outbox
+                                WHERE recipient_jid = $1
+                                  AND payload->>'text' LIKE '%ERAVAYA ERP Authentication Required%'
+                                  AND created_at > NOW() - INTERVAL '24 hours'
+                            )
+                            "#,
+                        )
+                        .bind(sender_jid)
+                        .fetch_one(pool)
+                        .await
+                        .unwrap_or(false);
+
+                        if db_check {
+                            get_invitation_cache().insert(sender_jid.to_string(), Utc::now());
+                        }
+                        db_check
+                    }
+                };
+
+                if already_invited {
+                    info!(
+                        sender = %sender_jid,
+                        "Suppressed duplicate unauthenticated invitation (24-hour cooldown active)"
+                    );
+                    return Vec::new();
+                }
+
+                get_invitation_cache().insert(sender_jid.to_string(), Utc::now());
+
+                info!(sender = %sender_jid, "Unauthenticated user with greeting/help intent. Prompting ERP login");
                 let (msg1, msg2) = Self::format_unregistered_invitation("", &phone);
                 vec![msg1, msg2]
             }

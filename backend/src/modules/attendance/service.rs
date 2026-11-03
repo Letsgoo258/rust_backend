@@ -1,5 +1,5 @@
-use chrono::{DateTime, Local, NaiveDate, NaiveTime, Utc};
-use sqlx::{PgPool, Row};
+use chrono::{Local, NaiveDate, NaiveTime, Utc};
+use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::{
@@ -9,9 +9,9 @@ use crate::{
         attendance::{
             dto::{
                 AttendanceConfigDto, AttendanceSessionDetailResponse, AttendanceSessionSummary,
-                BulkEditAttendanceRequest, CollisionItem, RecordAttendanceRequest, RegisterRow,
-                ResolveCollisionRequest, StudentRosterItem, TodayAttendanceStats,
-                UpdateSingleRecordRequest,
+                BulkEditAttendanceRequest, CollisionItem, RaiseAttendanceTicketRequest,
+                RecordAttendanceRequest, RegisterRow, ResolveCollisionRequest, StudentRosterItem,
+                TodayAttendanceStats, UpdateSingleRecordRequest,
             },
             repository::AttendanceRepository,
         },
@@ -258,13 +258,8 @@ impl AttendanceService {
         }
 
         // 3. Verify session exists in school
-        let session_exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM attendance_sessions WHERE id = $1 AND school_id = $2)",
-        )
-        .bind(payload.session_id)
-        .bind(school_id)
-        .fetch_one(pool)
-        .await?;
+        let session_exists =
+            AttendanceRepository::session_exists(pool, school_id, payload.session_id).await?;
 
         if !session_exists {
             return Err(AppError::NotFound("Attendance session not found".into()));
@@ -277,33 +272,23 @@ impl AttendanceService {
         for upd in &payload.updates {
             let clean_status = upd.status.trim().to_uppercase();
 
-            // Fetch old record
-            let old_record = sqlx::query_as::<_, (Uuid, String)>(
-                r#"
-                SELECT id, status 
-                FROM attendance_records 
-                WHERE attendance_session_id = $1 AND student_id = $2
-                "#,
+            // Fetch old record from repository
+            let old_record = AttendanceRepository::get_record_for_student(
+                &mut tx,
+                payload.session_id,
+                upd.student_id,
             )
-            .bind(payload.session_id)
-            .bind(upd.student_id)
-            .fetch_optional(&mut *tx)
             .await?;
 
             if let Some((record_id, old_status)) = old_record {
                 if old_status != clean_status {
-                    // Update record
-                    sqlx::query(
-                        r#"
-                        UPDATE attendance_records
-                        SET status = $1, remarks = COALESCE($2, remarks), updated_at = NOW()
-                        WHERE id = $3
-                        "#,
+                    // Update record via repository
+                    AttendanceRepository::update_record_status(
+                        &mut tx,
+                        record_id,
+                        &clean_status,
+                        upd.remarks.as_deref(),
                     )
-                    .bind(&clean_status)
-                    .bind(upd.remarks.as_deref())
-                    .bind(record_id)
-                    .execute(&mut *tx)
                     .await?;
 
                     // Record critical audit correction
@@ -326,22 +311,16 @@ impl AttendanceService {
             } else {
                 // Insert new record if was not previously marked
                 let record_id = Uuid::new_v4();
-                sqlx::query(
-                    r#"
-                    INSERT INTO attendance_records (
-                        id, school_id, attendance_session_id, student_id,
-                        status, marked_at, marked_by, remarks, created_at, updated_at
-                    ) VALUES ($1, $2, $3, $4, $5, NOW(), $6, $7, NOW(), NOW())
-                    "#,
+                AttendanceRepository::insert_single_record(
+                    &mut tx,
+                    record_id,
+                    school_id,
+                    payload.session_id,
+                    upd.student_id,
+                    &clean_status,
+                    user.id,
+                    upd.remarks.as_deref(),
                 )
-                .bind(record_id)
-                .bind(school_id)
-                .bind(payload.session_id)
-                .bind(upd.student_id)
-                .bind(&clean_status)
-                .bind(user.id)
-                .bind(upd.remarks.as_deref())
-                .execute(&mut *tx)
                 .await?;
 
                 AttendanceRepository::record_correction(
@@ -394,54 +373,22 @@ impl AttendanceService {
     ) -> Result<(), AppError> {
         let school_id = user.school_id;
 
-        // Fetch record and session details
-        let info = sqlx::query(
-            r#"
-            SELECT
-                r.id as record_id, r.attendance_session_id, r.student_id, r.status as old_status,
-                s.marked_by, s.is_locked, s.created_at, s.class_section_id
-            FROM attendance_records r
-            JOIN attendance_sessions s ON r.attendance_session_id = s.id
-            WHERE r.id = $1 AND r.school_id = $2
-            "#,
-        )
-        .bind(record_id)
-        .bind(school_id)
-        .fetch_optional(pool)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Attendance record not found".into()))?;
-
-        let session_id: Uuid = info.get("attendance_session_id");
-        let student_id: Uuid = info.get("student_id");
-        let old_status: String = info.get("old_status");
-        let marked_by: Uuid = info.get("marked_by");
-        let is_locked: bool = info.get("is_locked");
-        let created_at: DateTime<Utc> = info.get("created_at");
-        let class_section_id: Uuid = info.get("class_section_id");
+        // Fetch record and session details from repository
+        let info = AttendanceRepository::get_record_with_session(pool, school_id, record_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("Attendance record not found".into()))?;
 
         let is_admin = user.is_school_admin() || user.has_capability("attendance:bulk_edit");
-        let is_marker = marked_by == user.id;
+        let is_marker = info.marked_by == user.id;
 
-        // Check class teacher status
-        let is_class_teacher: bool = sqlx::query_scalar(
-            r#"
-            SELECT EXISTS(
-                SELECT 1 FROM class_sections cs
-                JOIN classes c ON c.id = cs.class_id
-                WHERE cs.id = $1 AND c.school_id = $2 AND (
-                    cs.class_teacher_staff_id = (
-                        SELECT id FROM staff WHERE user_id = $3 AND school_id = $2
-                    ) OR cs.class_teacher_staff_id = $3
-                )
-            )
-            "#,
+        // Check class teacher status via repository
+        let is_class_teacher = AttendanceRepository::check_is_class_teacher(
+            pool,
+            school_id,
+            info.class_section_id,
+            user.id,
         )
-        .bind(class_section_id)
-        .bind(school_id)
-        .bind(user.id)
-        .fetch_one(pool)
-        .await
-        .unwrap_or(false);
+        .await?;
 
         let can_edit = is_admin
             || (is_marker && user.has_capability("attendance:edit_subject"))
@@ -454,10 +401,12 @@ impl AttendanceService {
         }
 
         let config = AttendanceRepository::get_attendance_config(pool, school_id).await?;
-        let elapsed_minutes = Utc::now().signed_duration_since(created_at).num_minutes();
+        let elapsed_minutes = Utc::now()
+            .signed_duration_since(info.created_at)
+            .num_minutes();
         let is_past_window = elapsed_minutes > config.allow_teacher_edit_window_minutes as i64;
 
-        if !is_admin && (is_locked || is_past_window) {
+        if !is_admin && (info.is_locked || is_past_window) {
             return Err(AppError::Forbidden(
                 "Attendance edit grace period has expired. Only School Administrators can modify frozen records with a recorded reason.".into(),
             ));
@@ -476,27 +425,22 @@ impl AttendanceService {
 
         let mut tx = pool.begin().await?;
 
-        sqlx::query(
-            r#"
-            UPDATE attendance_records
-            SET status = $1, remarks = COALESCE($2, remarks), updated_at = NOW()
-            WHERE id = $3
-            "#,
+        AttendanceRepository::update_record_status(
+            &mut tx,
+            record_id,
+            &clean_status,
+            payload.remarks.as_deref(),
         )
-        .bind(&clean_status)
-        .bind(payload.remarks.as_deref())
-        .bind(record_id)
-        .execute(&mut *tx)
         .await?;
 
-        if old_status != clean_status {
+        if info.old_status != clean_status {
             AttendanceRepository::record_correction(
                 &mut tx,
                 school_id,
                 record_id,
-                session_id,
-                student_id,
-                &old_status,
+                info.session_id,
+                info.student_id,
+                &info.old_status,
                 &clean_status,
                 if reason.is_empty() {
                     "Teacher in-window adjustment"
@@ -581,6 +525,50 @@ impl AttendanceService {
         .await
     }
 
+    /// Raise an attendance collision / conflict ticket by a teacher or staff
+    pub async fn raise_collision_ticket(
+        pool: &PgPool,
+        user: &User,
+        payload: RaiseAttendanceTicketRequest,
+    ) -> Result<String, AppError> {
+        let date = NaiveDate::parse_from_str(&payload.date, "%Y-%m-%d")
+            .map_err(|_| AppError::BadRequest("Invalid date format. Expected YYYY-MM-DD".into()))?;
+
+        let existing = AttendanceRepository::get_existing_session_id(
+            pool,
+            user.school_id,
+            payload.class_section_id,
+            date,
+            payload.period_number,
+            None,
+        )
+        .await?;
+
+        let (existing_session_id, existing_marked_by) = match existing {
+            Some((sess_id, marked_by, _, _, _)) => (Some(sess_id), Some(marked_by)),
+            None => (None, None),
+        };
+
+        let collision_type = payload
+            .collision_type
+            .unwrap_or_else(|| "CONFLICTING_SESSION_DISPUTE".into());
+
+        AttendanceRepository::report_collision_and_raise_ticket(
+            pool,
+            user.school_id,
+            payload.class_section_id,
+            date,
+            payload.period_number,
+            user.id,
+            user.roles.first().map(|s| s.as_str()).unwrap_or("TEACHER"),
+            existing_session_id,
+            existing_marked_by,
+            &collision_type,
+            &payload.reason,
+        )
+        .await
+    }
+
     /// Get attendance configuration
     pub async fn get_config(pool: &PgPool, user: &User) -> Result<AttendanceConfigDto, AppError> {
         AttendanceRepository::get_attendance_config(pool, user.school_id).await
@@ -617,38 +605,16 @@ impl AttendanceService {
             ));
         }
 
-        // 2. Check if session exists in this school
-        let session_exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM attendance_sessions WHERE id = $1 AND school_id = $2)",
-        )
-        .bind(session_id)
-        .bind(school_id)
-        .fetch_one(pool)
-        .await?;
+        // 2. Check if session exists in this school via repository
+        let session_exists =
+            AttendanceRepository::session_exists(pool, school_id, session_id).await?;
 
         if !session_exists {
             return Err(AppError::NotFound("Attendance session not found".into()));
         }
 
-        let mut tx = pool.begin().await?;
-
-        // Delete records
-        sqlx::query(
-            "DELETE FROM attendance_records WHERE attendance_session_id = $1 AND school_id = $2",
-        )
-        .bind(session_id)
-        .bind(school_id)
-        .execute(&mut *tx)
-        .await?;
-
-        // Delete session
-        sqlx::query("DELETE FROM attendance_sessions WHERE id = $1 AND school_id = $2")
-            .bind(session_id)
-            .bind(school_id)
-            .execute(&mut *tx)
-            .await?;
-
-        tx.commit().await?;
+        // Delete records and session atomically via repository
+        AttendanceRepository::delete_session_and_records(pool, school_id, session_id).await?;
 
         // Audit log
         let _ = crate::utils::audit::record_entity_change(

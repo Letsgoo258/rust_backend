@@ -97,6 +97,11 @@ pub struct SectionStudentRow {
     pub gender: Option<String>,
     pub email: Option<String>,
     pub phone: Option<String>,
+    pub first_name: Option<String>,
+    pub last_name: Option<String>,
+    pub guardian_name: Option<String>,
+    pub guardian_phone: Option<String>,
+    pub guardian_relationship: Option<String>,
 }
 
 impl AcademicRepository {
@@ -1098,36 +1103,35 @@ impl AcademicRepository {
         class_section_id: Uuid,
         school_id: Uuid,
     ) -> Result<Vec<SectionStudentRow>, AppError> {
-        let rows = sqlx::query_as::<_, SectionStudentRow>(
-            r#"
-            SELECT
-                u.id,
-                u.username,
-                COALESCE(NULLIF(u.display_name, ''), NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), ''), u.username) as display_name,
-                u.admission_number,
-                COALESCE((
-                    SELECT e.roll_number 
-                    FROM enrollments e 
-                    WHERE e.student_id = u.id AND (e.class_section_id = $1 OR e.class_section_id = u.class_section_id)
-                    ORDER BY e.created_at DESC LIMIT 1
-                ), u.admission_number, '') as roll_number,
-                u.status::TEXT as status,
-                u.gender,
-                u.email,
-                u.phone
-            FROM users u
-            WHERE (u.class_section_id = $1 OR EXISTS (
-                SELECT 1 FROM enrollments e WHERE e.student_id = u.id AND e.class_section_id = $1
-            ))
-              AND u.school_id = $2
-              AND u.status = 'ACTIVE'
-            ORDER BY COALESCE(NULLIF(u.admission_number, ''), '999999'), u.first_name, u.last_name
-            "#,
+        let mut filters = std::collections::HashMap::new();
+        filters.insert("class_section_id".to_string(), class_section_id.to_string());
+        filters.insert("status".to_string(), "ACTIVE".to_string());
+        filters.insert("limit".to_string(), "1000".to_string());
+
+        let (users, _) = crate::modules::users::repository::UserRepository::list_users(
+            pool, school_id, &filters, None,
         )
-        .bind(class_section_id)
-        .bind(school_id)
-        .fetch_all(pool)
         .await?;
+
+        let rows = users
+            .into_iter()
+            .map(|u| SectionStudentRow {
+                id: u.id,
+                username: u.username,
+                display_name: Some(u.display_name),
+                admission_number: u.admission_number,
+                roll_number: u.roll_number,
+                status: u.status,
+                gender: u.gender,
+                email: u.email,
+                phone: u.phone,
+                first_name: u.first_name,
+                last_name: u.last_name,
+                guardian_name: u.guardian_name,
+                guardian_phone: u.guardian_phone,
+                guardian_relationship: u.guardian_relationship,
+            })
+            .collect();
 
         Ok(rows)
     }

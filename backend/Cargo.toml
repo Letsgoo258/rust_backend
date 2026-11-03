@@ -61,5 +61,9 @@ name = "test_runner"
 path = "src/bin/test_runner.rs"
 
 [[bin]]
+name = "inspect_wa"
+path = "src/bin/inspect_wa.rs"
+
+[[bin]]
 name = "reset_test_pass"
 path = "src/bin/reset_test_pass.rs"

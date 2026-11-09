@@ -63,6 +63,7 @@ impl Default for ImageKitUploadOptions {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct ImageKitApiResponse {
     #[serde(rename = "fileId")]
     file_id: String,
@@ -73,9 +74,12 @@ struct ImageKitApiResponse {
     size: Option<usize>,
 }
 
+#[allow(dead_code)]
 pub struct ImageKitClient;
+#[allow(dead_code)]
 pub type ImageKitStorageService = ImageKitClient;
 
+#[allow(dead_code)]
 impl ImageKitClient {
     /// Resolves the ImageKit private key from environment variables
     pub fn get_private_key() -> String {

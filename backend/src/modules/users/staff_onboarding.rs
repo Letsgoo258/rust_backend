@@ -118,9 +118,7 @@ pub async fn bulk_upload_staff(
         return Err(AppError::BadRequest("No CSV file provided".into()));
     }
 
-    let parse_result = schema
-        .parse(&raw_data)
-        .map_err(|e| AppError::BadRequest(e))?;
+    let parse_result = schema.parse(&raw_data).map_err(AppError::BadRequest)?;
 
     let job_id = uuid::Uuid::new_v4();
     let total_valid = parse_result.valid_rows.len();
@@ -572,7 +570,7 @@ pub async fn single_add_staff(
     let department = payload.get("Department").cloned();
 
     let joining_date = crate::utils::datetime::DateUtils::parse_iso_date(&joining_date_str)
-        .map_err(|e| AppError::BadRequest(e))?;
+        .map_err(AppError::BadRequest)?;
 
     let default_pass = crate::utils::password::hash_password("Welcome123!").unwrap();
     let username = format!("{}{}", first_name.to_lowercase(), emp_id);

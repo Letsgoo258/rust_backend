@@ -14,6 +14,8 @@ pub fn is_take_attendance(text: &str) -> bool {
     clean.contains("take attendance")
         || clean.contains("mark attendance")
         || clean.contains("record attendance")
+        || clean.contains("edit attendance")
+        || clean.contains("update attendance")
         || clean.contains("take class attendance")
 }
 
@@ -26,6 +28,8 @@ pub fn is_attendance(text: &str) -> bool {
         || clean.contains("take attendance")
         || clean.contains("mark attendance")
         || clean.contains("record attendance")
+        || clean.contains("edit attendance")
+        || clean.contains("update attendance")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,58 +58,28 @@ pub struct AvailableClassOption {
     pub is_holiday: bool,
     #[serde(default)]
     pub holiday_title: Option<String>,
+    #[serde(default)]
+    pub is_recorded: bool,
     pub display: String,
 }
 
-/// Robustly parse absent roll numbers from teacher's text:
-/// Handles formats:
-/// - "1, 2, 55 absent"
-/// - "1,2,55 absent"
-/// - "1 2 55 absent"
-/// - "absent: 1, 2, 55"
-/// - "roll 1, 2, 55"
-/// - "1, 2, 55"
-/// - "all present" / "none" / "nil" / "0 absent" / "everyone present"
-pub fn parse_absent_input(text: &str) -> Result<Vec<String>, String> {
-    let raw = text.trim();
-    if raw.is_empty() {
-        return Err("EMPTY".to_string());
-    }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AttendanceInputParsed {
+    AllPresent,
+    AllAbsent,
+    Directives {
+        absent_rolls: Vec<String>,
+        present_rolls: Vec<String>,
+        is_replace: bool,
+        is_present_only: bool,
+    },
+}
 
-    let lower = raw.to_lowercase();
-    if lower == "cancel" || lower == "exit" || lower == "abort" || lower == "stop" {
-        return Err("CANCEL".to_string());
-    }
-
-    // Check for "all present", "none", "nil", "0", "zero", "everyone present", "all"
-    let clean_letters_only: String = lower
-        .chars()
-        .filter(|c| c.is_alphabetic() || c.is_whitespace())
-        .collect();
-    let words: Vec<&str> = clean_letters_only.split_whitespace().collect();
-    let phrase = words.join(" ");
-
-    if phrase == "all present"
-        || phrase == "all"
-        || phrase == "all students present"
-        || phrase == "everyone present"
-        || phrase == "none"
-        || phrase == "nil"
-        || phrase == "nil absent"
-        || phrase == "zero absent"
-        || phrase == "no absent"
-        || phrase == "no absentees"
-        || phrase == "present"
-        || raw == "0"
-        || raw == "0 absent"
-    {
-        return Ok(Vec::new());
-    }
-
-    // Extract roll numbers
+/// Helper to extract clean numeric roll numbers from a text slice
+pub fn extract_rolls_from_slice(slice: &str) -> Vec<String> {
     let mut normalized = String::new();
-    for token in lower.split(|c: char| {
-        c == ',' || c == ';' || c == '\n' || c == '/' || c == '-' || c.is_whitespace()
+    for token in slice.split(|c: char| {
+        c == ',' || c == ';' || c == '\n' || c == '/' || c == '-' || c.is_whitespace() || c == ':'
     }) {
         let t = token.trim();
         if t.is_empty()
@@ -113,6 +87,8 @@ pub fn parse_absent_input(text: &str) -> Result<Vec<String>, String> {
             || t == "absents"
             || t == "absentee"
             || t == "absentees"
+            || t == "present"
+            || t == "presents"
             || t == "roll"
             || t == "rolls"
             || t == "no"
@@ -122,6 +98,19 @@ pub fn parse_absent_input(text: &str) -> Result<Vec<String>, String> {
             || t == "is"
             || t == "are"
             || t == "and"
+            || t == "p"
+            || t == "a"
+            || t == "add"
+            || t == "make"
+            || t == "mark"
+            || t == "student"
+            || t == "students"
+            || t == "replace"
+            || t == "set"
+            || t == "only"
+            || t == "reset"
+            || t == "to"
+            || t == "with"
         {
             continue;
         }
@@ -139,19 +128,177 @@ pub fn parse_absent_input(text: &str) -> Result<Vec<String>, String> {
         .filter(|s| !s.is_empty())
         .collect();
 
-    if rolls.is_empty() {
+    let mut unique = Vec::new();
+    for r in rolls {
+        if !unique.contains(&r) {
+            unique.push(r);
+        }
+    }
+    unique
+}
+
+/// Comprehensive parser for attendance commands in WhatsApp:
+/// - "1, 2, 55 absent" / "1, 2, 55" (absentees)
+/// - "1,5,10,34 present" / "present 1, 5, 10" / "1 present" (present list)
+/// - "1 present, 5 absent" (mixed present and absent)
+/// - "all present" / "none" / "nil" / "0 absent" / "everyone present" (all present)
+/// - "all absent" (all absent)
+/// - "replace: 2, 4 absent" (overwrite list)
+pub fn parse_attendance_command(text: &str) -> Result<AttendanceInputParsed, String> {
+    let raw = text.trim();
+    if raw.is_empty() {
+        return Err("EMPTY".to_string());
+    }
+
+    let lower = raw.to_lowercase();
+    if lower == "cancel" || lower == "exit" || lower == "abort" || lower == "stop" {
+        return Err("CANCEL".to_string());
+    }
+
+    // Direct single 0 checks
+    if raw == "0" || lower == "0 absent" || lower == "0 absentees" {
+        return Ok(AttendanceInputParsed::AllPresent);
+    }
+
+    let has_digits = lower.chars().any(|c| c.is_ascii_digit());
+
+    if !has_digits {
+        let clean_letters_only: String = lower
+            .chars()
+            .filter(|c| c.is_alphabetic() || c.is_whitespace())
+            .collect();
+        let words: Vec<&str> = clean_letters_only.split_whitespace().collect();
+        let phrase = words.join(" ");
+
+        if phrase == "all present"
+            || phrase == "all"
+            || phrase == "all students present"
+            || phrase == "everyone present"
+            || phrase == "everybody present"
+            || phrase == "none"
+            || phrase == "nil"
+            || phrase == "nil absent"
+            || phrase == "zero absent"
+            || phrase == "no absent"
+            || phrase == "no absentees"
+            || phrase == "present"
+            || phrase == "all p"
+        {
+            return Ok(AttendanceInputParsed::AllPresent);
+        }
+
+        if phrase == "all absent"
+            || phrase == "everyone absent"
+            || phrase == "none present"
+            || phrase == "nil present"
+            || phrase == "all a"
+        {
+            return Ok(AttendanceInputParsed::AllAbsent);
+        }
+
         return Err("INVALID_FORMAT".to_string());
     }
 
-    // Deduplicate while preserving order
-    let mut unique_rolls = Vec::new();
-    for r in rolls {
-        if !unique_rolls.contains(&r) {
-            unique_rolls.push(r);
-        }
-    }
+    // Input has digits
+    let is_replace = lower.starts_with("replace")
+        || lower.starts_with("set")
+        || lower.starts_with("only")
+        || lower.starts_with("reset")
+        || lower.contains("replace:")
+        || lower.contains("set:");
 
-    Ok(unique_rolls)
+    let has_present_kw = lower.contains("present")
+        || lower.contains("prst")
+        || lower.ends_with(" p")
+        || lower.contains(" p ");
+    let has_absent_kw = lower.contains("absent")
+        || lower.contains("abs")
+        || lower.ends_with(" a")
+        || lower.contains(" a ");
+
+    if has_present_kw && !has_absent_kw {
+        let present_rolls = extract_rolls_from_slice(&lower);
+        if present_rolls.is_empty() {
+            return Err("INVALID_FORMAT".to_string());
+        }
+        Ok(AttendanceInputParsed::Directives {
+            absent_rolls: Vec::new(),
+            present_rolls,
+            is_replace,
+            is_present_only: true,
+        })
+    } else if has_absent_kw && !has_present_kw {
+        let absent_rolls = extract_rolls_from_slice(&lower);
+        if absent_rolls.is_empty() {
+            return Err("INVALID_FORMAT".to_string());
+        }
+        Ok(AttendanceInputParsed::Directives {
+            absent_rolls,
+            present_rolls: Vec::new(),
+            is_replace,
+            is_present_only: false,
+        })
+    } else if !has_present_kw && !has_absent_kw {
+        // Plain numbers without keyword -> default to absentees
+        let absent_rolls = extract_rolls_from_slice(&lower);
+        if absent_rolls.is_empty() {
+            return Err("INVALID_FORMAT".to_string());
+        }
+        Ok(AttendanceInputParsed::Directives {
+            absent_rolls,
+            present_rolls: Vec::new(),
+            is_replace,
+            is_present_only: false,
+        })
+    } else {
+        // Both present and absent keywords exist (e.g. "1 present, 5 absent")
+        let mut present_rolls = Vec::new();
+        let mut absent_rolls = Vec::new();
+        let chunks: Vec<&str> = lower.split([',', ';', '\n', '&']).collect();
+        for chunk in chunks {
+            let c_trim = chunk.trim();
+            if c_trim.is_empty() {
+                continue;
+            }
+            if c_trim.contains("present") || c_trim.contains(" p") || c_trim.starts_with("p ") {
+                present_rolls.extend(extract_rolls_from_slice(c_trim));
+            } else {
+                absent_rolls.extend(extract_rolls_from_slice(c_trim));
+            }
+        }
+        let mut unique_p = Vec::new();
+        for r in present_rolls {
+            if !unique_p.contains(&r) {
+                unique_p.push(r);
+            }
+        }
+        let mut unique_a = Vec::new();
+        for r in absent_rolls {
+            if !unique_a.contains(&r) {
+                unique_a.push(r);
+            }
+        }
+        if unique_p.is_empty() && unique_a.is_empty() {
+            return Err("INVALID_FORMAT".to_string());
+        }
+        Ok(AttendanceInputParsed::Directives {
+            absent_rolls: unique_a,
+            present_rolls: unique_p,
+            is_replace,
+            is_present_only: false,
+        })
+    }
+}
+
+/// Backwards-compatible parse_absent_input wrapper
+#[allow(dead_code)]
+pub fn parse_absent_input(text: &str) -> Result<Vec<String>, String> {
+    match parse_attendance_command(text) {
+        Ok(AttendanceInputParsed::AllPresent) => Ok(Vec::new()),
+        Ok(AttendanceInputParsed::AllAbsent) => Err("ALL_ABSENT".to_string()),
+        Ok(AttendanceInputParsed::Directives { absent_rolls, .. }) => Ok(absent_rolls),
+        Err(e) => Err(e),
+    }
 }
 
 /// Helper to get school local date based on configured timezone
@@ -284,6 +431,25 @@ pub async fn check_active_period(
     school_id: Uuid,
     staff_id: Uuid,
 ) -> Option<ActiveTimetableSlot> {
+    let local_date = get_school_local_date(pool, school_id).await;
+
+    // Self-healing: Ensure current_day_timetable has entries for today's local date
+    let has_rows: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM current_day_timetable WHERE school_id = $1 AND date = $2)",
+    )
+    .bind(school_id)
+    .bind(local_date)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+
+    if !has_rows {
+        let _ = sqlx::query_scalar::<_, i32>("SELECT sync_daily_timetable_for_date($1)")
+            .bind(local_date)
+            .fetch_one(pool)
+            .await;
+    }
+
     let row = sqlx::query(
         r#"
         SELECT
@@ -303,7 +469,7 @@ pub async fn check_active_period(
         JOIN subjects sub ON sub.id = cdt.subject_id
         WHERE cdt.school_id = $1
           AND (cdt.effective_teacher_id = $2 OR cdt.co_teacher_ids @> ARRAY[$2::uuid])
-          AND cdt.date = (NOW() AT TIME ZONE COALESCE(sch.timezone, 'Asia/Kolkata'))::date
+          AND cdt.date = $3
           AND (NOW() AT TIME ZONE COALESCE(sch.timezone, 'Asia/Kolkata'))::time >= (cdt.start_time - INTERVAL '10 minutes')
           AND (NOW() AT TIME ZONE COALESCE(sch.timezone, 'Asia/Kolkata'))::time <= (cdt.end_time + INTERVAL '10 minutes')
         ORDER BY cdt.period_number ASC
@@ -312,6 +478,7 @@ pub async fn check_active_period(
     )
     .bind(school_id)
     .bind(staff_id)
+    .bind(local_date)
     .fetch_optional(pool)
     .await
     .ok()
@@ -330,6 +497,7 @@ pub async fn check_active_period(
 }
 
 /// Retrieve available classes and subjects strictly assigned to the teacher for today.
+#[allow(dead_code)]
 pub async fn get_teacher_available_classes(
     pool: &PgPool,
     school_id: Uuid,
@@ -349,6 +517,23 @@ pub async fn get_teacher_available_classes_for_date(
     user_id: Uuid,
     target_date: NaiveDate,
 ) -> Vec<AvailableClassOption> {
+    // Self-healing: Ensure current_day_timetable has entries for target_date
+    let has_rows: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM current_day_timetable WHERE school_id = $1 AND date = $2)",
+    )
+    .bind(school_id)
+    .bind(target_date)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+
+    if !has_rows {
+        let _ = sqlx::query_scalar::<_, i32>("SELECT sync_daily_timetable_for_date($1)")
+            .bind(target_date)
+            .fetch_one(pool)
+            .await;
+    }
+
     let mut options = Vec::new();
 
     let rows = sqlx::query(
@@ -427,6 +612,19 @@ pub async fn get_teacher_available_classes_for_date(
     .await
     .unwrap_or_default();
 
+    let recorded_sessions: Vec<(Uuid, Option<i32>, Option<Uuid>)> = sqlx::query_as(
+        r#"
+        SELECT class_section_id, period_number, subject_id
+        FROM attendance_sessions
+        WHERE school_id = $1 AND date = $2
+        "#,
+    )
+    .bind(school_id)
+    .bind(target_date)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
     for (idx, r) in rows.into_iter().enumerate() {
         let cs_id: Uuid = r.get("class_section_id");
         let c_name: String = r.get("class_name");
@@ -435,6 +633,12 @@ pub async fn get_teacher_available_classes_for_date(
         let sub_name: String = r.get("subject_name");
         let period_num: Option<i32> = r.try_get("period_number").ok();
         let is_daily: bool = r.get("is_daily_roll_call");
+
+        let is_recorded = recorded_sessions.iter().any(|(cs, pn, sub)| {
+            *cs == cs_id
+                && pn.unwrap_or(0) == period_num.unwrap_or(0)
+                && sub.unwrap_or_default() == sub_id.unwrap_or_default()
+        });
 
         // Check if this class section has a holiday on target_date
         let holiday_info =
@@ -457,11 +661,23 @@ pub async fn get_teacher_available_classes_for_date(
             let h_name = holiday_title.as_deref().unwrap_or("Holiday");
             format!("{c_name} - Section {s_name} | 🏖️ Holiday ({h_name})")
         } else if is_daily {
-            format!("{c_name} - Section {s_name} | 📋 Daily Roll Call (Class Teacher)")
+            if is_recorded {
+                format!("{c_name} - Section {s_name} | 📋 Daily Roll Call (✏️ Recorded)")
+            } else {
+                format!("{c_name} - Section {s_name} | 📋 Daily Roll Call (Class Teacher)")
+            }
         } else if let Some(p) = period_num {
-            format!("{c_name} - Section {s_name} | 📚 {sub_name} (Period {p})")
+            if is_recorded {
+                format!("{c_name} - Section {s_name} | 📚 {sub_name} (Period {p}) (✏️ Recorded)")
+            } else {
+                format!("{c_name} - Section {s_name} | 📚 {sub_name} (Period {p})")
+            }
         } else {
-            format!("{c_name} - Section {s_name} | 📚 {sub_name}")
+            if is_recorded {
+                format!("{c_name} - Section {s_name} | 📚 {sub_name} (✏️ Recorded)")
+            } else {
+                format!("{c_name} - Section {s_name} | 📚 {sub_name}")
+            }
         };
 
         options.push(AvailableClassOption {
@@ -475,6 +691,7 @@ pub async fn get_teacher_available_classes_for_date(
             is_daily_roll_call: is_daily,
             is_holiday,
             holiday_title,
+            is_recorded,
             display,
         });
     }
@@ -506,11 +723,9 @@ pub async fn start_attendance_flow(pool: &PgPool, context: &WhatsAppUserContext)
 
     // 2. Capability check: Teachers must possess attendance:record or attendance:mark
     if !context.has_capability("attendance:record") && !context.has_capability("attendance:mark") {
-        return format!(
-            "🚫 *Permission Denied*\n\n\
+        return "🚫 *Permission Denied*\n\n\
             Your account does not possess the required *attendance:record* capability to mark attendance. \
-            Please contact your school administrator."
-        );
+            Please contact your school administrator.".to_string();
     }
 
     // 3. Look up staff record for this user
@@ -573,41 +788,136 @@ pub async fn start_attendance_flow(pool: &PgPool, context: &WhatsAppUserContext)
 
     // 5. Check if teacher has an active scheduled period right now in timetable
     if let Some(active_slot) = check_active_period(pool, context.school_id, staff_id).await {
-        let payload = serde_json::json!({
-            "class_section_id": active_slot.class_section_id,
-            "class_name": active_slot.class_name,
-            "section_name": active_slot.section_name,
-            "period_number": active_slot.period_number,
-            "subject_id": active_slot.subject_id,
-            "subject_name": active_slot.subject_name,
-            "is_daily_roll_call": false,
-            "target_date": local_date.to_string(),
-        });
-
-        let _ = WhatsAppRepository::set_conversation_state(
+        let existing = AttendanceRepository::get_existing_session_id(
             pool,
-            context.session_id,
-            "ATTENDANCE_WAITING_FOR_ABSENTEES",
-            payload,
+            context.school_id,
+            active_slot.class_section_id,
+            local_date,
+            Some(active_slot.period_number),
+            active_slot.subject_id,
         )
-        .await;
+        .await
+        .ok()
+        .flatten();
 
-        return format!(
-            "📅 *Found active class in your timetable!*\n\n\
-            🏫 *Class*: {} - Section {}\n\
-            📚 *Subject*: {} (Period {}, {} - {})\n\
-            📅 *Date*: {}\n\n\
-            Please send the list of absent roll numbers in the format:\n\
-            👉 *1, 2, 55 absent*\n\n\
-            _(Or reply *all present* if everyone is present, reply *yesterday* to change date, or *cancel* to abort)_",
-            active_slot.class_name,
-            active_slot.section_name,
-            active_slot.subject_name,
-            active_slot.period_number,
-            active_slot.start_time,
-            active_slot.end_time,
-            formatted_today
-        );
+        if let Some((existing_session_id, _marked_by, _status, is_locked, created_at)) = existing {
+            let config = AttendanceRepository::get_attendance_config(pool, context.school_id)
+                .await
+                .unwrap_or_default();
+            let elapsed_minutes = Utc::now().signed_duration_since(created_at).num_minutes();
+            let is_editable = !is_locked
+                && (elapsed_minutes <= config.allow_teacher_edit_window_minutes as i64
+                    || context.is_school_admin());
+
+            if is_editable {
+                let recs = get_session_existing_records(pool, existing_session_id).await;
+                let total_count = recs.len();
+                let present_count = recs.iter().filter(|r| r.status == "PRESENT").count();
+                let absent_recs: Vec<&ExistingStudentRecord> =
+                    recs.iter().filter(|r| r.status == "ABSENT").collect();
+                let absent_count = absent_recs.len();
+
+                let payload = serde_json::json!({
+                    "class_section_id": active_slot.class_section_id,
+                    "class_name": active_slot.class_name,
+                    "section_name": active_slot.section_name,
+                    "period_number": active_slot.period_number,
+                    "subject_id": active_slot.subject_id,
+                    "subject_name": active_slot.subject_name,
+                    "is_daily_roll_call": false,
+                    "target_date": local_date.to_string(),
+                    "is_edit": true,
+                    "existing_session_id": existing_session_id.to_string(),
+                });
+
+                let _ = WhatsAppRepository::set_conversation_state(
+                    pool,
+                    context.session_id,
+                    "ATTENDANCE_WAITING_FOR_ABSENTEES",
+                    payload,
+                )
+                .await;
+
+                let mut prompt = format!(
+                    "📅 *Found active class in your timetable!* (✏️ *Already Recorded*)\n\n\
+                    🏫 *Class*: {} - Section {}\n\
+                    📚 *Subject*: {} (Period {}, {} - {})\n\
+                    📅 *Date*: {}\n\
+                    👥 *Total*: {} | ✅ *Present*: {} | ❌ *Absent*: {}\n",
+                    active_slot.class_name,
+                    active_slot.section_name,
+                    active_slot.subject_name,
+                    active_slot.period_number,
+                    active_slot.start_time,
+                    active_slot.end_time,
+                    formatted_today,
+                    total_count,
+                    present_count,
+                    absent_count
+                );
+
+                if !absent_recs.is_empty() {
+                    prompt.push_str("\n❌ *Currently Absent*:\n");
+                    for r in &absent_recs {
+                        let roll = r.roll_number.as_deref().unwrap_or("—");
+                        prompt.push_str(&format!("• Roll {roll} - {}\n", r.student_name));
+                    }
+                } else {
+                    prompt.push_str("\n🌟 *All students are currently marked Present!*\n");
+                }
+
+                prompt.push_str(
+                    "\n✏️ *Reply to edit or update*:\n\
+                    👉 *Mark student(s) present*: e.g. *1 present* or *1, 5 present*\n\
+                    👉 *Mark student(s) absent*: e.g. *10 absent* or *10, 12 absent*\n\
+                    👉 *Replace all absentees*: e.g. *replace: 2, 10 absent*\n\
+                    👉 *Mark everyone present*: e.g. *all present*\n\
+                    👉 Reply *cancel* to exit without changes",
+                );
+
+                return prompt;
+            }
+            // If locked or edit window expired, fall through to show teacher options
+        } else {
+            let payload = serde_json::json!({
+                "class_section_id": active_slot.class_section_id,
+                "class_name": active_slot.class_name,
+                "section_name": active_slot.section_name,
+                "period_number": active_slot.period_number,
+                "subject_id": active_slot.subject_id,
+                "subject_name": active_slot.subject_name,
+                "is_daily_roll_call": false,
+                "target_date": local_date.to_string(),
+                "is_edit": false,
+            });
+
+            let _ = WhatsAppRepository::set_conversation_state(
+                pool,
+                context.session_id,
+                "ATTENDANCE_WAITING_FOR_ABSENTEES",
+                payload,
+            )
+            .await;
+
+            return format!(
+                "📅 *Found active class in your timetable!*\n\n\
+                🏫 *Class*: {} - Section {}\n\
+                📚 *Subject*: {} (Period {}, {} - {})\n\
+                📅 *Date*: {}\n\n\
+                Please send roll numbers in any of these formats:\n\
+                👉 *To mark absentees*: *1, 2, 55 absent* (or simply *1, 2, 55*)\n\
+                👉 *To mark present students*: *1, 5, 10, 34 present*\n\
+                👉 *If everyone is present*: *all present*\n\n\
+                _(Or reply *yesterday* to change date, or *cancel* to abort)_",
+                active_slot.class_name,
+                active_slot.section_name,
+                active_slot.subject_name,
+                active_slot.period_number,
+                active_slot.start_time,
+                active_slot.end_time,
+                formatted_today
+            );
+        }
     }
 
     // 6. No active slot right now -> Show ONLY the teacher's assigned classes & subjects for local_date
@@ -718,8 +1028,54 @@ pub async fn start_attendance_flow(pool: &PgPool, context: &WhatsAppUserContext)
     )
 }
 
-/// Transactionally records student attendance in PostgreSQL and generates receipt.
-pub async fn record_attendance_for_roster(
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct ExistingStudentRecord {
+    pub student_id: Uuid,
+    pub status: String,
+    pub student_name: String,
+    pub admission_number: Option<String>,
+    pub roll_number: Option<String>,
+}
+
+/// Helper to load existing student records for a recorded session
+pub async fn get_session_existing_records(
+    pool: &PgPool,
+    session_id: Uuid,
+) -> Vec<ExistingStudentRecord> {
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            r.student_id,
+            r.status,
+            COALESCE(NULLIF(u.display_name, ''), NULLIF(TRIM(CONCAT(u.first_name, ' ', u.last_name)), ''), u.username) as student_name,
+            u.admission_number,
+            e.roll_number
+        FROM attendance_records r
+        JOIN users u ON r.student_id = u.id
+        LEFT JOIN enrollments e ON e.student_id = u.id AND e.status = 'ACTIVE'
+        WHERE r.attendance_session_id = $1
+        ORDER BY COALESCE(NULLIF(e.roll_number, ''), '999999'), student_name ASC
+        "#,
+    )
+    .bind(session_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    rows.into_iter()
+        .map(|r| ExistingStudentRecord {
+            student_id: r.get("student_id"),
+            status: r.get("status"),
+            student_name: r.get("student_name"),
+            admission_number: r.try_get("admission_number").ok().flatten(),
+            roll_number: r.try_get("roll_number").ok().flatten(),
+        })
+        .collect()
+}
+
+/// Transactionally records or updates student attendance in PostgreSQL and generates receipt.
+pub async fn record_or_update_attendance_for_roster(
     pool: &PgPool,
     context: &WhatsAppUserContext,
     class_section_id: Uuid,
@@ -729,7 +1085,9 @@ pub async fn record_attendance_for_roster(
     subject_id: Option<Uuid>,
     subject_name: Option<&str>,
     target_date: NaiveDate,
-    absent_rolls: &[String],
+    command: AttendanceInputParsed,
+    is_edit: bool,
+    existing_session_id: Option<Uuid>,
 ) -> String {
     let name = context.display_name.as_deref().unwrap_or("Teacher");
 
@@ -755,13 +1113,37 @@ pub async fn record_attendance_for_roster(
         }
     };
 
-    // 2. Match students against absent rolls
-    let mut records: Vec<StudentAttendanceInput> = Vec::new();
-    let mut absent_students: Vec<(i32, String, String)> = Vec::new(); // (numeric_roll, display_roll, full_name)
-    let mut matched_absent_rolls: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
+    // 2. Resolve existing session if any
+    let session_lookup = if existing_session_id.is_none() {
+        AttendanceRepository::get_existing_session_id(
+            pool,
+            context.school_id,
+            class_section_id,
+            target_date,
+            period_number,
+            subject_id,
+        )
+        .await
+        .ok()
+        .flatten()
+    } else {
+        None
+    };
 
-    // Map each student in the roster to effective roll and lookup identifiers
+    let effective_existing_session_id =
+        existing_session_id.or_else(|| session_lookup.as_ref().map(|s| s.0));
+    let effective_is_edit = is_edit || effective_existing_session_id.is_some();
+
+    // 3. Load existing status map if session exists
+    let mut existing_status_map = std::collections::HashMap::new();
+    if let Some(sid) = effective_existing_session_id {
+        let existing_recs = get_session_existing_records(pool, sid).await;
+        for r in existing_recs {
+            existing_status_map.insert(r.student_id, r.status);
+        }
+    }
+
+    // 4. Map roster to candidates
     struct CandidateStudent {
         student_id: Uuid,
         full_name: String,
@@ -769,7 +1151,53 @@ pub async fn record_attendance_for_roster(
         assigned_roll: Option<String>,
         effective_roll: String,
         numeric_sort_key: i32,
-        is_absent: bool,
+        status: String,
+        original_status: Option<String>,
+    }
+
+    fn find_candidate_idx(candidates: &[CandidateStudent], token: &str) -> Option<usize> {
+        let clean_t = token.trim_start_matches('0');
+        if clean_t.is_empty() {
+            return None;
+        }
+
+        // Priority 1: Match by effective roll (e.g. "3", "9", "34")
+        if let Some(pos) = candidates.iter().position(|c| c.effective_roll == clean_t) {
+            return Some(pos);
+        }
+
+        // Priority 2: Match by explicit assigned roll
+        if let Some(pos) = candidates
+            .iter()
+            .position(|c| c.assigned_roll.as_deref() == Some(clean_t))
+        {
+            return Some(pos);
+        }
+
+        // Priority 3: Match by full admission number (e.g. "ADM-2026-0143")
+        if let Some(pos) = candidates
+            .iter()
+            .position(|c| c.admission_number.eq_ignore_ascii_case(token))
+        {
+            return Some(pos);
+        }
+
+        // Priority 4: Match by admission number numeric suffix, ONLY if token length >= 3
+        if clean_t.len() >= 3 {
+            if let Some(pos) = candidates.iter().position(|c| {
+                let adm_suffix = c
+                    .admission_number
+                    .rsplit('-')
+                    .next()
+                    .unwrap_or("")
+                    .trim_start_matches('0');
+                !adm_suffix.is_empty() && adm_suffix == clean_t
+            }) {
+                return Some(pos);
+            }
+        }
+
+        None
     }
 
     let mut candidates: Vec<CandidateStudent> = roster
@@ -791,6 +1219,9 @@ pub async fn record_attendance_for_roster(
 
             let numeric_sort_key = effective_roll.parse::<i32>().unwrap_or((idx + 1) as i32);
 
+            let orig_status = existing_status_map.get(&student.student_id).cloned();
+            let curr_status = orig_status.clone().unwrap_or_else(|| "PRESENT".to_string());
+
             CandidateStudent {
                 student_id: student.student_id,
                 full_name: student.full_name.clone(),
@@ -807,82 +1238,120 @@ pub async fn record_attendance_for_roster(
                 },
                 effective_roll,
                 numeric_sort_key,
-                is_absent: false,
+                status: curr_status,
+                original_status: orig_status,
             }
         })
         .collect();
 
-    // Token-driven matching: match each absent token to at most one student
-    for r in absent_rolls {
-        let clean_r = r.trim_start_matches('0');
-        if clean_r.is_empty() {
-            continue;
+    // 5. Apply command
+    let mut matched_tokens = std::collections::HashSet::new();
+    let mut unmatched_tokens = Vec::new();
+
+    match command {
+        AttendanceInputParsed::AllPresent => {
+            for c in &mut candidates {
+                c.status = "PRESENT".to_string();
+            }
         }
-
-        // Priority 1: Match by effective roll (e.g. "3", "9", "32", "45")
-        let mut matched_idx = candidates
-            .iter()
-            .position(|c| !c.is_absent && c.effective_roll == clean_r);
-
-        // Priority 2: Match by explicit assigned roll if different
-        if matched_idx.is_none() {
-            matched_idx = candidates
-                .iter()
-                .position(|c| !c.is_absent && c.assigned_roll.as_deref() == Some(clean_r));
+        AttendanceInputParsed::AllAbsent => {
+            for c in &mut candidates {
+                c.status = "ABSENT".to_string();
+            }
         }
-
-        // Priority 3: Match by full admission number (e.g. "ADM-2026-0143")
-        if matched_idx.is_none() {
-            matched_idx = candidates
-                .iter()
-                .position(|c| !c.is_absent && c.admission_number.eq_ignore_ascii_case(r));
-        }
-
-        // Priority 4: Match by admission number numeric suffix, ONLY if token length >= 3
-        if matched_idx.is_none() && clean_r.len() >= 3 {
-            matched_idx = candidates.iter().position(|c| {
-                if c.is_absent {
-                    return false;
+        AttendanceInputParsed::Directives {
+            absent_rolls,
+            present_rolls,
+            is_replace,
+            is_present_only,
+        } => {
+            if !effective_is_edit {
+                // Fresh session
+                if is_present_only {
+                    // Start everyone as ABSENT; specified present_rolls become PRESENT
+                    for c in &mut candidates {
+                        c.status = "ABSENT".to_string();
+                    }
+                    for token in &present_rolls {
+                        if let Some(pos) = find_candidate_idx(&candidates, token) {
+                            candidates[pos].status = "PRESENT".to_string();
+                            matched_tokens.insert(token.clone());
+                        } else {
+                            unmatched_tokens.push(token.clone());
+                        }
+                    }
+                } else {
+                    // Normal absentee list: start everyone as PRESENT; specified absent_rolls become ABSENT
+                    for c in &mut candidates {
+                        c.status = "PRESENT".to_string();
+                    }
+                    for token in &absent_rolls {
+                        if let Some(pos) = find_candidate_idx(&candidates, token) {
+                            candidates[pos].status = "ABSENT".to_string();
+                            matched_tokens.insert(token.clone());
+                        } else {
+                            unmatched_tokens.push(token.clone());
+                        }
+                    }
                 }
-                let adm_suffix = c
-                    .admission_number
-                    .rsplit('-')
-                    .next()
-                    .unwrap_or("")
-                    .trim_start_matches('0');
-                !adm_suffix.is_empty() && adm_suffix == clean_r
-            });
-        }
-
-        if let Some(pos) = matched_idx {
-            candidates[pos].is_absent = true;
-            matched_absent_rolls.insert(r.clone());
+            } else {
+                // Edit session (attendance already recorded)
+                if is_replace {
+                    // Complete absentee replacement: reset all to PRESENT, then mark absent_rolls as ABSENT
+                    for c in &mut candidates {
+                        c.status = "PRESENT".to_string();
+                    }
+                    for token in &absent_rolls {
+                        if let Some(pos) = find_candidate_idx(&candidates, token) {
+                            candidates[pos].status = "ABSENT".to_string();
+                            matched_tokens.insert(token.clone());
+                        } else {
+                            unmatched_tokens.push(token.clone());
+                        }
+                    }
+                } else {
+                    // Incremental update!
+                    // 1) Mark present rolls as PRESENT
+                    for token in &present_rolls {
+                        if let Some(pos) = find_candidate_idx(&candidates, token) {
+                            candidates[pos].status = "PRESENT".to_string();
+                            matched_tokens.insert(token.clone());
+                        } else {
+                            unmatched_tokens.push(token.clone());
+                        }
+                    }
+                    // 2) Mark absent rolls as ABSENT
+                    for token in &absent_rolls {
+                        if let Some(pos) = find_candidate_idx(&candidates, token) {
+                            candidates[pos].status = "ABSENT".to_string();
+                            matched_tokens.insert(token.clone());
+                        } else {
+                            unmatched_tokens.push(token.clone());
+                        }
+                    }
+                }
+            }
         }
     }
 
-    // Build attendance records and absent_students list
+    // 6. Detect changes for edit receipts
+    let mut changes: Vec<(i32, String)> = Vec::new();
     for c in &candidates {
-        if c.is_absent {
-            let display_roll = format!("Roll {}", c.effective_roll);
-            absent_students.push((c.numeric_sort_key, display_roll, c.full_name.clone()));
-            records.push(StudentAttendanceInput {
-                student_id: c.student_id,
-                status: "ABSENT".to_string(),
-                remarks: Some("Marked via WhatsApp".to_string()),
-            });
-        } else {
-            records.push(StudentAttendanceInput {
-                student_id: c.student_id,
-                status: "PRESENT".to_string(),
-                remarks: None,
-            });
+        if let Some(orig) = &c.original_status {
+            if orig != &c.status {
+                changes.push((
+                    c.numeric_sort_key,
+                    format!(
+                        "• Roll {} - {}: *{}* ➔ *{}*",
+                        c.effective_roll, c.full_name, orig, c.status
+                    ),
+                ));
+            }
         }
     }
+    changes.sort_by_key(|a| a.0);
 
-    // Sort absent students by numeric roll number for clean, professional receipt display
-    absent_students.sort_by_key(|a| a.0);
-
-    // 3. Resolve active academic year
+    // 7. Resolve active academic year
     let academic_year_id =
         match AttendanceRepository::get_active_academic_year_id(pool, context.school_id).await {
             Ok(id) => id,
@@ -899,7 +1368,21 @@ pub async fn record_attendance_for_roster(
         "DAILY"
     };
 
-    // 4. Transactional insert using target_date
+    // 8. Build records for database
+    let mut records: Vec<StudentAttendanceInput> = Vec::new();
+    for c in &candidates {
+        records.push(StudentAttendanceInput {
+            student_id: c.student_id,
+            status: c.status.clone(),
+            remarks: if effective_is_edit {
+                Some("Updated via WhatsApp".to_string())
+            } else {
+                Some("Marked via WhatsApp".to_string())
+            },
+        });
+    }
+
+    // 9. Transactional save
     let mut tx = match pool.begin().await {
         Ok(t) => t,
         Err(e) => {
@@ -908,7 +1391,7 @@ pub async fn record_attendance_for_roster(
         }
     };
 
-    let session_id = Uuid::new_v4();
+    let session_id = effective_existing_session_id.unwrap_or_else(Uuid::new_v4);
     let upsert_res = AttendanceRepository::upsert_attendance_session(
         &mut tx,
         session_id,
@@ -954,11 +1437,24 @@ pub async fn record_attendance_for_roster(
         return format!("❌ Failed to commit attendance: {e}");
     }
 
-    // 5. Clear conversation state
+    // 10. Clear conversation state
     let _ = WhatsAppRepository::clear_conversation_state(pool, context.session_id).await;
 
-    // 6. Format receipt
-    let total_count = roster.len();
+    // 11. Format receipt
+    let total_count = candidates.len();
+    let mut absent_students: Vec<(i32, String, String)> = candidates
+        .iter()
+        .filter(|c| c.status == "ABSENT")
+        .map(|c| {
+            (
+                c.numeric_sort_key,
+                format!("Roll {}", c.effective_roll),
+                c.full_name.clone(),
+            )
+        })
+        .collect();
+    absent_students.sort_by_key(|a| a.0);
+
     let absent_count = absent_students.len();
     let present_count = total_count.saturating_sub(absent_count);
 
@@ -980,8 +1476,14 @@ pub async fn record_attendance_for_roster(
 
     let formatted_date = target_date.format("%d %b %Y (%A)").to_string();
 
+    let header_title = if effective_is_edit {
+        "📋 *Attendance Updated Successfully!*"
+    } else {
+        "📋 *Attendance Marked Successfully!*"
+    };
+
     let mut receipt = format!(
-        "📋 *Attendance Marked Successfully!*\n\n\
+        "{header_title}\n\n\
         🏫 *Class*: {class_name} - Section {section_name}\n\
         📅 *Date*: {formatted_date}\n\
         ⏰ *Session*: {period_text}\n\
@@ -989,6 +1491,13 @@ pub async fn record_attendance_for_roster(
         ✅ *Present*: {present_count}\n\
         ❌ *Absent*: {absent_count}\n"
     );
+
+    if !changes.is_empty() {
+        receipt.push_str("\n🔄 *Changes Applied*:\n");
+        for (_, line) in &changes {
+            receipt.push_str(&format!("{line}\n"));
+        }
+    }
 
     if !absent_students.is_empty() {
         receipt.push_str("\n*Absent Students*:\n");
@@ -999,17 +1508,8 @@ pub async fn record_attendance_for_roster(
         receipt.push_str("\n🌟 *All students are marked Present!* 🎉\n");
     }
 
-    let unmatched: Vec<&String> = absent_rolls
-        .iter()
-        .filter(|r| !matched_absent_rolls.contains(*r))
-        .collect();
-
-    if !unmatched.is_empty() {
-        let unmatched_str = unmatched
-            .iter()
-            .map(|s| s.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
+    if !unmatched_tokens.is_empty() {
+        let unmatched_str = unmatched_tokens.join(", ");
         receipt.push_str(&format!(
             "\n⚠️ *Note*: Roll(s) {unmatched_str} not found in this class roster."
         ));
@@ -1020,6 +1520,47 @@ pub async fn record_attendance_for_roster(
     ));
 
     receipt
+}
+
+/// Backwards-compatible record_attendance_for_roster wrapper
+#[allow(dead_code)]
+pub async fn record_attendance_for_roster(
+    pool: &PgPool,
+    context: &WhatsAppUserContext,
+    class_section_id: Uuid,
+    class_name: &str,
+    section_name: &str,
+    period_number: Option<i32>,
+    subject_id: Option<Uuid>,
+    subject_name: Option<&str>,
+    target_date: NaiveDate,
+    absent_rolls: &[String],
+) -> String {
+    let command = if absent_rolls.is_empty() {
+        AttendanceInputParsed::AllPresent
+    } else {
+        AttendanceInputParsed::Directives {
+            absent_rolls: absent_rolls.to_vec(),
+            present_rolls: Vec::new(),
+            is_replace: false,
+            is_present_only: false,
+        }
+    };
+    record_or_update_attendance_for_roster(
+        pool,
+        context,
+        class_section_id,
+        class_name,
+        section_name,
+        period_number,
+        subject_id,
+        subject_name,
+        target_date,
+        command,
+        false,
+        None,
+    )
+    .await
 }
 
 /// Handles multi-step conversation inputs for attendance.
@@ -1239,25 +1780,6 @@ pub async fn handle_attendance_conversation_step(
                     );
                 }
 
-                let next_payload = serde_json::json!({
-                    "class_section_id": selected.class_section_id,
-                    "class_name": selected.class_name,
-                    "section_name": selected.section_name,
-                    "period_number": selected.period_number,
-                    "subject_id": selected.subject_id,
-                    "subject_name": selected.subject_name,
-                    "is_daily_roll_call": selected.is_daily_roll_call,
-                    "target_date": target_date.to_string(),
-                });
-
-                let _ = WhatsAppRepository::set_conversation_state(
-                    pool,
-                    context.session_id,
-                    "ATTENDANCE_WAITING_FOR_ABSENTEES",
-                    next_payload,
-                )
-                .await;
-
                 let session_display = if selected.is_daily_roll_call {
                     "📋 *Session*: Daily Roll Call (Class Teacher)".to_string()
                 } else if let Some(p) = selected.period_number {
@@ -1268,15 +1790,159 @@ pub async fn handle_attendance_conversation_step(
 
                 let formatted_target_date = target_date.format("%d %b %Y (%A)").to_string();
 
-                format!(
-                    "✅ Selected: *{} - Section {}*\n\
-                    {}\n\
-                    📅 *Date*: {}\n\n\
-                    Please send the absent roll numbers in the format:\n\
-                    👉 *1, 2, 55 absent*\n\n\
-                    _(Or send *all present* if everyone is present, reply *yesterday* to change date, or *cancel* to abort)_",
-                    selected.class_name, selected.section_name, session_display, formatted_target_date
+                let existing = AttendanceRepository::get_existing_session_id(
+                    pool,
+                    context.school_id,
+                    selected.class_section_id,
+                    target_date,
+                    selected.period_number,
+                    selected.subject_id,
                 )
+                .await
+                .ok()
+                .flatten();
+
+                if let Some((existing_session_id, _marked_by, _status, is_locked, created_at)) =
+                    existing
+                {
+                    if is_locked {
+                        let _ =
+                            WhatsAppRepository::clear_conversation_state(pool, context.session_id)
+                                .await;
+                        return format!(
+                            "🔒 *Attendance Frozen / Locked*\n\n\
+                            Attendance for *{} - Section {}* on *{}* has been administratively locked.\n\n\
+                            Modifications require School Administrator action in the ERAVAYA ERP dashboard.",
+                            selected.class_name, selected.section_name, formatted_target_date
+                        );
+                    }
+
+                    let config =
+                        AttendanceRepository::get_attendance_config(pool, context.school_id)
+                            .await
+                            .unwrap_or_default();
+                    let elapsed_minutes =
+                        Utc::now().signed_duration_since(created_at).num_minutes();
+                    if elapsed_minutes > config.allow_teacher_edit_window_minutes as i64
+                        && !context.is_school_admin()
+                    {
+                        let _ =
+                            WhatsAppRepository::clear_conversation_state(pool, context.session_id)
+                                .await;
+                        let app_url = std::env::var("APP_URL").unwrap_or_else(|_| {
+                            "https://my-frontend-kappa-five.vercel.app".to_string()
+                        });
+                        let clean_url = app_url.trim_end_matches('/');
+                        return format!(
+                            "🔒 *Teacher Edit Window Expired*\n\n\
+                            Attendance was marked at *{}*.\n\
+                            The {}-minute teacher edit window for this session has expired.\n\n\
+                            👉 Modifications require administrative review at:\n\
+                            {clean_url}/dashboard/attendance",
+                            created_at.format("%I:%M %p"),
+                            config.allow_teacher_edit_window_minutes
+                        );
+                    }
+
+                    let recs = get_session_existing_records(pool, existing_session_id).await;
+                    let total_count = recs.len();
+                    let present_count = recs.iter().filter(|r| r.status == "PRESENT").count();
+                    let absent_recs: Vec<&ExistingStudentRecord> =
+                        recs.iter().filter(|r| r.status == "ABSENT").collect();
+                    let absent_count = absent_recs.len();
+
+                    let next_payload = serde_json::json!({
+                        "class_section_id": selected.class_section_id,
+                        "class_name": selected.class_name,
+                        "section_name": selected.section_name,
+                        "period_number": selected.period_number,
+                        "subject_id": selected.subject_id,
+                        "subject_name": selected.subject_name,
+                        "is_daily_roll_call": selected.is_daily_roll_call,
+                        "target_date": target_date.to_string(),
+                        "is_edit": true,
+                        "existing_session_id": existing_session_id.to_string(),
+                    });
+
+                    let _ = WhatsAppRepository::set_conversation_state(
+                        pool,
+                        context.session_id,
+                        "ATTENDANCE_WAITING_FOR_ABSENTEES",
+                        next_payload,
+                    )
+                    .await;
+
+                    let mut prompt = format!(
+                        "📋 *Attendance Already Recorded* (✏️ *Edit Mode*)\n\n\
+                        🏫 *Class*: {} - Section {}\n\
+                        {}\n\
+                        📅 *Date*: {}\n\
+                        👥 *Total*: {} | ✅ *Present*: {} | ❌ *Absent*: {}\n",
+                        selected.class_name,
+                        selected.section_name,
+                        session_display,
+                        formatted_target_date,
+                        total_count,
+                        present_count,
+                        absent_count
+                    );
+
+                    if !absent_recs.is_empty() {
+                        prompt.push_str("\n❌ *Currently Absent*:\n");
+                        for r in &absent_recs {
+                            let roll = r.roll_number.as_deref().unwrap_or("—");
+                            prompt.push_str(&format!("• Roll {roll} - {}\n", r.student_name));
+                        }
+                    } else {
+                        prompt.push_str("\n🌟 *All students are currently marked Present!*\n");
+                    }
+
+                    prompt.push_str(
+                        "\n✏️ *Reply to edit or update*:\n\
+                        👉 *Mark student(s) present*: e.g. *1 present* or *1, 5 present*\n\
+                        👉 *Mark student(s) absent*: e.g. *10 absent* or *10, 12 absent*\n\
+                        👉 *Replace all absentees*: e.g. *replace: 2, 10 absent*\n\
+                        👉 *Mark everyone present*: e.g. *all present*\n\
+                        👉 Reply *cancel* to exit without changes",
+                    );
+
+                    prompt
+                } else {
+                    let next_payload = serde_json::json!({
+                        "class_section_id": selected.class_section_id,
+                        "class_name": selected.class_name,
+                        "section_name": selected.section_name,
+                        "period_number": selected.period_number,
+                        "subject_id": selected.subject_id,
+                        "subject_name": selected.subject_name,
+                        "is_daily_roll_call": selected.is_daily_roll_call,
+                        "target_date": target_date.to_string(),
+                        "is_edit": false,
+                    });
+
+                    let _ = WhatsAppRepository::set_conversation_state(
+                        pool,
+                        context.session_id,
+                        "ATTENDANCE_WAITING_FOR_ABSENTEES",
+                        next_payload,
+                    )
+                    .await;
+
+                    format!(
+                        "✅ Selected: *{} - Section {}*\n\
+                        {}\n\
+                        📅 *Date*: {}\n\n\
+                        Please send roll numbers in any of these formats:\n\
+                        👉 *To mark absentees*: *1, 2, 55 absent* (or simply *1, 2, 55*)\n\
+                        👉 *To mark present students*: *1, 5, 10, 34 present*\n\
+                        👉 *If everyone is present*: *all present*\n\n\
+                        _(Reply *yesterday* to change date, or *cancel* to abort)_",
+                        selected.class_name,
+                        selected.section_name,
+                        session_display,
+                        formatted_target_date
+                    )
+                }
             } else {
                 format!(
                     "⚠️ Invalid selection: \"{}\".\n\n\
@@ -1320,6 +1986,15 @@ pub async fn handle_attendance_conversation_step(
                 .and_then(|s| Uuid::parse_str(s).ok());
             let subject_name = payload.get("subject_name").and_then(|v| v.as_str());
 
+            let is_edit = payload
+                .get("is_edit")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let existing_session_id = payload
+                .get("existing_session_id")
+                .and_then(|v| v.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok());
+
             let today = get_school_local_date(pool, context.school_id).await;
             let current_target_date: NaiveDate = payload
                 .get("target_date")
@@ -1330,12 +2005,36 @@ pub async fn handle_attendance_conversation_step(
             // 1. Check if user is requesting to change date in this step
             match parse_date_input(trimmed, today) {
                 Ok(Some(new_date)) => {
+                    let existing_on_new_date = AttendanceRepository::get_existing_session_id(
+                        pool,
+                        context.school_id,
+                        class_section_id,
+                        new_date,
+                        period_number,
+                        subject_id,
+                    )
+                    .await
+                    .ok()
+                    .flatten();
+
+                    let is_edit_new = existing_on_new_date.is_some();
+                    let new_session_id_str = existing_on_new_date.as_ref().map(|s| s.0.to_string());
+
                     let mut updated_payload = payload.clone();
                     if let Some(obj) = updated_payload.as_object_mut() {
                         obj.insert(
                             "target_date".to_string(),
                             serde_json::json!(new_date.to_string()),
                         );
+                        obj.insert("is_edit".to_string(), serde_json::json!(is_edit_new));
+                        if let Some(ref sid_str) = new_session_id_str {
+                            obj.insert(
+                                "existing_session_id".to_string(),
+                                serde_json::json!(sid_str),
+                            );
+                        } else {
+                            obj.remove("existing_session_id");
+                        }
                     }
                     let _ = WhatsAppRepository::set_conversation_state(
                         pool,
@@ -1352,19 +2051,41 @@ pub async fn handle_attendance_conversation_step(
                         subject_name.unwrap_or("Daily Roll Call").to_string()
                     };
 
-                    return format!(
-                        "📅 *Attendance Date Updated: {new_date_str}*\n\n\
-                        🏫 *Class*: {class_name} - Section {section_name}\n\
-                        ⏰ *Session*: {session_info}\n\n\
-                        Please send the absent roll numbers in the format:\n\
-                        👉 *1, 2, 55 absent*\n\n\
-                        _(Or send *all present* if everyone is present, or *cancel* to abort)_"
-                    );
+                    if is_edit_new {
+                        let sid = existing_on_new_date.as_ref().unwrap().0;
+                        let recs = get_session_existing_records(pool, sid).await;
+                        let total_c = recs.len();
+                        let pres_c = recs.iter().filter(|r| r.status == "PRESENT").count();
+                        let abs_c = recs.iter().filter(|r| r.status == "ABSENT").count();
+
+                        return format!(
+                            "📅 *Attendance Date Updated: {new_date_str}* (✏️ *Already Recorded*)\n\n\
+                            🏫 *Class*: {class_name} - Section {section_name}\n\
+                            ⏰ *Session*: {session_info}\n\
+                            👥 *Total*: {total_c} | ✅ *Present*: {pres_c} | ❌ *Absent*: {abs_c}\n\n\
+                            👉 *To mark student present*: *1 present*\n\
+                            👉 *To add more absentees*: *10 absent*\n\
+                            👉 *To replace all absentees*: *replace: 2, 10 absent*\n\
+                            👉 *To mark everyone present*: *all present*\n\
+                            👉 Reply *cancel* to abort."
+                        );
+                    } else {
+                        return format!(
+                            "📅 *Attendance Date Updated: {new_date_str}*\n\n\
+                            🏫 *Class*: {class_name} - Section {section_name}\n\
+                            ⏰ *Session*: {session_info}\n\n\
+                            Please send roll numbers in any of these formats:\n\
+                            👉 *To mark absentees*: *1, 2, 55 absent* (or *1, 2, 55*)\n\
+                            👉 *To mark present students*: *1, 5, 10, 34 present*\n\
+                            👉 *If everyone is present*: *all present*\n\n\
+                            _(Reply *yesterday* to change date, or *cancel* to abort)_"
+                        );
+                    }
                 }
                 Err(err_msg) => {
                     return format!(
                         "⚠️ *Date Error*: {err_msg}\n\n\
-                        Please send the absent roll numbers (e.g. *1, 2, 55 absent*), \
+                        Please send roll numbers (e.g. *1, 2, 55 absent* or *1, 5 present*), \
                         or reply *yesterday* or *date YYYY-MM-DD* to change date, or *cancel* to abort."
                     );
                 }
@@ -1379,16 +2100,16 @@ pub async fn handle_attendance_conversation_step(
                             👉 *yesterday*\n\
                             👉 *date YYYY-MM-DD* (e.g. *date 2026-10-31*)\n\
                             👉 *today*\n\n\
-                            _(Or reply with roll numbers (e.g. *1, 2, 55 absent*) or *cancel* to abort)_"
+                            _(Or reply with roll numbers or *cancel* to abort)_"
                         );
                     }
                 }
             }
 
-            // 2. Parse absentees
-            match parse_absent_input(trimmed) {
-                Ok(absent_rolls) => {
-                    record_attendance_for_roster(
+            // 2. Parse attendance input
+            match parse_attendance_command(trimmed) {
+                Ok(command) => {
+                    record_or_update_attendance_for_roster(
                         pool,
                         context,
                         class_section_id,
@@ -1398,7 +2119,9 @@ pub async fn handle_attendance_conversation_step(
                         subject_id,
                         subject_name,
                         current_target_date,
-                        &absent_rolls,
+                        command,
+                        is_edit,
+                        existing_session_id,
                     )
                     .await
                 }
@@ -1408,12 +2131,23 @@ pub async fn handle_attendance_conversation_step(
                     "❌ *Attendance Cancelled*\n\nAttendance recording has been cancelled. Send *help* to view the menu.".to_string()
                 }
                 Err(_) => {
-                    format!(
+                    if is_edit {
                         "⚠️ *Invalid Format*\n\n\
-                        Could not understand the roll numbers. Please send in the format:\n\
-                        👉 *1, 2, 55 absent*\n\n\
-                        _(Or send *all present* if everyone is present, reply *yesterday* to change date, or *cancel* to abort)_"
-                    )
+                            Could not understand the update instruction. Please send:\n\n\
+                            👉 *Mark student present*: e.g. *1 present* or *1, 5 present*\n\
+                            👉 *Mark student absent*: e.g. *10 absent* or *10, 12 absent*\n\
+                            👉 *Replace all absentees*: e.g. *replace: 2, 10 absent*\n\
+                            👉 *Mark everyone present*: e.g. *all present*\n\n\
+                            _(Reply *yesterday* to change date, or *cancel* to abort)_"
+                            .to_string()
+                    } else {
+                        "⚠️ *Invalid Format*\n\n\
+                            Could not understand the roll numbers. Please send in one of these formats:\n\n\
+                            👉 *To mark absentees*: *1, 2, 55 absent* (or simply *1, 2, 55*)\n\
+                            👉 *To mark present students*: *1, 5, 10, 34 present*\n\
+                            👉 *If everyone is present*: *all present*\n\n\
+                            _(Reply *yesterday* to change date, or *cancel* to abort)_".to_string()
+                    }
                 }
             }
         }
@@ -1585,6 +2319,116 @@ mod tests {
         assert_eq!(
             parse_absent_input("abort").unwrap_err(),
             "CANCEL".to_string()
+        );
+    }
+
+    #[test]
+    fn test_parse_attendance_command_directives() {
+        // 1. Explicit present list (Teacher specified present students!)
+        let cmd = parse_attendance_command("1,5,10,34 present").unwrap();
+        match cmd {
+            AttendanceInputParsed::Directives {
+                absent_rolls,
+                present_rolls,
+                is_replace,
+                is_present_only,
+            } => {
+                assert_eq!(present_rolls, vec!["1", "5", "10", "34"]);
+                assert!(absent_rolls.is_empty());
+                assert!(!is_replace);
+                assert!(is_present_only);
+            }
+            other => panic!("Expected Directives with present_only, got: {:?}", other),
+        }
+
+        // 2. Single present student (e.g. changing absent to present)
+        let cmd_single_p = parse_attendance_command("1 present").unwrap();
+        match cmd_single_p {
+            AttendanceInputParsed::Directives {
+                absent_rolls,
+                present_rolls,
+                is_present_only,
+                ..
+            } => {
+                assert_eq!(present_rolls, vec!["1"]);
+                assert!(absent_rolls.is_empty());
+                assert!(is_present_only);
+            }
+            other => panic!("Expected single present directive, got: {:?}", other),
+        }
+
+        // 3. Single absent student (e.g. adding to absentees)
+        let cmd_single_a = parse_attendance_command("5 absent").unwrap();
+        match cmd_single_a {
+            AttendanceInputParsed::Directives {
+                absent_rolls,
+                present_rolls,
+                is_present_only,
+                ..
+            } => {
+                assert_eq!(absent_rolls, vec!["5"]);
+                assert!(present_rolls.is_empty());
+                assert!(!is_present_only);
+            }
+            other => panic!("Expected single absent directive, got: {:?}", other),
+        }
+
+        // 4. Mixed present and absent
+        let cmd_mixed = parse_attendance_command("1 present, 5 absent").unwrap();
+        match cmd_mixed {
+            AttendanceInputParsed::Directives {
+                absent_rolls,
+                present_rolls,
+                is_present_only,
+                ..
+            } => {
+                assert_eq!(present_rolls, vec!["1"]);
+                assert_eq!(absent_rolls, vec!["5"]);
+                assert!(!is_present_only);
+            }
+            other => panic!("Expected mixed directives, got: {:?}", other),
+        }
+
+        // 5. Replace mode
+        let cmd_replace = parse_attendance_command("replace: 2, 4 absent").unwrap();
+        match cmd_replace {
+            AttendanceInputParsed::Directives {
+                absent_rolls,
+                is_replace,
+                ..
+            } => {
+                assert_eq!(absent_rolls, vec!["2", "4"]);
+                assert!(is_replace);
+            }
+            other => panic!("Expected replace mode, got: {:?}", other),
+        }
+
+        // 6. Everyone present keywords without digits
+        assert_eq!(
+            parse_attendance_command("all present").unwrap(),
+            AttendanceInputParsed::AllPresent
+        );
+        assert_eq!(
+            parse_attendance_command("everyone present").unwrap(),
+            AttendanceInputParsed::AllPresent
+        );
+        assert_eq!(
+            parse_attendance_command("nil").unwrap(),
+            AttendanceInputParsed::AllPresent
+        );
+        assert_eq!(
+            parse_attendance_command("0 absent").unwrap(),
+            AttendanceInputParsed::AllPresent
+        );
+        assert_eq!(
+            parse_attendance_command("0").unwrap(),
+            AttendanceInputParsed::AllPresent
+        );
+
+        // 7. All absent keyword
+        assert_eq!(
+            parse_attendance_command("all absent").unwrap(),
+            AttendanceInputParsed::AllAbsent
         );
     }
 }

@@ -42,8 +42,7 @@ pub async fn create_admission(
         ));
     }
 
-    let dob =
-        DateUtils::parse_iso_date(&payload.date_of_birth).map_err(|e| AppError::BadRequest(e))?;
+    let dob = DateUtils::parse_iso_date(&payload.date_of_birth).map_err(AppError::BadRequest)?;
 
     let _lock = state
         .key_locks

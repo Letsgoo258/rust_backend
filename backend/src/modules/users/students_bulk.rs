@@ -7,6 +7,7 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StudentPreviewItem {
@@ -1032,6 +1033,8 @@ pub struct SingleStudentRequest {
     pub student_phone: Option<String>,
     pub class_section_id: Option<String>,
     pub roll_number: Option<String>,
+    pub caste_category: Option<String>,
+    pub custom_fields: Option<HashMap<String, serde_json::Value>>,
 }
 
 pub async fn single_add_student(
@@ -1074,9 +1077,6 @@ pub async fn single_add_student(
             "Student first and last name are required".into(),
         ));
     }
-    if adm.is_empty() {
-        return Err(AppError::BadRequest("Admission number is required".into()));
-    }
     if g_first.is_empty() || g_last.is_empty() {
         return Err(AppError::BadRequest(
             "Guardian first and last name are required".into(),
@@ -1101,23 +1101,26 @@ pub async fn single_add_student(
     let s_phone = payload
         .student_phone
         .as_deref()
-        .map(|p| crate::utils::phone::normalize_phone_number(p))
+        .map(crate::utils::phone::normalize_phone_number)
         .filter(|p| !p.is_empty() && p.len() >= 10);
 
-    // Check admission number duplicate in school
-    let existing_adms =
-        crate::modules::users::repository::UserRepository::get_existing_admission_numbers(
-            &state.db,
-            user.school_id,
-        )
-        .await
-        .unwrap_or_default();
+    // If manual admission number provided, check duplicate in school
+    let is_auto_adm = adm.is_empty() || adm.eq_ignore_ascii_case("AUTO");
+    if !is_auto_adm {
+        let existing_adms =
+            crate::modules::users::repository::UserRepository::get_existing_admission_numbers(
+                &state.db,
+                user.school_id,
+            )
+            .await
+            .unwrap_or_default();
 
-    let adm_upper = adm.to_uppercase();
-    if existing_adms.contains(&adm_upper) {
-        return Err(AppError::BadRequest(
-            "Admission number already exists in this school".into(),
-        ));
+        let adm_upper = adm.to_uppercase();
+        if existing_adms.contains(&adm_upper) {
+            return Err(AppError::BadRequest(
+                "Admission number already exists in this school".into(),
+            ));
+        }
     }
 
     // Resolve class_section_id if provided
@@ -1163,6 +1166,17 @@ pub async fn single_add_student(
     let default_pass = crate::utils::password::hash_password("Welcome123!").unwrap_or_default();
 
     let mut tx_guard = crate::utils::write_controller::DbWriteController::begin(&state.db).await?;
+
+    let final_adm = if is_auto_adm {
+        crate::modules::admissions::seq::generate_next_admission_number(
+            tx_guard.conn(),
+            user.school_id,
+        )
+        .await?
+    } else {
+        adm.to_string()
+    };
+
     let (s_user_id, _) =
         crate::modules::users::repository::UserRepository::create_bulk_student_item(
             tx_guard.conn(),
@@ -1171,7 +1185,7 @@ pub async fn single_add_student(
             &default_pass,
             first,
             last,
-            adm,
+            &final_adm,
             dob,
             g_first,
             g_last,
@@ -1190,6 +1204,60 @@ pub async fn single_add_student(
         )
         .await?;
 
+    let clean_caste = payload
+        .caste_category
+        .as_deref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+
+    let custom_values_json = payload
+        .custom_fields
+        .as_ref()
+        .map(|cf| serde_json::to_value(cf).unwrap_or(serde_json::json!({})));
+
+    if clean_caste.is_some() || custom_values_json.is_some() {
+        sqlx::query(
+            r#"UPDATE users
+               SET
+                   caste_category = COALESCE($1, caste_category),
+                   custom_values = CASE
+                       WHEN $2::jsonb IS NOT NULL THEN COALESCE(custom_values, '{}'::jsonb) || $2::jsonb
+                       ELSE custom_values
+                   END,
+                   updated_at = NOW()
+               WHERE id = $3"#,
+        )
+        .bind(clean_caste)
+        .bind(&custom_values_json)
+        .bind(s_user_id)
+        .execute(tx_guard.conn())
+        .await?;
+    }
+
+    if let Some(ref cf_map) = payload.custom_fields {
+        for (f_key, f_val) in cf_map {
+            let val_str = match f_val {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Null => String::new(),
+                other => other.to_string(),
+            };
+            let _ = sqlx::query(
+                r#"INSERT INTO user_custom_values (school_id, user_id, field_id, value, updated_at)
+                   SELECT $1, $2, id, $3, NOW()
+                   FROM custom_fields
+                   WHERE school_id = $1 AND field_key = $4
+                   ON CONFLICT (user_id, field_id)
+                   DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()"#,
+            )
+            .bind(user.school_id)
+            .bind(s_user_id)
+            .bind(&val_str)
+            .bind(f_key)
+            .execute(tx_guard.conn())
+            .await;
+        }
+    }
+
     tx_guard.commit().await?;
 
     crate::utils::audit::log_action(
@@ -1200,7 +1268,7 @@ pub async fn single_add_student(
         Some("STUDENTS"),
         Some(s_user_id),
         Some(serde_json::json!({
-            "admission_number": adm,
+            "admission_number": final_adm,
             "student_id": s_user_id,
             "first_name": first,
             "last_name": last
@@ -1215,7 +1283,7 @@ pub async fn single_add_student(
         Json(serde_json::json!({
             "message": "Student created successfully",
             "student_id": s_user_id,
-            "admission_number": adm,
+            "admission_number": final_adm,
         })),
     ))
 }

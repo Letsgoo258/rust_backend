@@ -223,11 +223,9 @@ impl CsvSchema {
                                 break;
                             }
                         }
-                        ColumnType::Int => {
-                            if val.parse::<i64>().is_err() {
-                                error_msg = Some(format!("{} must be integer", col.header));
-                                break;
-                            }
+                        ColumnType::Int if val.parse::<i64>().is_err() => {
+                            error_msg = Some(format!("{} must be integer", col.header));
+                            break;
                         }
                         _ => {}
                     }

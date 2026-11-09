@@ -125,7 +125,7 @@ impl WhatsAppClient {
                 let age_secs = Utc::now()
                     .signed_duration_since(ctx.info.timestamp)
                     .num_seconds();
-                if age_secs > 120 || age_secs < -30 {
+                if !(-30..=120).contains(&age_secs) {
                     tracing::debug!(
                         age = age_secs,
                         id = %ctx.info.id,

@@ -1,11 +1,12 @@
 use axum::{
-    extract::State,
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
 use chrono::{Datelike, NaiveDate, Utc};
+use qrcode::{render::svg, QrCode};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -16,8 +17,21 @@ use crate::{
     error::AppError,
     routes::settings::admissions::{AdmissionConfigPayload, RequiredDocItem},
     state::AppState,
-    utils::{datetime::DateUtils, whatsapp::send_whatsapp_message},
+    utils::{datetime::DateUtils, imagekit::ImageKitClient, whatsapp::send_whatsapp_message},
 };
+
+#[derive(Debug, Deserialize)]
+pub struct ValidateTokenQuery {
+    pub token: String,
+    pub phone: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UploadDocumentPayload {
+    pub admission_id: Uuid,
+    pub application_number: String,
+    pub image_base64: String,
+}
 
 #[derive(Debug, Deserialize)]
 pub struct SendOtpPayload {
@@ -70,11 +84,16 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/config", get(get_public_admission_config))
         .route("/captcha", get(get_captcha_challenge))
+        .route("/validate-token", get(validate_preverified_token))
         .route("/send-phone-otp", post(send_phone_otp))
         .route("/verify-phone-otp", post(verify_phone_otp))
         .route("/send-email-otp", post(send_email_otp))
         .route("/verify-email-otp", post(verify_email_otp))
         .route("/submit", post(submit_admission_application))
+        .route("/application/:id", get(get_submitted_application_details))
+        .route("/upload-document", post(upload_admission_document))
+        .route("/documents/:file_id", get(serve_local_document))
+        .layer(axum::extract::DefaultBodyLimit::max(25 * 1024 * 1024))
 }
 
 /// Helper to resolve the active/primary school
@@ -287,6 +306,107 @@ pub async fn get_captcha_challenge() -> Result<impl IntoResponse, AppError> {
         "question": format!("What is {a} + {b}?"),
         "captcha_token": encoded_token,
     })))
+}
+
+/// GET /api/v1/admissions/public/validate-token
+/// Validates a pre-verified WhatsApp token and returns target phone/email
+pub async fn validate_preverified_token(
+    State(state): State<AppState>,
+    Query(query): Query<ValidateTokenQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    let clean_phone: String = query
+        .phone
+        .as_deref()
+        .unwrap_or("")
+        .chars()
+        .filter(|c| c.is_ascii_digit())
+        .collect();
+    let phone_10 = if clean_phone.len() > 10 {
+        clean_phone[clean_phone.len() - 10..].to_string()
+    } else {
+        clean_phone.clone()
+    };
+
+    let otp_row = sqlx::query_as::<_, (Uuid, String, bool, chrono::DateTime<Utc>)>(
+        r#"
+        SELECT id, target, verified, expires_at
+        FROM admission_otps
+        WHERE verification_token = $1
+          AND target_type = 'PHONE'
+          AND verified = true
+          AND expires_at > now()
+        ORDER BY created_at DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(&query.token)
+    .fetch_optional(&state.db)
+    .await?;
+
+    match otp_row {
+        Some((_, target, verified, _)) => {
+            if !clean_phone.is_empty()
+                && !target.contains(&phone_10)
+                && !clean_phone.contains(&target)
+            {
+                return Err(AppError::BadRequest(
+                    "Token does not match the provided phone number".into(),
+                ));
+            }
+
+            // Also check if an associated guardian/parent exists in users or admission_guardians
+            let user_info = sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>, Option<String>)>(
+                "SELECT display_name, first_name, last_name, email FROM users WHERE phone = $1 OR phone = $2 LIMIT 1",
+            )
+            .bind(&target)
+            .bind(&phone_10)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+
+            let (guardian_name, email_opt) = match user_info {
+                Some((disp, f, l, em)) => {
+                    let name = disp.or_else(|| match (f.as_deref(), l.as_deref()) {
+                        (Some(first), Some(last)) if !first.is_empty() => {
+                            Some(format!("{first} {last}").trim().to_string())
+                        }
+                        (Some(first), _) if !first.is_empty() => Some(first.to_string()),
+                        _ => None,
+                    });
+                    (name, em)
+                }
+                None => {
+                    let prev_guardian = sqlx::query_as::<_, (String, Option<String>)>(
+                        "SELECT name, email FROM admission_guardians WHERE phone = $1 OR phone = $2 ORDER BY id DESC LIMIT 1",
+                    )
+                    .bind(&target)
+                    .bind(&phone_10)
+                    .fetch_optional(&state.db)
+                    .await
+                    .ok()
+                    .flatten();
+                    match prev_guardian {
+                        Some((name, em)) => (Some(name), em),
+                        None => (None, None),
+                    }
+                }
+            };
+
+            Ok(Json(json!({
+                "success": true,
+                "valid": verified,
+                "phone": target,
+                "email": email_opt,
+                "guardian_name": guardian_name,
+                "token": query.token,
+                "message": "Mobile number is pre-verified via WhatsApp"
+            })))
+        }
+        None => Err(AppError::BadRequest(
+            "Verification token is invalid or has expired".into(),
+        )),
+    }
 }
 
 /// POST /api/v1/admissions/public/send-phone-otp
@@ -555,14 +675,21 @@ pub async fn submit_admission_application(
         .chars()
         .filter(|c| c.is_ascii_digit())
         .collect();
+    let phone_10 = if clean_phone.len() > 10 {
+        clean_phone[clean_phone.len() - 10..].to_string()
+    } else {
+        clean_phone.clone()
+    };
+
     let phone_verified = sqlx::query_scalar::<_, bool>(
         r#"
         SELECT verified
         FROM admission_otps
-        WHERE target = $1 AND target_type = 'PHONE' AND verification_token = $2
+        WHERE (target = $1 OR target = $2) AND target_type = 'PHONE' AND verification_token = $3
         "#,
     )
     .bind(&clean_phone)
+    .bind(&phone_10)
     .bind(&payload.phone_token)
     .fetch_optional(&state.db)
     .await?
@@ -576,18 +703,37 @@ pub async fn submit_admission_application(
 
     // 3. Verify Email Token
     let clean_email = payload.applicant_email.trim().to_lowercase();
-    let email_verified = sqlx::query_scalar::<_, bool>(
-        r#"
-        SELECT verified
-        FROM admission_otps
-        WHERE target = $1 AND target_type = 'EMAIL' AND verification_token = $2
-        "#,
-    )
-    .bind(&clean_email)
-    .bind(&payload.email_token)
-    .fetch_optional(&state.db)
-    .await?
-    .unwrap_or(false);
+    let email_verified = if payload.phone_token.starts_with("wa_verified_") {
+        if !payload.email_token.is_empty() && !payload.email_token.starts_with("wa_verified_") {
+            sqlx::query_scalar::<_, bool>(
+                r#"
+                SELECT verified
+                FROM admission_otps
+                WHERE target = $1 AND target_type = 'EMAIL' AND verification_token = $2
+                "#,
+            )
+            .bind(&clean_email)
+            .bind(&payload.email_token)
+            .fetch_optional(&state.db)
+            .await?
+            .unwrap_or(false)
+        } else {
+            true // Pre-verified via WhatsApp!
+        }
+    } else {
+        sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT verified
+            FROM admission_otps
+            WHERE target = $1 AND target_type = 'EMAIL' AND verification_token = $2
+            "#,
+        )
+        .bind(&clean_email)
+        .bind(&payload.email_token)
+        .fetch_optional(&state.db)
+        .await?
+        .unwrap_or(false)
+    };
 
     if !email_verified {
         return Err(AppError::BadRequest(
@@ -766,20 +912,38 @@ pub async fn submit_admission_application(
         .fetch_optional(&mut *tx)
         .await?;
 
-        if let Some(fid) = field_id {
-            sqlx::query(
-                r#"
-                INSERT INTO admission_custom_values (admission_id, field_id, value)
-                VALUES ($1, $2, $3)
-                ON CONFLICT (admission_id, field_id) DO UPDATE SET value = EXCLUDED.value
-                "#,
-            )
-            .bind(admission_id)
-            .bind(fid)
-            .bind(val)
-            .execute(&mut *tx)
-            .await?;
-        }
+        let fid = match field_id {
+            Some(id) => id,
+            None => {
+                let display_title = key.replace('_', " ");
+                let new_fid: Uuid = sqlx::query_scalar(
+                    r#"
+                    INSERT INTO custom_fields (school_id, entity_type, field_name, field_key, field_type, is_required)
+                    VALUES ($1, 'ADMISSION', $2, $3, 'TEXT', false)
+                    RETURNING id
+                    "#,
+                )
+                .bind(school_id)
+                .bind(&display_title)
+                .bind(key)
+                .fetch_one(&mut *tx)
+                .await?;
+                new_fid
+            }
+        };
+
+        sqlx::query(
+            r#"
+            INSERT INTO admission_custom_values (admission_id, field_id, value)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (admission_id, field_id) DO UPDATE SET value = EXCLUDED.value
+            "#,
+        )
+        .bind(admission_id)
+        .bind(fid)
+        .bind(val)
+        .execute(&mut *tx)
+        .await?;
     }
 
     tx.commit().await?;
@@ -824,5 +988,385 @@ pub async fn submit_admission_application(
             "school_name": school_name,
             "message": "Admission application submitted successfully!"
         })),
+    ))
+}
+
+/// GET /api/v1/admissions/public/application/:id
+/// Returns canonical verified submitted data from DB for client-side document rendering
+pub async fn get_submitted_application_details(
+    State(state): State<AppState>,
+    Path(admission_id): Path<Uuid>,
+) -> Result<impl IntoResponse, AppError> {
+    let adm_row = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            Uuid,
+            Option<Uuid>,
+            Option<String>,
+            String,
+            Option<chrono::DateTime<Utc>>,
+        ),
+    >(
+        r#"
+        SELECT id, school_id, academic_year_id, application_number, status::text, submitted_at
+        FROM admissions
+        WHERE id = $1
+        "#,
+    )
+    .bind(admission_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Admission application not found".into()))?;
+
+    let (id, school_id, ay_id, app_no, status, submitted_at) = adm_row;
+    let app_number_str = app_no.clone().unwrap_or_else(|| "PENDING".to_string());
+
+    // School details
+    let school = sqlx::query_as::<
+        _,
+        (
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ),
+    >(
+        r#"
+        SELECT name, address, city, phone, email
+        FROM schools
+        WHERE id = $1
+        "#,
+    )
+    .bind(school_id)
+    .fetch_optional(&state.db)
+    .await?
+    .unwrap_or(("ERAVAYA Academy".to_string(), None, None, None, None));
+
+    // Academic year name
+    let ay_name: String = if let Some(ay) = ay_id {
+        sqlx::query_scalar("SELECT name FROM academic_years WHERE id = $1")
+            .bind(ay)
+            .fetch_optional(&state.db)
+            .await?
+            .unwrap_or_else(|| "2026-2027".to_string())
+    } else {
+        "2026-2027".to_string()
+    };
+
+    // Applicant
+    let applicant = sqlx::query_as::<
+        _,
+        (
+            String,
+            Option<String>,
+            String,
+            NaiveDate,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ),
+    >(
+        r#"
+        SELECT first_name, middle_name, last_name, date_of_birth, gender, phone, email
+        FROM admission_applicants
+        WHERE admission_id = $1
+        LIMIT 1
+        "#,
+    )
+    .bind(admission_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    // Guardian
+    let guardian = sqlx::query_as::<_, (String, String, String, Option<String>, Option<String>)>(
+        r#"
+        SELECT name, relationship, phone, email, occupation
+        FROM admission_guardians
+        WHERE admission_id = $1
+        LIMIT 1
+        "#,
+    )
+    .bind(admission_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    // Custom fields & values
+    let custom_values = sqlx::query_as::<_, (String, String, String)>(
+        r#"
+        SELECT cf.field_name, cf.field_key, acv.value
+        FROM admission_custom_values acv
+        JOIN custom_fields cf ON cf.id = acv.field_id
+        WHERE acv.admission_id = $1
+        ORDER BY cf.display_order ASC
+        "#,
+    )
+    .bind(admission_id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    let custom_fields_json: Vec<serde_json::Value> = custom_values
+        .into_iter()
+        .map(|(name, key, val)| {
+            json!({
+                "name": name,
+                "key": key,
+                "value": val
+            })
+        })
+        .collect();
+
+    // Admission form template config from school_settings
+    let template_config = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT value FROM school_settings WHERE school_id = $1 AND key = 'report_tpl_admission_form'",
+    )
+    .bind(school_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+
+    // Generate Verification QR Code SVG (User Request: "below needs to be a qr code when scanned can view the uploaded pdfs")
+    let app_url = std::env::var("APP_URL")
+        .unwrap_or_else(|_| "https://my-frontend-kappa-five.vercel.app".to_string());
+    let clean_url = app_url.trim_end_matches('/');
+    let verify_url =
+        format!("{clean_url}/admissions/verify?id={admission_id}&app_no={app_number_str}");
+
+    let qr_code_svg = if let Ok(code) = QrCode::new(verify_url.as_bytes()) {
+        code.render::<svg::Color>().min_dimensions(120, 120).build()
+    } else {
+        String::new()
+    };
+
+    Ok(Json(json!({
+        "success": true,
+        "application": {
+            "id": id,
+            "school_id": school_id,
+            "school_name": school.0,
+            "school_address": school.1.unwrap_or_else(|| "Campus Road, Knowledge Park".to_string()),
+            "school_city": school.2.unwrap_or_default(),
+            "school_phone": school.3.unwrap_or_default(),
+            "school_email": school.4.unwrap_or_default(),
+            "academic_year": ay_name,
+            "application_number": app_number_str,
+            "status": status,
+            "submitted_at": submitted_at.map(|d| d.to_rfc3339()).unwrap_or_default(),
+            "applicant": applicant.map(|a| json!({
+                "first_name": a.0,
+                "middle_name": a.1.unwrap_or_default(),
+                "last_name": a.2,
+                "date_of_birth": a.3.to_string(),
+                "gender": a.4.unwrap_or_else(|| "Male".to_string()),
+                "phone": a.5.unwrap_or_default(),
+                "email": a.6.unwrap_or_default()
+            })),
+            "guardian": guardian.map(|g| json!({
+                "name": g.0,
+                "relationship": g.1,
+                "phone": g.2,
+                "email": g.3.unwrap_or_default(),
+                "occupation": g.4.unwrap_or_default()
+            })),
+            "custom_fields": custom_fields_json,
+            "template_config": template_config,
+            "qr_code_svg": qr_code_svg,
+            "verify_url": verify_url
+        }
+    })))
+}
+
+/// POST /api/v1/admissions/public/upload-document
+/// Uploads client-rendered Admission Form image to ImageKit.io with 24-hour signed link
+pub async fn upload_admission_document(
+    State(state): State<AppState>,
+    Json(payload): Json<UploadDocumentPayload>,
+) -> Result<impl IntoResponse, AppError> {
+    use base64::Engine;
+
+    // 1. Clean base64 image data
+    let raw_b64 = if let Some(idx) = payload.image_base64.find(";base64,") {
+        &payload.image_base64[idx + 8..]
+    } else {
+        &payload.image_base64
+    };
+
+    let image_bytes = base64::engine::general_purpose::STANDARD
+        .decode(raw_b64.trim())
+        .map_err(|e| AppError::BadRequest(format!("Invalid base64 document image: {e}")))?;
+
+    // 2. Fetch school and application context
+    let adm_row = sqlx::query_as::<_, (Uuid, Uuid, Option<Uuid>, Option<String>)>(
+        "SELECT id, school_id, academic_year_id, application_number FROM admissions WHERE id = $1",
+    )
+    .bind(payload.admission_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Admission record not found".into()))?;
+
+    let (admission_id, school_id, ay_id, app_no) = adm_row;
+    let application_number = app_no.unwrap_or(payload.application_number);
+
+    let school_name = sqlx::query_scalar::<_, String>("SELECT name FROM schools WHERE id = $1")
+        .bind(school_id)
+        .fetch_optional(&state.db)
+        .await?
+        .unwrap_or_else(|| "ERAVAYA School".to_string());
+
+    let ay_name: String = if let Some(ay) = ay_id {
+        sqlx::query_scalar("SELECT name FROM academic_years WHERE id = $1")
+            .bind(ay)
+            .fetch_optional(&state.db)
+            .await?
+            .unwrap_or_else(|| "2026-2027".to_string())
+    } else {
+        "2026-2027".to_string()
+    };
+
+    // 3. Upload to ImageKit / local archive with 24-hour signed link
+    let file_clean = application_number.replace(['/', ' '], "_");
+    let file_name = format!("Admission_Form_{file_clean}.png");
+    let folder = format!("/admissions/{ay_name}");
+
+    let upload_res = ImageKitClient::upload_document(image_bytes, &file_name, &folder).await?;
+
+    // 4. Retrieve applicant and guardian contacts
+    let applicant_name = sqlx::query_as::<_, (String, String)>(
+        "SELECT first_name, last_name FROM admission_applicants WHERE admission_id = $1",
+    )
+    .bind(admission_id)
+    .fetch_optional(&state.db)
+    .await?
+    .map(|(f, l)| format!("{f} {l}"))
+    .unwrap_or_else(|| "Applicant".to_string());
+
+    let guardian_info = sqlx::query_as::<_, (String, String, Option<String>)>(
+        "SELECT name, phone, email FROM admission_guardians WHERE admission_id = $1",
+    )
+    .bind(admission_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let signed_url = upload_res.signed_url_24h.clone();
+    let email_target = guardian_info.as_ref().and_then(|g| g.2.clone());
+    let guardian_name = guardian_info
+        .as_ref()
+        .map(|g| g.0.clone())
+        .unwrap_or_else(|| "Parent / Guardian".to_string());
+    let guardian_phone = guardian_info
+        .as_ref()
+        .map(|g| g.1.clone())
+        .unwrap_or_default();
+
+    // 5. Send Email if target available
+    if let Some(target_email) = email_target {
+        if !target_email.trim().is_empty() && target_email.contains('@') {
+            let email_subj = format!(
+                "Official Admission Application Form – {} ({})",
+                application_number, school_name
+            );
+            let email_html = format!(
+                r#"<!DOCTYPE html>
+                <html>
+                <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #1e293b; max-width: 600px; margin: 0 auto; padding: 24px; background: #ffffff;">
+                  <div style="text-align: center; border-bottom: 2px solid #0284c7; padding-bottom: 16px; margin-bottom: 24px;">
+                    <h2 style="margin: 0; color: #0f172a; font-size: 22px;">{school_name}</h2>
+                    <p style="margin: 4px 0 0; font-size: 13px; color: #64748b;">Official Online Admissions &amp; Student Registration</p>
+                  </div>
+                  <p style="font-size: 14px;">Dear <strong>{guardian_name}</strong>,</p>
+                  <p style="font-size: 14px;">The admission application for <strong>{applicant_name}</strong> has been registered in the institutional ERP database.</p>
+                  
+                  <div style="background: #f8fafc; border: 1.5px dashed #cbd5e1; border-radius: 12px; padding: 18px; margin: 20px 0; text-align: center;">
+                    <div style="font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: bold; letter-spacing: 0.5px;">Official Application Number</div>
+                    <div style="font-size: 24px; font-weight: 900; color: #0369a1; letter-spacing: 1px; margin-top: 4px;">{app_no}</div>
+                    <div style="font-size: 12px; color: #64748b; margin-top: 4px;">Academic Session: <strong>{ay_name}</strong></div>
+                  </div>
+
+                  <p style="font-size: 13px; color: #475569;">
+                    Your official box-box formatted Admission Application Form has been rendered and preserved in <strong>ImageKit.io</strong> storage. Click below to view or download:
+                  </p>
+
+                  <div style="text-align: center; margin: 28px 0;">
+                    <a href="{signed_url}" style="background: #0284c7; color: #ffffff; padding: 14px 32px; border-radius: 10px; text-decoration: none; font-weight: bold; font-size: 14px; display: inline-block; box-shadow: 0 4px 12px rgba(2, 132, 199, 0.3);">
+                      📥 View &amp; Download Admission Form (24-Hour Link)
+                    </a>
+                  </div>
+
+                  <p style="font-size: 11px; color: #94a3b8; text-align: center; border-top: 1px solid #e2e8f0; padding-top: 16px;">
+                    🔒 <em>This download link is securely signed and valid for 24 hours. A permanent copy is retained in the school admission office registry.</em>
+                  </p>
+                </body>
+                </html>"#,
+                school_name = school_name,
+                guardian_name = guardian_name,
+                applicant_name = applicant_name,
+                app_no = application_number,
+                ay_name = ay_name,
+                signed_url = signed_url
+            );
+
+            tokio::spawn(async move {
+                let _ =
+                    crate::utils::email::send_email(&target_email, &email_subj, &email_html).await;
+            });
+        }
+    }
+
+    // 6. Deliver to WhatsApp if phone available
+    let clean_phone: String = guardian_phone
+        .chars()
+        .filter(|c| c.is_ascii_digit())
+        .collect();
+    if clean_phone.len() >= 10 {
+        let jid = format!("{clean_phone}@s.whatsapp.net");
+        let wa_msg = format!(
+            "📄 *Official Admission Form Generated*\n\n\
+            Dear *{}*,\n\
+            The official admission application form for *{}* (Application No: `{}`) has been generated!\n\n\
+            📥 *Download Your Document (Valid 24 Hours)*:\n\
+            {}\n\n\
+            Please download and retain this signed copy for your school verification.",
+            guardian_name,
+            applicant_name,
+            application_number,
+            upload_res.signed_url_24h
+        );
+        let _ = send_whatsapp_message(&state.db, &jid, &wa_msg, None).await;
+    }
+
+    Ok(Json(json!({
+        "success": true,
+        "document_url": upload_res.signed_url_24h,
+        "file_id": upload_res.file_id,
+        "expires_at": upload_res.expires_at,
+        "message": "Admission document uploaded and 24-hour link dispatched via email & WhatsApp"
+    })))
+}
+
+/// GET /api/v1/admissions/public/documents/:file_id
+pub async fn serve_local_document(
+    Path(file_id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    let clean_id: String = file_id
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+        .collect();
+    let file_path = std::path::Path::new("uploads/admissions").join(format!("{clean_id}.png"));
+    let bytes = tokio::fs::read(&file_path)
+        .await
+        .map_err(|_| AppError::NotFound("Document not found or expired".into()))?;
+
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, "image/png"),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                "inline; filename=\"admission_form.png\"",
+            ),
+        ],
+        bytes,
     ))
 }

@@ -1183,36 +1183,80 @@ impl AcademicRepository {
     ) -> Result<MyClassResponse, AppError> {
         let all_classes = Self::get_class_capacities(pool, school_id).await?;
 
-        let user_section_ids: Vec<Uuid> = sqlx::query_scalar::<_, Uuid>(
+        let is_class_teacher_assignment = sqlx::query_scalar::<_, bool>(
             r#"
-            SELECT cs.id
-            FROM class_sections cs
-            JOIN classes c ON cs.class_id = c.id
-            WHERE c.school_id = $1
-              AND (cs.status IS NULL OR cs.status = 'ACTIVE')
-              AND (
-                  cs.class_teacher_staff_id = $2
-                  OR cs.class_teacher_staff_id IN (
-                      SELECT id FROM staff WHERE user_id = $2 AND school_id = $1
+            SELECT EXISTS (
+                SELECT 1 FROM class_sections cs
+                JOIN classes c ON cs.class_id = c.id
+                WHERE c.school_id = $1
+                  AND (cs.status IS NULL OR cs.status = 'ACTIVE')
+                  AND (
+                      cs.class_teacher_staff_id = $2
+                      OR cs.class_teacher_staff_id IN (
+                          SELECT id FROM staff WHERE user_id = $2 AND school_id = $1
+                      )
                   )
-                  OR cs.id IN (
-                      SELECT ts.class_section_id
-                      FROM timetable_slots ts
-                      WHERE ts.school_id = $1
-                        AND (
-                            ts.teacher_staff_id = $2
-                            OR ts.teacher_staff_id IN (SELECT id FROM staff WHERE user_id = $2 AND school_id = $1)
-                            OR ts.co_teacher_staff_ids @> ARRAY[(SELECT id FROM staff WHERE user_id = $2 AND school_id = $1)]
-                        )
-                        AND ts.status = 'ACTIVE'
-                  )
-              )
+            )
             "#,
         )
         .bind(school_id)
         .bind(user_id)
-        .fetch_all(pool)
-        .await?;
+        .fetch_one(pool)
+        .await
+        .unwrap_or(false);
+
+        let user_section_ids: Vec<Uuid> = if is_class_teacher_assignment {
+            sqlx::query_scalar::<_, Uuid>(
+                r#"
+                SELECT cs.id
+                FROM class_sections cs
+                JOIN classes c ON cs.class_id = c.id
+                WHERE c.school_id = $1
+                  AND (cs.status IS NULL OR cs.status = 'ACTIVE')
+                  AND (
+                      cs.class_teacher_staff_id = $2
+                      OR cs.class_teacher_staff_id IN (
+                          SELECT id FROM staff WHERE user_id = $2 AND school_id = $1
+                      )
+                  )
+                "#,
+            )
+            .bind(school_id)
+            .bind(user_id)
+            .fetch_all(pool)
+            .await?
+        } else {
+            sqlx::query_scalar::<_, Uuid>(
+                r#"
+                SELECT cs.id
+                FROM class_sections cs
+                JOIN classes c ON cs.class_id = c.id
+                WHERE c.school_id = $1
+                  AND (cs.status IS NULL OR cs.status = 'ACTIVE')
+                  AND (
+                      cs.class_teacher_staff_id = $2
+                      OR cs.class_teacher_staff_id IN (
+                          SELECT id FROM staff WHERE user_id = $2 AND school_id = $1
+                      )
+                      OR cs.id IN (
+                          SELECT ts.class_section_id
+                          FROM timetable_slots ts
+                          WHERE ts.school_id = $1
+                            AND (
+                                ts.teacher_staff_id = $2
+                                OR ts.teacher_staff_id IN (SELECT id FROM staff WHERE user_id = $2 AND school_id = $1)
+                                OR ts.co_teacher_staff_ids @> ARRAY[(SELECT id FROM staff WHERE user_id = $2 AND school_id = $1)]
+                            )
+                            AND ts.status = 'ACTIVE'
+                      )
+                  )
+                "#,
+            )
+            .bind(school_id)
+            .bind(user_id)
+            .fetch_all(pool)
+            .await?
+        };
 
         let assigned_classes: Vec<MyClassSectionInfo> = all_classes
             .into_iter()
@@ -1221,10 +1265,8 @@ impl AcademicRepository {
                     true
                 } else if !user_section_ids.is_empty() {
                     user_section_ids.contains(&c.class_section_id)
-                        || Some(c.class_section_id) == requested_section_id
                 } else {
-                    // Fallback so teachers can access active class divisions
-                    true
+                    false
                 }
             })
             .map(|c| MyClassSectionInfo {

@@ -48,11 +48,10 @@ pub struct UnifiedMasterTestReport {
 
 async fn get_db_pool() -> PgPool {
     dotenvy::dotenv().ok();
-    let db_url =
-        std::env::var("DATABASE_URL").expect("DATABASE_URL must be set in environment or .env");
-    PgPool::connect(&db_url)
+    let config = eravaya::config::AppConfig::from_env();
+    eravaya::db::init_pool(&config)
         .await
-        .expect("Failed to connect to PostgreSQL database pool")
+        .expect("Failed to initialize database pool and migrations")
 }
 
 async fn setup_test_context(pool: &PgPool) -> TestContext {
@@ -503,7 +502,7 @@ async fn verify_class_and_division_return(
     println!("\n▶️ [STEP 5] Verifying class and division return accuracy for student users...");
 
     let filters = HashMap::new();
-    let (user_list, _count) = UserRepository::list_users(pool, ctx.school_id, &filters)
+    let (user_list, _count) = UserRepository::list_users(pool, ctx.school_id, &filters, None)
         .await
         .expect("Failed to query list_users");
 
@@ -558,7 +557,7 @@ async fn verify_student_class_change(
     println!("\n▶️ [STEP 6] Testing student class and division change capability...");
 
     let filters = HashMap::new();
-    let (list_before, _) = UserRepository::list_users(pool, ctx.school_id, &filters)
+    let (list_before, _) = UserRepository::list_users(pool, ctx.school_id, &filters, None)
         .await
         .expect("Failed list_users before class change");
 
@@ -579,7 +578,7 @@ async fn verify_student_class_change(
         .await
         .expect("Failed to update user class_section_id");
 
-    let (list_after, _) = UserRepository::list_users(pool, ctx.school_id, &filters)
+    let (list_after, _) = UserRepository::list_users(pool, ctx.school_id, &filters, None)
         .await
         .expect("Failed list_users after class change");
 

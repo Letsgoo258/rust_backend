@@ -275,7 +275,7 @@ impl CapabilityController {
 
         if role_rows.is_empty() {
             if let Ok(mut conn) = pool.acquire().await {
-                let _ = crate::utils::roles::seed_all_school_roles(&mut *conn, school_id).await;
+                let _ = crate::utils::roles::seed_all_school_roles(&mut conn, school_id).await;
             }
             role_rows = sqlx::query(
                 r#"

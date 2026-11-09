@@ -55,11 +55,11 @@ pub async fn setup_system(
     ?;
 
     // Seed all system roles for the newly created school
-    crate::utils::roles::seed_all_school_roles(&mut *tx, school_id).await?;
+    crate::utils::roles::seed_all_school_roles(&mut tx, school_id).await?;
 
     // Retrieve Super Admin Role ID
     let role_id = crate::utils::roles::get_or_create_role_id(
-        &mut *tx,
+        &mut tx,
         school_id,
         "SUPER_ADMIN",
         "Super Admin",
@@ -284,11 +284,11 @@ pub async fn create_school(
     .await?;
 
     // Seed all system roles for the newly created school
-    crate::utils::roles::seed_all_school_roles(&mut *tx, school_id).await?;
+    crate::utils::roles::seed_all_school_roles(&mut tx, school_id).await?;
 
     // Retrieve School Admin Role ID
     let role_id = crate::utils::roles::get_or_create_role_id(
-        &mut *tx,
+        &mut tx,
         school_id,
         "SCHOOL_ADMIN",
         "School Admin",

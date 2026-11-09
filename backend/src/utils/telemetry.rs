@@ -269,6 +269,12 @@ pub struct TelemetryDispatcher {
     adapters: Arc<Vec<Arc<dyn TelemetryAdapter>>>,
 }
 
+impl Default for TelemetryDispatcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[allow(dead_code)]
 impl TelemetryDispatcher {
     pub fn new() -> Self {

@@ -263,7 +263,7 @@ impl AttendanceRepository {
         let ticket_number = format!(
             "TKT-ATT-{}-{}",
             date.format("%Y%m%d"),
-            &Uuid::new_v4().to_string()[..6].to_uppercase()
+            Uuid::new_v4().to_string()[..6].to_uppercase()
         );
 
         let ticket_id = Uuid::new_v4();

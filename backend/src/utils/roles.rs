@@ -245,7 +245,7 @@ pub async fn sync_class_teacher_role(
         .unwrap_or(false);
 
         if !has_other_sections {
-            let _ = remove_user_role(&mut *conn, school_id, user_id, "CLASS_TEACHER").await?;
+            remove_user_role(&mut *conn, school_id, user_id, "CLASS_TEACHER").await?;
         }
     }
 

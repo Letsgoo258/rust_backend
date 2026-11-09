@@ -43,15 +43,13 @@ pub async fn flush_telemetry(pool: &PgPool) {
     let reader = BufReader::new(file);
     let mut success_count = 0;
 
-    for line_result in reader.lines() {
-        if let Ok(line) = line_result {
-            if let Ok(record) = serde_json::from_str::<TelemetryRecord>(&line) {
-                if TelemetryRepository::insert_telemetry_record(pool, &record)
-                    .await
-                    .is_ok()
-                {
-                    success_count += 1;
-                }
+    for line in reader.lines().map_while(Result::ok) {
+        if let Ok(record) = serde_json::from_str::<TelemetryRecord>(&line) {
+            if TelemetryRepository::insert_telemetry_record(pool, &record)
+                .await
+                .is_ok()
+            {
+                success_count += 1;
             }
         }
     }
@@ -83,15 +81,13 @@ pub async fn flush_audit_logs(pool: &PgPool) {
     let reader = BufReader::new(file);
     let mut success_count = 0;
 
-    for line_result in reader.lines() {
-        if let Ok(line) = line_result {
-            if let Ok(record) = serde_json::from_str::<crate::utils::audit::AuditRecord>(&line) {
-                if TelemetryRepository::insert_audit_record(pool, &record)
-                    .await
-                    .is_ok()
-                {
-                    success_count += 1;
-                }
+    for line in reader.lines().map_while(Result::ok) {
+        if let Ok(record) = serde_json::from_str::<crate::utils::audit::AuditRecord>(&line) {
+            if TelemetryRepository::insert_audit_record(pool, &record)
+                .await
+                .is_ok()
+            {
+                success_count += 1;
             }
         }
     }

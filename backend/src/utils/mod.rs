@@ -6,6 +6,7 @@ pub mod datetime;
 pub mod edit_history;
 pub mod email;
 pub mod filter_engine;
+pub mod imagekit;
 pub mod jobs;
 pub mod password;
 pub mod permissions;

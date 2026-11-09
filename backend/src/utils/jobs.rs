@@ -4,6 +4,7 @@ use sqlx::PgPool;
 use std::sync::Arc;
 use uuid::Uuid;
 
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum JobStatus {
     PENDING,

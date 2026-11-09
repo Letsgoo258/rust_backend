@@ -119,8 +119,13 @@ impl StudentLifecycleStatus {
             Self::Detained => &[Self::Active, Self::Dropout, Self::TcProcess],
             // tcProcess → tcIssued | tcCancelled
             Self::TcProcess => &[Self::TcIssued, Self::TcCancelled, Self::Active],
-            // tcIssued → transfered | tcCancelled
-            Self::TcIssued => &[Self::Transferred, Self::TcCancelled],
+            // tcIssued → transfered | tcCancelled | readmitted | active
+            Self::TcIssued => &[
+                Self::Transferred,
+                Self::TcCancelled,
+                Self::Readmitted,
+                Self::Active,
+            ],
             // transferred is a terminal state
             Self::Transferred => &[],
             // tcCancelled → active
@@ -245,6 +250,10 @@ mod tests {
         assert!(
             StudentLifecycleStatus::TcIssued.can_transition_to(StudentLifecycleStatus::Transferred)
         );
+        assert!(
+            StudentLifecycleStatus::TcIssued.can_transition_to(StudentLifecycleStatus::Readmitted)
+        );
+        assert!(StudentLifecycleStatus::TcIssued.can_transition_to(StudentLifecycleStatus::Active));
 
         // tcCancelled → active
         assert!(StudentLifecycleStatus::TcProcess

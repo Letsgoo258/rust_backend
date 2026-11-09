@@ -70,6 +70,84 @@ pub async fn init_pool(config: &AppConfig) -> Result<PgPool, sqlx::Error> {
             -- Ensure class_section_id column exists on users table
             ALTER TABLE users ADD COLUMN IF NOT EXISTS class_section_id UUID REFERENCES class_sections(id) ON DELETE SET NULL;
 
+            -- Ensure caste_category and custom_values exist on users table
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS caste_category VARCHAR(100);
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS custom_values JSONB DEFAULT '{}'::jsonb;
+            CREATE INDEX IF NOT EXISTS idx_users_caste_category ON users (school_id, caste_category);
+
+            -- Ensure user_custom_values table exists
+            CREATE TABLE IF NOT EXISTS user_custom_values (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+                user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                field_id UUID NOT NULL REFERENCES custom_fields(id) ON DELETE CASCADE,
+                value TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                UNIQUE(user_id, field_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_user_custom_values_user ON user_custom_values (user_id);
+            CREATE INDEX IF NOT EXISTS idx_user_custom_values_field ON user_custom_values (field_id);
+
+            -- Ensure report_sequences and issued_reports tables exist
+            CREATE TABLE IF NOT EXISTS report_sequences (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+                report_type VARCHAR(50) NOT NULL,
+                display_name VARCHAR(100) NOT NULL DEFAULT 'Transfer Certificate',
+                prefix VARCHAR(20) NOT NULL DEFAULT 'TC',
+                suffix VARCHAR(20) DEFAULT '',
+                current_number INT NOT NULL DEFAULT 0,
+                padding_length INT NOT NULL DEFAULT 4,
+                format_pattern VARCHAR(100) NOT NULL DEFAULT '{prefix}/{year}/{number}',
+                academic_year VARCHAR(20),
+                is_locked BOOLEAN NOT NULL DEFAULT false,
+                reset_annually BOOLEAN NOT NULL DEFAULT false,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                UNIQUE(school_id, report_type)
+            );
+            CREATE INDEX IF NOT EXISTS idx_report_sequences_school_type ON report_sequences(school_id, report_type);
+
+            CREATE TABLE IF NOT EXISTS issued_reports (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+                report_type VARCHAR(50) NOT NULL,
+                document_number VARCHAR(100) NOT NULL,
+                serial_number INT NOT NULL,
+                student_id UUID REFERENCES users(id) ON DELETE SET NULL,
+                student_name VARCHAR(255) NOT NULL,
+                admission_number VARCHAR(100),
+                class_section VARCHAR(100),
+                issued_by UUID REFERENCES users(id) ON DELETE SET NULL,
+                issuer_name VARCHAR(255),
+                issue_date DATE NOT NULL DEFAULT CURRENT_DATE,
+                academic_year VARCHAR(20),
+                status VARCHAR(30) NOT NULL DEFAULT 'ISSUED',
+                variables_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+                template_version INT,
+                remarks TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                UNIQUE(school_id, report_type, document_number)
+            );
+            CREATE INDEX IF NOT EXISTS idx_issued_reports_school_type ON issued_reports(school_id, report_type, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_issued_reports_student ON issued_reports(school_id, student_id);
+            CREATE INDEX IF NOT EXISTS idx_issued_reports_doc_no ON issued_reports(school_id, document_number);
+
+            -- Cancellation audit columns for issued_reports
+            ALTER TABLE issued_reports ADD COLUMN IF NOT EXISTS cancelled_by UUID REFERENCES users(id) ON DELETE SET NULL;
+            ALTER TABLE issued_reports ADD COLUMN IF NOT EXISTS cancelled_by_name VARCHAR(255);
+            ALTER TABLE issued_reports ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ;
+            ALTER TABLE issued_reports ADD COLUMN IF NOT EXISTS cancellation_reason TEXT;
+
+            -- Backfill existing CANCELLED reports
+            UPDATE issued_reports
+            SET cancelled_at = COALESCE(cancelled_at, updated_at),
+                cancelled_by_name = COALESCE(cancelled_by_name, issuer_name, 'System Administrator'),
+                cancellation_reason = COALESCE(cancellation_reason, remarks, 'Cancelled redundant duplicate issuance')
+            WHERE status = 'CANCELLED' AND (cancelled_at IS NULL OR cancellation_reason IS NULL);
+
             -- Ensure users status supports full student lifecycle status strings (including TC_ISSUED)
             ALTER TABLE users ALTER COLUMN status TYPE VARCHAR(50) USING status::TEXT;
             ALTER TABLE users ALTER COLUMN status SET DEFAULT 'ACTIVE';

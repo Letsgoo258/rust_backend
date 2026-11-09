@@ -114,7 +114,7 @@ pub async fn create_change_ticket(
     let ticket_number = format!(
         "TKT-{}-{}",
         Utc::now().format("%Y%m%d"),
-        &Uuid::new_v4().to_string()[..6].to_uppercase()
+        Uuid::new_v4().to_string()[..6].to_uppercase()
     );
 
     let ticket_id = Uuid::new_v4();
@@ -329,7 +329,7 @@ pub async fn resolve_school_ticket(
     sqlx::query(
         "UPDATE data_change_tickets SET status = $1, reviewer_user_id = $2, reviewer_notes = $3, updated_at = NOW() WHERE id = $4",
     )
-    .bind(&new_status)
+    .bind(new_status)
     .bind(reviewer_id)
     .bind(&clean_notes)
     .bind(ticket_id)

@@ -11,60 +11,60 @@ pub use handler::TimetableHandler;
 pub use repository::TimetableRepository;
 pub use service::TimetableService;
 
-/// Spawns the background worker that resets and syncs the daily timetable at 01:30 AM every morning.
+/// Spawns the background worker that resets and syncs the daily timetable for each school's local date.
 pub fn start_daily_timetable_worker(pool: sqlx::PgPool) {
     tokio::spawn(async move {
-        // Initial sync on boot for today's schedule
-        let today = chrono::Utc::now().date_naive();
-        match TimetableService::sync_daily_timetable_for_date(&pool, today).await {
-            Ok(count) => {
-                tracing::info!(
-                    date = %today,
-                    count = count,
-                    "Initial daily timetable sync completed on startup"
-                );
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "Initial daily timetable sync check warning");
+        // Initial sync on boot for schools' current local dates
+        let sync_dates: Vec<chrono::NaiveDate> = sqlx::query_scalar(
+            "SELECT DISTINCT (NOW() AT TIME ZONE COALESCE(timezone, 'Asia/Kolkata'))::date FROM schools",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap_or_else(|_| vec![chrono::Local::now().date_naive()]);
+
+        for sync_date in sync_dates {
+            match TimetableService::sync_daily_timetable_for_date(&pool, sync_date).await {
+                Ok(count) => {
+                    tracing::info!(
+                        date = %sync_date,
+                        count = count,
+                        "Initial daily timetable sync completed on startup"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Initial daily timetable sync check warning");
+                }
             }
         }
 
-        // Periodic loop calculating duration until next 01:30 AM
+        // Periodic maintenance loop: runs every 30 minutes to ensure current_day_timetable is populated
+        // and doesn't get missed if the machine sleeps or timezone boundaries change.
         loop {
-            let now = chrono::Local::now();
-            let target_time = chrono::NaiveTime::from_hms_opt(1, 30, 0).unwrap();
-            let target_date = if now.time() >= target_time {
-                now.date_naive() + chrono::Duration::days(1)
-            } else {
-                now.date_naive()
-            };
+            tokio::time::sleep(std::time::Duration::from_secs(1800)).await;
 
-            let target_dt = target_date.and_time(target_time);
-            let wait_duration = match target_dt.and_local_timezone(chrono::Local).single() {
-                Some(dt) => (dt - now)
-                    .to_std()
-                    .unwrap_or(std::time::Duration::from_secs(3600)),
-                None => std::time::Duration::from_secs(3600),
-            };
+            let current_dates: Vec<chrono::NaiveDate> = sqlx::query_scalar(
+                "SELECT DISTINCT (NOW() AT TIME ZONE COALESCE(timezone, 'Asia/Kolkata'))::date FROM schools",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap_or_else(|_| vec![chrono::Local::now().date_naive()]);
 
-            tokio::time::sleep(wait_duration).await;
+            for sync_date in current_dates {
+                let count: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM current_day_timetable WHERE date = $1",
+                )
+                .bind(sync_date)
+                .fetch_one(&pool)
+                .await
+                .unwrap_or(0);
 
-            let sync_date = chrono::Utc::now().date_naive();
-            tracing::info!(
-                date = %sync_date,
-                "Executing scheduled morning 01:30 AM daily timetable reset & synchronization..."
-            );
-            match TimetableService::sync_daily_timetable_for_date(&pool, sync_date).await {
-                Ok(c) => tracing::info!(
-                    date = %sync_date,
-                    count = c,
-                    "Morning 01:30 AM timetable reset completed successfully"
-                ),
-                Err(e) => tracing::error!(
-                    date = %sync_date,
-                    error = %e,
-                    "Morning 01:30 AM timetable reset encountered error"
-                ),
+                if count == 0 {
+                    tracing::info!(
+                        date = %sync_date,
+                        "Daily timetable empty for date, automatically synchronizing..."
+                    );
+                    let _ = TimetableService::sync_daily_timetable_for_date(&pool, sync_date).await;
+                }
             }
         }
     });

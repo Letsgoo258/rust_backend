@@ -277,7 +277,7 @@ pub async fn cleanup_fifteen_days(
 
     let metrics = CronRepository::cleanup_15_day_records(&state.db)
         .await
-        .map_err(|e| AppError::Database(e))?;
+        .map_err(AppError::Database)?;
 
     Ok(Json(serde_json::json!({
         "status": "SUCCESS",

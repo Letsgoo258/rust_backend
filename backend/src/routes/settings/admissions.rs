@@ -37,10 +37,12 @@ pub struct AcademicYearOption {
 }
 
 pub fn router() -> Router<AppState> {
-    Router::new().route(
-        "/",
-        get(get_admission_settings).post(save_admission_settings),
-    )
+    Router::new()
+        .route(
+            "/",
+            get(get_admission_settings).post(save_admission_settings),
+        )
+        .route("/next-number", get(get_next_admission_number_preview))
 }
 
 /// GET /api/v1/settings/admissions
@@ -176,11 +178,39 @@ pub async fn get_admission_settings(
         _ => true,
     };
 
+    let mut conn = state.db.acquire().await?;
+    let seq_preview =
+        crate::modules::admissions::seq::get_admission_sequence_preview(&mut conn, user.school_id)
+            .await
+            .ok();
+
     Ok(Json(json!({
         "success": true,
         "settings": config,
         "is_window_open": is_in_date,
-        "academic_years": academic_years
+        "academic_years": academic_years,
+        "sequence_preview": seq_preview
+    })))
+}
+
+/// GET /api/v1/settings/admissions/next-number
+/// Live preview of next admission number and pattern for the authenticated school
+pub async fn get_next_admission_number_preview(
+    auth_session: AuthSession,
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, AppError> {
+    let user = auth_session
+        .user
+        .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+    let mut conn = state.db.acquire().await?;
+    let preview =
+        crate::modules::admissions::seq::get_admission_sequence_preview(&mut conn, user.school_id)
+            .await?;
+
+    Ok(Json(json!({
+        "success": true,
+        "preview": preview
     })))
 }
 
@@ -228,11 +258,18 @@ pub async fn save_admission_settings(
         "Updated school admission settings"
     );
 
+    let mut conn = state.db.acquire().await?;
+    let updated_preview =
+        crate::modules::admissions::seq::get_admission_sequence_preview(&mut conn, user.school_id)
+            .await
+            .ok();
+
     Ok((
         StatusCode::OK,
         Json(json!({
             "success": true,
-            "message": "Admission settings saved successfully"
+            "message": "Admission settings saved successfully",
+            "preview": updated_preview
         })),
     ))
 }

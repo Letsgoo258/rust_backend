@@ -649,13 +649,31 @@ impl NavigationConfig {
             .any(|r| r.eq_ignore_ascii_case("CLASS_TEACHER"))
             || user.is_class_teacher;
 
+        let is_teacher_user = user.roles.iter().any(|r| {
+            r.eq_ignore_ascii_case("TEACHER")
+                || r.eq_ignore_ascii_case("CLASS_TEACHER")
+                || r.eq_ignore_ascii_case("PT_TEACHER")
+                || r.eq_ignore_ascii_case("PT TEACHER")
+                || r.eq_ignore_ascii_case("SUBJECT_TEACHER")
+        }) || user.is_class_teacher;
+
         let show_my_class =
             is_class_teacher_user || (is_school_admin && user.has_assigned_class_teacher);
 
         let mut filtered_top_nav: Vec<NavigationItem> = master
             .top_nav
             .into_iter()
-            .filter(|item| can_access(&item.capability))
+            .filter(|item| {
+                // Class teachers and teachers should not see the Users tab in the top nav
+                if !is_school_admin
+                    && !is_super_admin
+                    && is_teacher_user
+                    && item.path == "/dashboard/users"
+                {
+                    return false;
+                }
+                can_access(&item.capability)
+            })
             .collect();
 
         if show_my_class {

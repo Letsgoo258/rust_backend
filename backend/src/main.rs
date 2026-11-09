@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 mod config;
 mod db;
 mod error;
@@ -125,6 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Build our application with organized modular routes
     let app = routes::app_router()
+        .layer(axum::extract::DefaultBodyLimit::max(25 * 1024 * 1024))
         .layer(axum::middleware::from_fn(
             middleware::auth::enforce_tenant_isolation_middleware,
         ))

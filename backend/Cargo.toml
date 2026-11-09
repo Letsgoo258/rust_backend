@@ -38,6 +38,7 @@ sysinfo = "0.39.6"
 dashmap = "6.1"
 hmac = "0.12"
 sha2 = "0.10"
+sha1 = "0.10"
 hex = "0.4"
 serde_urlencoded = "0.7"
 anyhow = "1.0"
@@ -67,3 +68,8 @@ path = "src/bin/inspect_wa.rs"
 [[bin]]
 name = "reset_test_pass"
 path = "src/bin/reset_test_pass.rs"
+
+[lints.clippy]
+too_many_arguments = "allow"
+enum_variant_names = "allow"
+upper_case_acronyms = "allow"

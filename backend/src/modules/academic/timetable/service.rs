@@ -541,7 +541,7 @@ impl TimetableService {
                     let ticket_number = format!(
                         "TKT-DEADLOCK-{}-{}",
                         date.format("%Y%m%d"),
-                        &Uuid::new_v4().to_string()[..6].to_uppercase()
+                        Uuid::new_v4().to_string()[..6].to_uppercase()
                     );
                     let _ = TimetableRepository::insert_deadlock_ticket(
                         pool,

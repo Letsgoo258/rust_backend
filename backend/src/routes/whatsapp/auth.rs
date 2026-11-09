@@ -337,7 +337,7 @@ pub async fn complete_verification(
 
         // Assign role in user_roles table
         let mut conn = state.db.acquire().await?;
-        assign_user_role(&mut *conn, school_id, user_id, chosen_role).await?;
+        assign_user_role(&mut conn, school_id, user_id, chosen_role).await?;
 
         (user_id, school_id, chosen_role.to_string(), display_name)
     };
@@ -347,7 +347,7 @@ pub async fn complete_verification(
         &state.db,
         school_id,
         Some(user_id),
-        &[primary_role.clone()],
+        std::slice::from_ref(&primary_role),
     )
     .await;
 

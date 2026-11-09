@@ -24,5 +24,9 @@ pub fn app_router() -> Router<AppState> {
         .nest("/api/v1/telemetry", telemetry::router())
         .nest("/api/v1/cron", cron::router())
         .nest("/api/v1/settings", settings::router())
+        .nest(
+            "/api/v1/transfer-certificates",
+            crate::modules::transfer_certificate::router(),
+        )
         .nest("/api/v1/whatsapp", whatsapp::router())
 }

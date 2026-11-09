@@ -148,15 +148,8 @@ impl AdmissionRepository {
             applicant_first_name.to_lowercase(),
             admission_id.to_string().chars().take(5).collect::<String>()
         );
-        let admission_number = format!(
-            "ADM-{}",
-            admission_id
-                .to_string()
-                .chars()
-                .take(8)
-                .collect::<String>()
-                .to_uppercase()
-        );
+        let admission_number =
+            super::seq::generate_next_admission_number(&mut *conn, school_id).await?;
 
         let s_user_id: Uuid = sqlx::query_scalar(
             r#"INSERT INTO users (school_id, first_name, last_name, username, password_hash, status, imported_via_csv, updated_by_user_id, admission_number, date_of_birth, updated_at)
@@ -266,7 +259,7 @@ impl AdmissionRepository {
         .await?;
 
         sqlx::query(
-            "UPDATE admissions SET status = 'ENROLLED', application_number = $1, approved_at = now(), approved_by = $2, updated_at = now() WHERE id = $3",
+            "UPDATE admissions SET status = 'ENROLLED', application_number = COALESCE(application_number, $1), approved_at = now(), approved_by = $2, updated_at = now() WHERE id = $3",
         )
         .bind(&admission_number)
         .bind(user_id)

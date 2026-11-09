@@ -140,7 +140,7 @@ impl EditHistoryService {
         .bind(school_id)
         .bind(entity_type)
         .bind(entity_id)
-        .bind(limit.max(1).min(100))
+        .bind(limit.clamp(1, 100))
         .fetch_all(pool)
         .await?;
 
@@ -198,7 +198,7 @@ impl EditHistoryService {
             "#,
         )
         .bind(school_id)
-        .bind(limit.max(1).min(200))
+        .bind(limit.clamp(1, 200))
         .fetch_all(pool)
         .await?;
 

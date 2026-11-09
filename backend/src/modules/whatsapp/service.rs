@@ -296,8 +296,8 @@ impl WhatsAppMessageService {
 
         // 1. Check for admission inquiries (publicly accessible to prospective parents/students without prior ERP login)
         if menus::admissions::is_admission_intent(trimmed) {
-            info!(sender = %sender_jid, "Handling admission inquiry from WhatsApp user");
-            return menus::admissions::handle_admission_inquiry(pool).await;
+            info!(sender = %sender_jid, phone = %phone, "Handling admission inquiry from WhatsApp user");
+            return menus::admissions::handle_admission_inquiry(pool, &phone, sender_jid).await;
         }
 
         // 2. Check if the incoming message is a link token from ERAVAYA ERP (e.g. "ERA-123456")
@@ -336,7 +336,7 @@ impl WhatsAppMessageService {
                     pool,
                     link_token.school_id,
                     Some(link_token.user_id),
-                    &[link_token.role_code.clone()],
+                    std::slice::from_ref(&link_token.role_code),
                 )
                 .await;
 
@@ -811,5 +811,55 @@ mod tests {
         assert!(teacher.has_capability("attendance:view"));
         assert!(!teacher.has_capability("attendance:bulk_edit"));
         assert!(!teacher.has_capability("attendance:delete"));
+    }
+
+    #[test]
+    fn test_automated_bot_message_detection() {
+        assert!(WhatsAppMessageService::is_automated_or_bot_message(
+            "*Due to inactivity, your WhatsApp Banking session has timed out.* To continue banking, simply send *\"Hi\".*"
+        ));
+        assert!(WhatsAppMessageService::is_automated_or_bot_message(
+            "Account Balance & Mini Statement"
+        ));
+        assert!(WhatsAppMessageService::is_automated_or_bot_message(
+            "Your OTP is 492011 for WhatsApp verification. Do not reply to this message."
+        ));
+        assert!(WhatsAppMessageService::is_automated_or_bot_message(
+            "Please use this one time password to verify your account"
+        ));
+        assert!(WhatsAppMessageService::is_automated_or_bot_message(
+            "Fastag recharge successful. Positive pay reference: 88123"
+        ));
+
+        // Genuine school queries must NOT be classified as automated bot messages
+        assert!(!WhatsAppMessageService::is_automated_or_bot_message("hi"));
+        assert!(!WhatsAppMessageService::is_automated_or_bot_message("help"));
+        assert!(!WhatsAppMessageService::is_automated_or_bot_message(
+            "attendance report"
+        ));
+        assert!(!WhatsAppMessageService::is_automated_or_bot_message(
+            "what is my fee due?"
+        ));
+        assert!(!WhatsAppMessageService::is_automated_or_bot_message(
+            "timetable for class 10"
+        ));
+        assert!(!WhatsAppMessageService::is_automated_or_bot_message(
+            "when are final exams scheduled?"
+        ));
+    }
+
+    #[test]
+    fn test_invitation_cooldown_cache() {
+        let test_jid = "test_cooldown_user@s.whatsapp.net";
+        WhatsAppMessageService::clear_invitation_cooldown(test_jid);
+
+        let cache = get_invitation_cache();
+        assert!(cache.get(test_jid).is_none());
+
+        cache.insert(test_jid.to_string(), Utc::now());
+        assert!(cache.get(test_jid).is_some());
+
+        WhatsAppMessageService::clear_invitation_cooldown(test_jid);
+        assert!(cache.get(test_jid).is_none());
     }
 }

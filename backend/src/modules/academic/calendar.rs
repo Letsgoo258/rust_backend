@@ -52,6 +52,7 @@ pub struct CalendarHolidayCheckResult {
     pub affected_class_names: Vec<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct ListCalendarQuery {
     pub start_date: Option<String>,
@@ -77,9 +78,10 @@ impl CalendarRepository {
         school_id: Uuid,
         start_date: Option<NaiveDate>,
         end_date: Option<NaiveDate>,
+        class_id: Option<Uuid>,
     ) -> Result<Vec<CalendarEntryItem>, AppError> {
         // 1. Fetch class lookup map for naming
-        let class_rows = sqlx::query("SELECT id, name FROM classes WHERE school_id = ")
+        let class_rows = sqlx::query("SELECT id, name FROM classes WHERE school_id = $1")
             .bind(school_id)
             .fetch_all(pool)
             .await?;
@@ -105,15 +107,17 @@ impl CalendarRepository {
                 class_ids,
                 created_at
             FROM academic_calendar
-            WHERE school_id = 
-              AND (::date IS NULL OR date >= )
-              AND (::date IS NULL OR date <= )
+            WHERE school_id = $1
+              AND ($2::date IS NULL OR date >= $2)
+              AND ($3::date IS NULL OR date <= $3)
+              AND ($4::uuid IS NULL OR applies_to_all_classes = true OR (class_ids IS NOT NULL AND class_ids @> ARRAY[$4]))
             ORDER BY date ASC, created_at ASC
             "#,
         )
         .bind(school_id)
         .bind(start_date)
         .bind(end_date)
+        .bind(class_id)
         .fetch_all(pool)
         .await?;
 
@@ -160,13 +164,13 @@ impl CalendarRepository {
 
         // Determine active academic year
         let year_id: Uuid = sqlx::query_scalar(
-            "SELECT id FROM academic_years WHERE school_id =  AND status = 'ACTIVE' LIMIT 1",
+            "SELECT id FROM academic_years WHERE school_id = $1 AND status = 'ACTIVE' LIMIT 1",
         )
         .bind(school_id)
         .fetch_optional(pool)
         .await?
         .or(sqlx::query_scalar(
-            "SELECT id FROM academic_years WHERE school_id =  ORDER BY start_date DESC LIMIT 1",
+            "SELECT id FROM academic_years WHERE school_id = $1 ORDER BY start_date DESC LIMIT 1",
         )
         .bind(school_id)
         .fetch_optional(pool)
@@ -212,8 +216,8 @@ impl CalendarRepository {
                     is_working_day, applies_to_all_classes, class_ids, created_by,
                     created_at, updated_at
                 ) VALUES (
-                    , , , , , ,
-                    , , , ,
+                    $1, $2, $3, $4, $5, $6,
+                    $7, $8, $9, $10,
                     NOW(), NOW()
                 )
                 RETURNING id
@@ -248,7 +252,7 @@ impl CalendarRepository {
         school_id: Uuid,
         entry_id: Uuid,
     ) -> Result<(), AppError> {
-        let res = sqlx::query("DELETE FROM academic_calendar WHERE id =  AND school_id = ")
+        let res = sqlx::query("DELETE FROM academic_calendar WHERE id = $1 AND school_id = $2")
             .bind(entry_id)
             .bind(school_id)
             .execute(pool)
@@ -273,13 +277,15 @@ impl CalendarRepository {
         let resolved_class_id = if let Some(cid) = target_class_id {
             Some(cid)
         } else if let Some(cs_id) = target_class_section_id {
-            sqlx::query_scalar("SELECT class_id FROM class_sections WHERE id =  AND school_id = ")
-                .bind(cs_id)
-                .bind(school_id)
-                .fetch_optional(pool)
-                .await
-                .ok()
-                .flatten()
+            sqlx::query_scalar(
+                "SELECT class_id FROM class_sections WHERE id = $1 AND school_id = $2",
+            )
+            .bind(cs_id)
+            .bind(school_id)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten()
         } else {
             None
         };
@@ -296,7 +302,7 @@ impl CalendarRepository {
                 applies_to_all_classes,
                 class_ids
             FROM academic_calendar
-            WHERE school_id =  AND date = 
+            WHERE school_id = $1 AND date = $2
             ORDER BY is_working_day DESC, applies_to_all_classes DESC
             "#,
         )
@@ -335,7 +341,7 @@ impl CalendarRepository {
         }
 
         // 2. Fetch class names if needed
-        let class_rows = sqlx::query("SELECT id, name FROM classes WHERE school_id = ")
+        let class_rows = sqlx::query("SELECT id, name FROM classes WHERE school_id = $1")
             .bind(school_id)
             .fetch_all(pool)
             .await?;
@@ -426,18 +432,40 @@ impl CalendarHandler {
             .user
             .ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
 
+        let (computed_start, computed_end) = match (q.year, q.month) {
+            (Some(y), Some(m)) => {
+                let start = NaiveDate::from_ymd_opt(y, m, 1);
+                let next_month = if m == 12 { (y + 1, 1) } else { (y, m + 1) };
+                let end = NaiveDate::from_ymd_opt(next_month.0, next_month.1, 1)
+                    .map(|d| d - chrono::Duration::days(1));
+                (start, end)
+            }
+            (Some(y), None) => (
+                NaiveDate::from_ymd_opt(y, 1, 1),
+                NaiveDate::from_ymd_opt(y, 12, 31),
+            ),
+            _ => (None, None),
+        };
+
         let start_date = q
             .start_date
             .as_deref()
-            .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
+            .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
+            .or(computed_start);
         let end_date = q
             .end_date
             .as_deref()
-            .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
+            .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
+            .or(computed_end);
 
-        let entries =
-            CalendarRepository::list_entries(&state.db, user.school_id, start_date, end_date)
-                .await?;
+        let entries = CalendarRepository::list_entries(
+            &state.db,
+            user.school_id,
+            start_date,
+            end_date,
+            q.class_id,
+        )
+        .await?;
 
         Ok(Json(serde_json::json!({
             "success": true,

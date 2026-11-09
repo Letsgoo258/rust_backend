@@ -20,6 +20,8 @@ pub struct UpdateUserProfileRequest {
     pub gender: Option<String>,
     pub blood_group: Option<String>,
     pub status: Option<String>,
+    pub caste_category: Option<String>,
+    pub custom_fields: Option<HashMap<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -114,12 +116,12 @@ pub async fn update_user_profile(
             let eff_phone = payload.phone.as_deref().or(target_user.phone.as_deref());
             let eff_adm = target_user.admission_number.as_deref();
 
-            let has_name = eff_display_name.map_or(false, |s| !s.trim().is_empty())
-                || eff_first_name.map_or(false, |s| !s.trim().is_empty());
+            let has_name = eff_display_name.is_some_and(|s| !s.trim().is_empty())
+                || eff_first_name.is_some_and(|s| !s.trim().is_empty());
 
-            let has_contact_or_id = eff_email.map_or(false, |s| !s.trim().is_empty())
-                || eff_phone.map_or(false, |s| !s.trim().is_empty())
-                || eff_adm.map_or(false, |s| !s.trim().is_empty());
+            let has_contact_or_id = eff_email.is_some_and(|s| !s.trim().is_empty())
+                || eff_phone.is_some_and(|s| !s.trim().is_empty())
+                || eff_adm.is_some_and(|s| !s.trim().is_empty());
 
             if !has_name || !has_contact_or_id {
                 return Err(AppError::BadRequest(
@@ -212,6 +214,17 @@ pub async fn update_user_profile(
         .map(|s| s.to_string())
         .or(generated_display_name);
 
+    let clean_caste = payload
+        .caste_category
+        .as_deref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+
+    let custom_values_json = payload
+        .custom_fields
+        .as_ref()
+        .map(|cf| serde_json::to_value(cf).unwrap_or(serde_json::json!({})));
+
     // Update user in database
     sqlx::query(
         r#"UPDATE users
@@ -224,10 +237,15 @@ pub async fn update_user_profile(
                gender = COALESCE($6, gender),
                blood_group = COALESCE($7, blood_group),
                date_of_birth = COALESCE($8, date_of_birth),
-               status = $9,
+               caste_category = COALESCE($9, caste_category),
+               custom_values = CASE
+                   WHEN $10::jsonb IS NOT NULL THEN COALESCE(custom_values, '{}'::jsonb) || $10::jsonb
+                   ELSE custom_values
+               END,
+               status = $11,
                updated_at = NOW(),
-               updated_by_user_id = $10
-           WHERE id = $11"#,
+               updated_by_user_id = $12
+           WHERE id = $13"#,
     )
     .bind(final_first_name)
     .bind(final_last_name)
@@ -237,11 +255,37 @@ pub async fn update_user_profile(
     .bind(clean_gender)
     .bind(clean_blood_group)
     .bind(clean_dob)
+    .bind(clean_caste)
+    .bind(&custom_values_json)
     .bind(&final_status)
     .bind(auth_user.id)
     .bind(target_user_id)
     .execute(&state.db)
     .await?;
+
+    if let Some(ref cf_map) = payload.custom_fields {
+        for (f_key, f_val) in cf_map {
+            let val_str = match f_val {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Null => String::new(),
+                other => other.to_string(),
+            };
+            let _ = sqlx::query(
+                r#"INSERT INTO user_custom_values (school_id, user_id, field_id, value, updated_at)
+                   SELECT $1, $2, id, $3, NOW()
+                   FROM custom_fields
+                   WHERE school_id = $1 AND field_key = $4
+                   ON CONFLICT (user_id, field_id)
+                   DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()"#,
+            )
+            .bind(auth_user.school_id)
+            .bind(target_user_id)
+            .bind(&val_str)
+            .bind(f_key)
+            .execute(&state.db)
+            .await;
+        }
+    }
 
     crate::modules::auth::backend::invalidate_user_cache(&target_user_id);
 
@@ -254,6 +298,50 @@ pub async fn update_user_profile(
         .bind(target_user_id)
         .execute(&state.db)
         .await;
+    } else if target_user.status.to_uppercase() == "TC_ISSUED"
+        && matches!(
+            final_status.as_str(),
+            "ACTIVE" | "READMITTED" | "TC_CANCELLED"
+        )
+    {
+        // 1. Formally revoke/cancel any active Transfer Certificate in issued_reports
+        let cancel_reason = "Revoked upon student re-activation by Admin";
+        let canceller_name = auth_user
+            .display_name
+            .clone()
+            .unwrap_or_else(|| auth_user.username.clone());
+        let _ = sqlx::query(
+            r#"UPDATE issued_reports
+               SET status = 'CANCELLED',
+                   cancelled_by = $1,
+                   cancelled_by_name = $2,
+                   cancelled_at = NOW(),
+                   cancellation_reason = $3,
+                   remarks = COALESCE(remarks, '') || ' [' || $3 || ']',
+                   updated_at = NOW()
+               WHERE school_id = $4 AND student_id = $5 AND status = 'ISSUED'"#,
+        )
+        .bind(auth_user.id)
+        .bind(canceller_name)
+        .bind(cancel_reason)
+        .bind(auth_user.school_id)
+        .bind(target_user_id)
+        .execute(&state.db)
+        .await;
+
+        // 2. Reactivate active class enrollment for ACTIVE or READMITTED
+        if final_status == "ACTIVE" || final_status == "READMITTED" {
+            let _ = sqlx::query(
+                r#"UPDATE enrollments
+                   SET status = 'ACTIVE', updated_at = NOW()
+                   WHERE student_id = $1 AND id = (
+                       SELECT id FROM enrollments WHERE student_id = $1 ORDER BY updated_at DESC LIMIT 1
+                   )"#,
+            )
+            .bind(target_user_id)
+            .execute(&state.db)
+            .await;
+        }
     }
 
     let _ = crate::utils::audit::log_action(
@@ -312,6 +400,8 @@ pub async fn activate_user(
             gender: None,
             blood_group: None,
             status: Some("ACTIVE".to_string()),
+            caste_category: None,
+            custom_fields: None,
         }),
     )
     .await
@@ -361,6 +451,8 @@ pub struct BulkUpdateItemRequest {
     pub section_name: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_uuid")]
     pub class_section_id: Option<Uuid>,
+    pub caste_category: Option<String>,
+    pub custom_fields: Option<HashMap<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -684,6 +776,17 @@ pub async fn bulk_update_users(
             None
         };
 
+        let clean_caste = item
+            .caste_category
+            .as_deref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty());
+
+        let custom_values_json = item
+            .custom_fields
+            .as_ref()
+            .map(|cf| serde_json::to_value(cf).unwrap_or(serde_json::json!({})));
+
         let status_val: Option<String> = item
             .status
             .as_deref()
@@ -747,11 +850,13 @@ pub async fn bulk_update_users(
             sqlx::query(
                 r#"INSERT INTO users (
                     id, school_id, username, password_hash, first_name, last_name, display_name,
-                    email, phone, gender, blood_group, date_of_birth, admission_number, status,
+                    email, phone, gender, blood_group, date_of_birth, admission_number, caste_category,
+                    custom_values, status,
                     email_verified, phone_verified, imported_via_csv, created_at, updated_at
                 ) VALUES (
                     $1, $2, $3, 'LOCKED_USER', $4, $5, $6,
-                    $7, $8, $9, $10, $11, $12, COALESCE($13, 'ACTIVE'),
+                    $7, $8, $9, $10, $11, $12, $13,
+                    COALESCE($14, '{}'::jsonb), COALESCE($15, 'ACTIVE'),
                     false, false, false, NOW(), NOW()
                 )"#,
             )
@@ -767,6 +872,8 @@ pub async fn bulk_update_users(
             .bind(clean_blood_group)
             .bind(clean_dob)
             .bind(clean_adm)
+            .bind(clean_caste)
+            .bind(&custom_values_json)
             .bind(&status_val)
             .execute(&mut *tx)
             .await?;
@@ -775,7 +882,7 @@ pub async fn bulk_update_users(
                 Some(rid) => rid,
                 None => {
                     let rid = crate::utils::roles::get_or_create_role_id(
-                        &mut *tx,
+                        &mut tx,
                         auth_user.school_id,
                         "STUDENT",
                         "Student",
@@ -922,9 +1029,14 @@ pub async fn bulk_update_users(
                        admission_number = COALESCE($9, admission_number),
                        status = COALESCE($10, status),
                        class_section_id = COALESCE($11, class_section_id),
+                       caste_category = COALESCE($12, caste_category),
+                       custom_values = CASE
+                           WHEN $13::jsonb IS NOT NULL THEN COALESCE(custom_values, '{}'::jsonb) || $13::jsonb
+                           ELSE custom_values
+                       END,
                        updated_at = NOW(),
-                       updated_by_user_id = $12
-                   WHERE id = $13"#,
+                       updated_by_user_id = $14
+                   WHERE id = $15"#,
             )
             .bind(final_first_name)
             .bind(final_last_name)
@@ -937,6 +1049,8 @@ pub async fn bulk_update_users(
             .bind(clean_adm)
             .bind(&status_val)
             .bind(target_cs_id)
+            .bind(clean_caste)
+            .bind(&custom_values_json)
             .bind(auth_user.id)
             .bind(target_id)
             .execute(&mut *tx)
@@ -947,6 +1061,30 @@ pub async fn bulk_update_users(
                 .bind(target_id)
                 .execute(&mut *tx)
                 .await?;
+        }
+
+        if let Some(ref cf_map) = item.custom_fields {
+            for (f_key, f_val) in cf_map {
+                let val_str = match f_val {
+                    serde_json::Value::String(s) => s.clone(),
+                    serde_json::Value::Null => String::new(),
+                    other => other.to_string(),
+                };
+                let _ = sqlx::query(
+                    r#"INSERT INTO user_custom_values (school_id, user_id, field_id, value, updated_at)
+                       SELECT $1, $2, id, $3, NOW()
+                       FROM custom_fields
+                       WHERE school_id = $1 AND field_key = $4
+                       ON CONFLICT (user_id, field_id)
+                       DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()"#,
+                )
+                .bind(auth_user.school_id)
+                .bind(target_id)
+                .bind(&val_str)
+                .bind(f_key)
+                .execute(&mut *tx)
+                .await;
+            }
         }
 
         // If status marked as TC_ISSUED, deactivate their active enrollment
@@ -1058,108 +1196,17 @@ pub async fn bulk_update_users(
     ))
 }
 
-#[derive(Debug, Deserialize)]
-pub struct IssueTransferCertificatesRequest {
-    pub user_ids: Vec<Uuid>,
-    pub reason: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct IssueTransferCertificatesResponse {
-    pub success: bool,
-    pub issued_count: usize,
-    pub message: String,
-}
+#[allow(unused_imports)]
+pub use crate::modules::transfer_certificate::dto::{
+    IssueTransferCertificatesRequest, IssueTransferCertificatesResponse,
+};
+use crate::modules::transfer_certificate::TransferCertificateHandler;
 
 /// Controller: Marks students as TC_ISSUED and deactivates their active enrollment.
 pub async fn issue_transfer_certificates(
     auth_session: AuthSession,
-    State(state): State<AppState>,
-    Json(payload): Json<IssueTransferCertificatesRequest>,
+    state: State<AppState>,
+    payload: Json<IssueTransferCertificatesRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    let auth_user = auth_session
-        .user
-        .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
-
-    let is_admin = auth_user.is_school_admin()
-        || auth_user
-            .roles
-            .iter()
-            .any(|r| r.eq_ignore_ascii_case("SUPER_ADMIN"));
-
-    if !is_admin {
-        return Err(AppError::Forbidden(
-            "Only administrators can issue Transfer Certificates".into(),
-        ));
-    }
-
-    if payload.user_ids.is_empty() {
-        return Err(AppError::BadRequest(
-            "No user IDs provided for TC issuance".into(),
-        ));
-    }
-
-    let is_super_admin = auth_user.roles.contains(&"SUPER_ADMIN".to_string());
-    let mut tx = state.db.begin().await?;
-    let mut issued_count = 0;
-
-    for user_id in &payload.user_ids {
-        let result = sqlx::query(
-            r#"UPDATE users
-               SET status = 'TC_ISSUED',
-                   updated_at = NOW(),
-                   updated_by_user_id = $1
-               WHERE id = $2 AND (school_id = $3 OR $4)"#,
-        )
-        .bind(auth_user.id)
-        .bind(user_id)
-        .bind(auth_user.school_id)
-        .bind(is_super_admin)
-        .execute(&mut *tx)
-        .await?;
-
-        if result.rows_affected() > 0 {
-            // Deactivate active enrollment for student
-            let _ = sqlx::query(
-                r#"UPDATE enrollments
-                   SET status = 'INACTIVE', updated_at = NOW()
-                   WHERE student_id = $1 AND status = 'ACTIVE'"#,
-            )
-            .bind(user_id)
-            .execute(&mut *tx)
-            .await;
-
-            issued_count += 1;
-        }
-    }
-
-    tx.commit().await?;
-
-    let _ = crate::utils::audit::log_action(
-        &state.db,
-        Some(auth_user.school_id),
-        Some(auth_user.id),
-        "ISSUE_TRANSFER_CERTIFICATES",
-        Some("USERS"),
-        None,
-        Some(serde_json::json!({
-            "count": issued_count,
-            "user_ids": payload.user_ids,
-            "reason": payload.reason
-        })),
-        None,
-    )
-    .await;
-
-    Ok((
-        StatusCode::OK,
-        Json(IssueTransferCertificatesResponse {
-            success: true,
-            issued_count,
-            message: format!(
-                "Successfully issued Transfer Certificate(s) for {} student(s)",
-                issued_count
-            ),
-        }),
-    ))
+    TransferCertificateHandler::issue_transfer_certificates(auth_session, state, payload).await
 }

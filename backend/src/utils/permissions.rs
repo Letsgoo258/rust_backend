@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![allow(clippy::enum_variant_names)]
 
 //! ============================================================================
 //! ERAYA RBAC & GRANULAR PERMISSIONS SYSTEM
@@ -14,6 +15,7 @@
 //!   domain-level permissions, serializable to SCREAMING_SNAKE_CASE strings.
 //! - **`PermissionController`**: High-performance role-to-permission evaluation engine
 //!   providing synchronous checks (`can`, `can_any`, `can_all`) based on the caller's roles.
+//!
 //! ============================================================================
 
 use crate::modules::auth::backend::User;

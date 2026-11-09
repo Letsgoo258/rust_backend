@@ -69,7 +69,6 @@ async fn test_live_database_connection() {
             match ping_result {
                 Ok(_) => {
                     println!("Successfully connected and pinged the live database!");
-                    assert!(true);
                 }
                 Err(e) => {
                     let err_msg = format!("Failed to execute ping query: {}", e);

@@ -5,5 +5,6 @@ pub mod auth;
 pub mod cron;
 pub mod notifications;
 pub mod telemetry;
+pub mod transfer_certificate;
 pub mod users;
 pub mod whatsapp;

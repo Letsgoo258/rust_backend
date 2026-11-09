@@ -69,6 +69,10 @@ path = "src/bin/inspect_wa.rs"
 name = "reset_test_pass"
 path = "src/bin/reset_test_pass.rs"
 
+[[bin]]
+name = "migrate_branding_to_imagekit"
+path = "src/bin/migrate_branding_to_imagekit.rs"
+
 [lints.clippy]
 too_many_arguments = "allow"
 enum_variant_names = "allow"

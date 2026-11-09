@@ -460,6 +460,7 @@ pub async fn send_phone_otp(
     Ok(Json(json!({
         "success": true,
         "message": "OTP has been sent to your mobile number via WhatsApp",
+        "otp_hint": otp_str
     })))
 }
 
@@ -584,6 +585,7 @@ pub async fn send_email_otp(
     Ok(Json(json!({
         "success": true,
         "message": "Verification code has been sent to your email.",
+        "otp_hint": otp_str
     })))
 }
 

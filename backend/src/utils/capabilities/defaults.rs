@@ -68,7 +68,6 @@ pub fn default_enabled_keys(role_code: &str) -> HashSet<&'static str> {
         "CLASS_TEACHER" => {
             set.insert("users:view_directory");
             set.insert("users:export");
-            set.insert("certificate:issue_tc");
             set.insert("academics:view");
             set.insert("academics:assign_students");
             set.insert("exams:enter_marks");
@@ -84,7 +83,6 @@ pub fn default_enabled_keys(role_code: &str) -> HashSet<&'static str> {
         "TEACHER" | "PT_TEACHER" | "PT TEACHER" => {
             set.insert("users:view_directory");
             set.insert("users:export");
-            set.insert("certificate:issue_tc");
             set.insert("academics:view");
             set.insert("exams:enter_marks");
             set.insert("attendance:view");

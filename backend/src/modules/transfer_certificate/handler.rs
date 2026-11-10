@@ -370,15 +370,16 @@ impl TransferCertificateHandler {
             .user
             .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
 
-        let is_admin = auth_user.is_school_admin()
+        let is_authorized = auth_user.is_school_admin()
             || auth_user
                 .roles
                 .iter()
-                .any(|r| r.eq_ignore_ascii_case("SUPER_ADMIN"));
+                .any(|r| r.eq_ignore_ascii_case("SUPER_ADMIN"))
+            || auth_user.has_capability("certificate:issue_tc");
 
-        if !is_admin {
+        if !is_authorized {
             return Err(AppError::Forbidden(
-                "Only administrators can issue Transfer Certificates".into(),
+                "Permission denied: certificate:issue_tc capability required to issue Transfer Certificates".into(),
             ));
         }
 
@@ -392,6 +393,10 @@ impl TransferCertificateHandler {
             payload,
         )
         .await?;
+
+        crate::modules::users::repository::UserRepository::invalidate_users_cache(Some(
+            auth_user.school_id,
+        ));
 
         Ok((StatusCode::OK, Json(res)))
     }

@@ -364,6 +364,10 @@ pub async fn update_user_profile(
     )
     .await;
 
+    crate::modules::users::repository::UserRepository::invalidate_users_cache(Some(
+        auth_user.school_id,
+    ));
+
     Ok((
         StatusCode::OK,
         Json(UpdateUserProfileResponse {
@@ -1185,6 +1189,10 @@ pub async fn bulk_update_users(
         None,
     )
     .await;
+
+    crate::modules::users::repository::UserRepository::invalidate_users_cache(Some(
+        auth_user.school_id,
+    ));
 
     Ok((
         StatusCode::OK,

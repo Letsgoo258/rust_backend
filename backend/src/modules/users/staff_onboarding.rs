@@ -605,6 +605,8 @@ pub async fn single_add_staff(
     .await?;
     tx_guard.commit().await?;
 
+    crate::modules::users::repository::UserRepository::invalidate_users_cache(Some(user.school_id));
+
     crate::utils::audit::log_action(
         &state.db,
         Some(user.school_id),

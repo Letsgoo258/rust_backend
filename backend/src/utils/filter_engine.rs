@@ -232,6 +232,8 @@ impl FilterEngine {
                 || key == "search"
                 || key == "class_section_id"
                 || key == "limit"
+                || key == "student_ids"
+                || key == "user_ids"
             {
                 sanitized.insert(key.clone(), trimmed.to_string());
             }

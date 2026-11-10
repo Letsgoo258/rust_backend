@@ -1,8 +1,20 @@
 use crate::error::AppError;
+use dashmap::DashMap;
 use sqlx::{PgPool, QueryBuilder, Row};
+use std::sync::LazyLock;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Clone)]
+struct CachedUsersList {
+    users: Vec<UserListItem>,
+    total_count: i64,
+    cached_at: Instant,
+}
+
+static USERS_LIST_CACHE: LazyLock<DashMap<String, CachedUsersList>> = LazyLock::new(DashMap::new);
+
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct UserListItem {
     pub id: Uuid,
     pub username: String,
@@ -108,6 +120,7 @@ impl UserRepository {
         admission_number: &str,
         class_name: &str,
         search: &str,
+        student_ids: &str,
         class_section_id: Option<Uuid>,
         requester_teacher_user_id: Option<Uuid>,
     ) {
@@ -239,6 +252,18 @@ impl UserRepository {
             qb.push_bind(pat);
             qb.push("))");
         }
+
+        if !student_ids.is_empty() {
+            let uids: Vec<Uuid> = student_ids
+                .split(',')
+                .filter_map(|s| Uuid::parse_str(s.trim()).ok())
+                .collect();
+            if !uids.is_empty() {
+                qb.push(" AND u.id = ANY(");
+                qb.push_bind(uids);
+                qb.push(")");
+            }
+        }
     }
 
     pub async fn list_users(
@@ -257,6 +282,11 @@ impl UserRepository {
             .unwrap_or("");
         let class_name = filters.get("class_name").map(|s| s.trim()).unwrap_or("");
         let search = filters.get("search").map(|s| s.trim()).unwrap_or("");
+        let student_ids = filters
+            .get("student_ids")
+            .or_else(|| filters.get("user_ids"))
+            .map(|s| s.trim())
+            .unwrap_or("");
         let class_section_id = filters
             .get("class_section_id")
             .and_then(|s| Uuid::parse_str(s.trim()).ok());
@@ -264,6 +294,23 @@ impl UserRepository {
             .get("limit")
             .and_then(|s| s.parse::<i64>().ok())
             .unwrap_or(300);
+
+        // Fast In-Memory Cache Lookup (5-Second TTL)
+        let cache_key = format!(
+            "{}:{}:{:?}:{}",
+            school_id,
+            limit,
+            filters,
+            requester_teacher_user_id
+                .map(|u| u.to_string())
+                .unwrap_or_default()
+        );
+
+        if let Some(entry) = USERS_LIST_CACHE.get(&cache_key) {
+            if entry.cached_at.elapsed() < Duration::from_secs(5) {
+                return Ok((entry.users.clone(), entry.total_count));
+            }
+        }
 
         let mut qb = QueryBuilder::<sqlx::Postgres>::new(
             "SELECT
@@ -291,9 +338,9 @@ impl UserRepository {
                 e.roll_number,
                 u.caste_category,
                 COALESCE(u.custom_values, '{}'::jsonb) as custom_fields,
-                TRIM(CONCAT(g.first_name, ' ', g.last_name)) as guardian_name,
-                g.phone as guardian_phone,
-                sg.relationship as guardian_relationship,
+                g.guardian_name,
+                g.guardian_phone,
+                g.guardian_relationship,
                 u.created_at::TEXT as created_at
             FROM users u
             LEFT JOIN enrollments e ON e.student_id = u.id AND e.status = 'ACTIVE'
@@ -301,20 +348,23 @@ impl UserRepository {
             LEFT JOIN classes c ON cs.class_id = c.id
             LEFT JOIN sections sec ON cs.section_id = sec.id
             LEFT JOIN staff st ON st.user_id = u.id
-            LEFT JOIN student_guardians sg ON sg.student_id = u.id
-            LEFT JOIN guardians g ON sg.guardian_id = g.id
-            LEFT JOIN (
-                SELECT ur2.user_id,
-                       COALESCE(array_agg(DISTINCT roles.code::TEXT) FILTER (WHERE roles.code IS NOT NULL), ARRAY[]::TEXT[]) as roles
-                FROM user_roles ur2
-                JOIN roles ON roles.id = ur2.role_id
-                WHERE ur2.user_id IN (SELECT id FROM users WHERE school_id = ",
-        );
-        qb.push_bind(school_id);
-        qb.push(
-            ")
-                GROUP BY ur2.user_id
-            ) r ON r.user_id = u.id
+            LEFT JOIN LATERAL (
+                SELECT
+                    TRIM(CONCAT(g2.first_name, ' ', g2.last_name)) as guardian_name,
+                    g2.phone as guardian_phone,
+                    sg2.relationship as guardian_relationship
+                FROM student_guardians sg2
+                JOIN guardians g2 ON sg2.guardian_id = g2.id
+                WHERE sg2.student_id = u.id
+                ORDER BY sg2.is_primary DESC, sg2.is_emergency_contact DESC
+                LIMIT 1
+            ) g ON true
+            LEFT JOIN LATERAL (
+                SELECT COALESCE(array_agg(DISTINCT ro.code::TEXT) FILTER (WHERE ro.code IS NOT NULL), ARRAY[]::TEXT[]) AS roles
+                FROM user_roles ur
+                JOIN roles ro ON ro.id = ur.role_id
+                WHERE ur.user_id = u.id
+            ) r ON true
             WHERE u.school_id = ",
         );
         qb.push_bind(school_id);
@@ -327,6 +377,7 @@ impl UserRepository {
             admission_number,
             class_name,
             search,
+            student_ids,
             class_section_id,
             requester_teacher_user_id,
         );
@@ -360,6 +411,7 @@ impl UserRepository {
                 admission_number,
                 class_name,
                 search,
+                student_ids,
                 class_section_id,
                 requester_teacher_user_id,
             );
@@ -367,7 +419,7 @@ impl UserRepository {
             count_row.get::<i64, _>(0)
         };
 
-        let list = rows
+        let list: Vec<UserListItem> = rows
             .into_iter()
             .map(|r| UserListItem {
                 id: r.get("id"),
@@ -397,7 +449,30 @@ impl UserRepository {
             })
             .collect();
 
+        // Populate Cache
+        if USERS_LIST_CACHE.len() > 500 {
+            USERS_LIST_CACHE.retain(|_, v| v.cached_at.elapsed() < Duration::from_secs(30));
+        }
+        USERS_LIST_CACHE.insert(
+            cache_key,
+            CachedUsersList {
+                users: list.clone(),
+                total_count,
+                cached_at: Instant::now(),
+            },
+        );
+
         Ok((list, total_count))
+    }
+
+    /// Invalidate users list cache for a specific school or globally
+    pub fn invalidate_users_cache(school_id: Option<Uuid>) {
+        if let Some(sid) = school_id {
+            let prefix = format!("{sid}:");
+            USERS_LIST_CACHE.retain(|k, _| !k.starts_with(&prefix));
+        } else {
+            USERS_LIST_CACHE.clear();
+        }
     }
 
     pub async fn get_existing_emails_and_phones(

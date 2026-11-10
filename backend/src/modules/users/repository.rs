@@ -233,14 +233,45 @@ impl UserRepository {
         }
 
         if !search.is_empty() {
-            let pat = format!("%{}%", search);
-            qb.push(" AND (u.username ILIKE ");
+            let clean_search = search.trim();
+            let pat = format!("%{}%", clean_search);
+            let prefix_pat = format!("{}%", clean_search);
+            let raw_alphanumeric: String = clean_search
+                .chars()
+                .filter(|c| c.is_alphanumeric())
+                .collect();
+            let alpha_pat =
+                if !raw_alphanumeric.is_empty() && raw_alphanumeric.len() != clean_search.len() {
+                    Some(format!("%{}%", raw_alphanumeric))
+                } else {
+                    None
+                };
+
+            qb.push(" AND (");
+
+            // --- LEVEL 1: EXACT MATCH & DIRECT PREFIX ---
+            qb.push("(u.first_name ILIKE ");
+            qb.push_bind(prefix_pat.clone());
+            qb.push(" OR u.last_name ILIKE ");
+            qb.push_bind(prefix_pat.clone());
+            qb.push(" OR (u.admission_number IS NOT NULL AND u.admission_number ILIKE ");
+            qb.push_bind(prefix_pat.clone());
+            qb.push(") OR u.username ILIKE ");
+            qb.push_bind(prefix_pat.clone());
+            qb.push(" OR u.display_name ILIKE ");
+            qb.push_bind(prefix_pat.clone());
+            qb.push(")");
+
+            // --- LEVEL 2: SUBSTRING & WORD BOUNDARY (\"SOMEWHERE IN BETWEEN\") ---
+            qb.push(" OR (u.first_name ILIKE ");
+            qb.push_bind(pat.clone());
+            qb.push(" OR u.last_name ILIKE ");
             qb.push_bind(pat.clone());
             qb.push(" OR u.display_name ILIKE ");
             qb.push_bind(pat.clone());
-            qb.push(" OR u.first_name ILIKE ");
+            qb.push(" OR (u.first_name || ' ' || u.last_name) ILIKE ");
             qb.push_bind(pat.clone());
-            qb.push(" OR u.last_name ILIKE ");
+            qb.push(" OR u.username ILIKE ");
             qb.push_bind(pat.clone());
             qb.push(" OR u.email ILIKE ");
             qb.push_bind(pat.clone());
@@ -248,9 +279,54 @@ impl UserRepository {
             qb.push_bind(pat.clone());
             qb.push(" OR (u.admission_number IS NOT NULL AND u.admission_number ILIKE ");
             qb.push_bind(pat.clone());
-            qb.push(") OR EXISTS (SELECT 1 FROM class_sections cs3 JOIN classes c3 ON cs3.class_id = c3.id WHERE (cs3.id = u.class_section_id OR EXISTS (SELECT 1 FROM enrollments e3 WHERE e3.student_id = u.id AND e3.status = 'ACTIVE' AND e3.class_section_id = cs3.id)) AND c3.name ILIKE ");
-            qb.push_bind(pat);
-            qb.push("))");
+            qb.push(")");
+
+            // Alphanumeric sanitized match (ignores hyphens and spaces in admission # or phone)
+            if let Some(ref a_pat) = alpha_pat {
+                qb.push(" OR REGEXP_REPLACE(COALESCE(u.admission_number, ''), '[^a-zA-Z0-9]', '', 'g') ILIKE ");
+                qb.push_bind(a_pat.clone());
+                qb.push(" OR REGEXP_REPLACE(COALESCE(u.phone, ''), '[^0-9]', '', 'g') ILIKE ");
+                qb.push_bind(a_pat.clone());
+            }
+
+            // Class name match
+            qb.push(" OR EXISTS (SELECT 1 FROM class_sections cs3 JOIN classes c3 ON cs3.class_id = c3.id WHERE (cs3.id = u.class_section_id OR EXISTS (SELECT 1 FROM enrollments e3 WHERE e3.student_id = u.id AND e3.status = 'ACTIVE' AND e3.class_section_id = cs3.id)) AND c3.name ILIKE ");
+            qb.push_bind(pat.clone());
+            qb.push(")");
+
+            // Guardian name match
+            qb.push(" OR EXISTS (SELECT 1 FROM student_guardians sg3 JOIN guardians g3 ON sg3.guardian_id = g3.id WHERE sg3.student_id = u.id AND (g3.first_name || ' ' || COALESCE(g3.last_name, '')) ILIKE ");
+            qb.push_bind(pat.clone());
+            qb.push(")");
+            qb.push(")");
+
+            // --- LEVEL 3: TYPO-TOLERANT, TRANSLITERATION & TRIGRAM SIMILARITY ---
+            if clean_search.len() >= 3 {
+                // Aspirated consonant phonetic normalization: dh<->d, sh<->s, th<->t, kh<->k, gh<->g, ph<->f
+                qb.push(" OR (");
+                qb.push("REGEXP_REPLACE(LOWER(COALESCE(u.first_name, '')), '([dtkspbg])h', '\\1', 'g') ILIKE '%' || REGEXP_REPLACE(LOWER(");
+                qb.push_bind(clean_search.to_string());
+                qb.push("), '([dtkspbg])h', '\\1', 'g') || '%'");
+                qb.push(" OR REGEXP_REPLACE(LOWER(COALESCE(u.last_name, '')), '([dtkspbg])h', '\\1', 'g') ILIKE '%' || REGEXP_REPLACE(LOWER(");
+                qb.push_bind(clean_search.to_string());
+                qb.push("), '([dtkspbg])h', '\\1', 'g') || '%'");
+
+                // Trigram similarity for typo tolerance
+                qb.push(" OR similarity(COALESCE(u.first_name, ''), ");
+                qb.push_bind(clean_search.to_string());
+                qb.push(") >= 0.25");
+                qb.push(" OR similarity(COALESCE(u.last_name, ''), ");
+                qb.push_bind(clean_search.to_string());
+                qb.push(") >= 0.25");
+                qb.push(" OR word_similarity(");
+                qb.push_bind(clean_search.to_string());
+                qb.push(
+                    ", COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '')) >= 0.35",
+                );
+                qb.push(")");
+            }
+
+            qb.push(")");
         }
 
         if !student_ids.is_empty() {
@@ -382,7 +458,47 @@ impl UserRepository {
             requester_teacher_user_id,
         );
 
-        if class_section_id.is_some() {
+        if !search.is_empty() {
+            let clean_search = search.trim();
+            qb.push(" ORDER BY CASE ");
+            // Tier 1a: Exact match on identity, username, or name
+            qb.push(" WHEN u.admission_number ILIKE ");
+            qb.push_bind(clean_search.to_string());
+            qb.push(" OR u.username ILIKE ");
+            qb.push_bind(clean_search.to_string());
+            qb.push(" OR u.first_name ILIKE ");
+            qb.push_bind(clean_search.to_string());
+            qb.push(" OR (u.first_name || ' ' || u.last_name) ILIKE ");
+            qb.push_bind(clean_search.to_string());
+            qb.push(" THEN 1 ");
+
+            // Tier 1b: Prefix match
+            qb.push(" WHEN u.first_name ILIKE (");
+            qb.push_bind(format!("{}%", clean_search));
+            qb.push(") OR u.last_name ILIKE (");
+            qb.push_bind(format!("{}%", clean_search));
+            qb.push(") OR u.admission_number ILIKE (");
+            qb.push_bind(format!("{}%", clean_search));
+            qb.push(") THEN 2 ");
+
+            // Tier 2: Substring match (\"somewhere in between\")
+            qb.push(" WHEN u.first_name ILIKE (");
+            qb.push_bind(format!("%{}%", clean_search));
+            qb.push(") OR u.last_name ILIKE (");
+            qb.push_bind(format!("%{}%", clean_search));
+            qb.push(") OR (u.first_name || ' ' || u.last_name) ILIKE (");
+            qb.push_bind(format!("%{}%", clean_search));
+            qb.push(") THEN 3 ");
+
+            // Tier 3: Fuzzy / Typo / Transliteration
+            qb.push(" ELSE 4 END ASC, ");
+            qb.push(" GREATEST(similarity(COALESCE(u.first_name, ''), ");
+            qb.push_bind(clean_search.to_string());
+            qb.push("), word_similarity(");
+            qb.push_bind(clean_search.to_string());
+            qb.push(", COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, ''))) DESC, ");
+            qb.push(" u.created_at DESC");
+        } else if class_section_id.is_some() {
             qb.push(" ORDER BY COALESCE(NULLIF(e.roll_number, ''), NULLIF(u.admission_number, ''), '999999'), u.first_name, u.last_name");
         } else {
             qb.push(" ORDER BY u.created_at DESC");

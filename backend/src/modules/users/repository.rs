@@ -321,7 +321,7 @@ impl UserRepository {
                 qb.push(" OR word_similarity(");
                 qb.push_bind(clean_search.to_string());
                 qb.push(
-                    ", COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '')) >= 0.35",
+                    ", COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '')) >= 0.55",
                 );
                 qb.push(")");
             }

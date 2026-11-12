@@ -414,28 +414,31 @@ pub async fn send_whatsapp_message(
     text: &str,
     idempotency_key: Option<&str>,
 ) -> Result<Uuid> {
-    if is_localhost_or_dev() {
+    let effective_recipient = if is_localhost_or_dev() {
+        let dev_target = "+918848656908";
         println!("============================================================");
-        println!("🛑 [LOCALHOST DETECTED - WHATSAPP LIVE SEND BLOCKED]");
+        println!("🔧 [LOCALHOST / DEV WHATSAPP ROUTE]");
+        println!("Original Recipient: {}", recipient);
+        println!("Routed To Test Number: {}", dev_target);
+        println!("Message: {}", text);
+        println!("============================================================");
+        dev_target
+    } else {
+        println!("============================================================");
+        println!("💬 [WHATSAPP DISPATCHED TO REAL SERVICE]");
         println!("Recipient: {}", recipient);
         println!("Message: {}", text);
-        println!("Notice: Real WhatsApp socket dispatch skipped on localhost to prevent multi-device conflict with cloud.");
         println!("============================================================");
-        return Ok(Uuid::new_v4());
-    }
+        recipient
+    };
 
-    println!("============================================================");
-    println!("💬 [WHATSAPP DISPATCHED TO REAL SERVICE]");
-    println!("Recipient: {}", recipient);
-    println!("Message: {}", text);
-    println!("============================================================");
     let queue = QueueManager::new(pool.clone());
     let payload = serde_json::json!({
         "text": text,
         "skip_typing": false,
     });
     queue
-        .enqueue(recipient, "text", payload, 0, idempotency_key)
+        .enqueue(effective_recipient, "text", payload, 0, idempotency_key)
         .await
 }
 

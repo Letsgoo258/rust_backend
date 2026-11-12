@@ -118,6 +118,18 @@ pub fn catalogue() -> Vec<(&'static str, &'static str, &'static str, &'static st
             "Examinations",
             "Enter student subject marks, grade reports, and assessments",
         ),
+        (
+            "exams:view_results",
+            "View Exam Results",
+            "Examinations",
+            "View consolidated student results and scoreboard across exams and assignments",
+        ),
+        (
+            "exams:save_marks",
+            "Save Exam Marks",
+            "Examinations",
+            "Save and submit student marks and grades for exams and assignments",
+        ),
 
         // 6. Fees & Accounts
         (

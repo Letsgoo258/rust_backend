@@ -462,16 +462,24 @@ impl TransferCertificateService {
             )
             .await?;
 
-            let (st_id, first_name, last_name, display_name, adm_no, sec_name, cls_name) =
-                match student_row {
-                    Some(r) => r,
-                    None => {
-                        return Err(AppError::NotFound(format!(
-                            "Student not found with ID {}",
-                            student_id
-                        )));
-                    }
-                };
+            let (
+                st_id,
+                first_name,
+                last_name,
+                display_name,
+                adm_no,
+                sec_name,
+                cls_name,
+                cls_sec_id,
+            ) = match student_row {
+                Some(r) => r,
+                None => {
+                    return Err(AppError::NotFound(format!(
+                        "Student not found with ID {}",
+                        student_id
+                    )));
+                }
+            };
 
             let student_name = display_name
                 .filter(|s| !s.trim().is_empty())
@@ -566,16 +574,53 @@ impl TransferCertificateService {
             .await?;
 
             // If issuing a Transfer Certificate, transition the student's status to TC_ISSUED
-            // and deactivate active enrollments atomically in the same database transaction
+            // and execute complete institutional detachment across all subsystems
             let is_tc = payload.report_type.to_lowercase().contains("transfer");
             if is_tc {
+                // 1. Update users status
                 let _ = TransferCertificateRepository::mark_student_tc_issued(
                     &mut tx, st_id, school_id, false, user_id,
                 )
                 .await?;
+
+                // 2. Deactivate active academic year enrollments
                 let _ =
                     TransferCertificateRepository::deactivate_active_enrollments(&mut tx, st_id)
                         .await?;
+
+                // 3. Drop active subject/elective enrollments so student does not appear on elective rosters/marks
+                let _ =
+                    TransferCertificateRepository::drop_active_subject_enrollments(&mut tx, st_id)
+                        .await?;
+
+                // 4. Invalidate all active student sessions (web portal, WhatsApp, OTPs)
+                let _ = TransferCertificateRepository::revoke_user_sessions(&mut tx, st_id).await?;
+
+                // 5. Record section withdrawal history if student had an assigned class section
+                if let Some(cs_id) = cls_sec_id {
+                    let _ = TransferCertificateRepository::record_class_section_withdrawal(
+                        &mut tx,
+                        school_id,
+                        cs_id,
+                        st_id,
+                        user_id,
+                        &student_name,
+                    )
+                    .await;
+                }
+
+                // 6. Record universal audit change history
+                let _ = TransferCertificateRepository::record_entity_withdrawal_history(
+                    &mut tx,
+                    school_id,
+                    st_id,
+                    user_id,
+                    &doc_number,
+                )
+                .await;
+
+                // 7. Invalidate in-memory user auth cache
+                crate::modules::auth::backend::invalidate_user_cache(&st_id);
             }
 
             issued_docs.push(json!({
@@ -668,8 +713,28 @@ impl TransferCertificateService {
         .flatten()
         .or_else(|| Some("System Administrator".to_string()));
 
-        let affected = TransferCertificateRepository::cancel_issued_report(
-            db,
+        // 1. Fetch document details before beginning transaction
+        let report_details = sqlx::query_as::<_, (String, Option<Uuid>, String)>(
+            "SELECT report_type, student_id, document_number FROM issued_reports WHERE id = $1 AND school_id = $2",
+        )
+        .bind(report_id)
+        .bind(school_id)
+        .fetch_optional(db)
+        .await?;
+
+        let (report_type, maybe_student_id, doc_number) = match report_details {
+            Some(r) => r,
+            None => {
+                return Err(AppError::NotFound(
+                    "Issued report document not found".into(),
+                ))
+            }
+        };
+
+        let mut tx = db.begin().await?;
+
+        let affected = TransferCertificateRepository::cancel_issued_report_tx(
+            &mut tx,
             school_id,
             report_id,
             user_id,
@@ -683,6 +748,90 @@ impl TransferCertificateService {
                 "Issued report document not found".into(),
             ));
         }
+
+        // 2. If a Transfer Certificate is cancelled, restore student to ACTIVE and reinstate enrollments
+        let is_tc = report_type.to_lowercase().contains("transfer");
+        if is_tc {
+            if let Some(student_id) = maybe_student_id {
+                let other_active_tc = sqlx::query_scalar::<_, bool>(
+                    r#"SELECT EXISTS (
+                        SELECT 1 FROM issued_reports
+                        WHERE school_id = $1 AND student_id = $2 
+                          AND id != $3 AND LOWER(report_type) LIKE '%transfer%' 
+                          AND status = 'ISSUED'
+                    )"#,
+                )
+                .bind(school_id)
+                .bind(student_id)
+                .bind(report_id)
+                .fetch_one(&mut *tx)
+                .await
+                .unwrap_or(false);
+
+                if !other_active_tc {
+                    // Restore student status to ACTIVE
+                    let _ = sqlx::query(
+                        r#"UPDATE users
+                           SET status = 'ACTIVE',
+                               updated_at = NOW(),
+                               updated_by_user_id = $1
+                           WHERE id = $2 AND school_id = $3"#,
+                    )
+                    .bind(user_id)
+                    .bind(student_id)
+                    .bind(school_id)
+                    .execute(&mut *tx)
+                    .await;
+
+                    // Restore most recent enrollment to ACTIVE
+                    let _ = sqlx::query(
+                        r#"UPDATE enrollments
+                           SET status = 'ACTIVE', updated_at = NOW()
+                           WHERE student_id = $1 AND id = (
+                               SELECT id FROM enrollments WHERE student_id = $1 ORDER BY updated_at DESC LIMIT 1
+                           )"#,
+                    )
+                    .bind(student_id)
+                    .execute(&mut *tx)
+                    .await;
+
+                    // Restore dropped subjects to ACTIVE
+                    let _ = sqlx::query(
+                        r#"UPDATE student_subject_enrollments
+                           SET status = 'ACTIVE', updated_at = NOW()
+                           WHERE student_id = $1 AND status = 'DROPPED'"#,
+                    )
+                    .bind(student_id)
+                    .execute(&mut *tx)
+                    .await;
+
+                    // Audit in entity_change_history
+                    let _ = sqlx::query(
+                        r#"INSERT INTO entity_change_history (
+                            school_id, entity_type, entity_id, action,
+                            updated_by_user_id, before_state, after_state, created_at
+                        ) VALUES (
+                            $1, 'STUDENT_TC', $2, 'RESTORE', $3,
+                            jsonb_build_object('status', 'TC_ISSUED', 'cancelled_doc', $4),
+                            jsonb_build_object('status', 'ACTIVE', 'cancelled_doc', $4),
+                            NOW()
+                        )"#,
+                    )
+                    .bind(school_id)
+                    .bind(student_id)
+                    .bind(user_id)
+                    .bind(&doc_number)
+                    .execute(&mut *tx)
+                    .await;
+
+                    crate::modules::auth::backend::invalidate_user_cache(&student_id);
+                }
+            }
+        }
+
+        tx.commit().await?;
+
+        crate::modules::users::repository::UserRepository::invalidate_users_cache(Some(school_id));
 
         let _ = log_action(
             db,
@@ -703,7 +852,7 @@ impl TransferCertificateService {
         db: &PgPool,
         school_id: Uuid,
         user_id: Uuid,
-        is_super_admin: bool,
+        _is_super_admin: bool,
         payload: IssueTransferCertificatesRequest,
     ) -> Result<IssueTransferCertificatesResponse, AppError> {
         if payload.user_ids.is_empty() {
@@ -712,53 +861,34 @@ impl TransferCertificateService {
             ));
         }
 
-        let mut tx = db.begin().await?;
-        let mut issued_count = 0;
-
-        for student_user_id in &payload.user_ids {
-            let affected = TransferCertificateRepository::mark_student_tc_issued(
-                &mut tx,
-                *student_user_id,
-                school_id,
-                is_super_admin,
-                user_id,
-            )
-            .await?;
-
-            if affected > 0 {
-                let _ = TransferCertificateRepository::deactivate_active_enrollments(
-                    &mut tx,
-                    *student_user_id,
-                )
-                .await;
-                issued_count += 1;
-            }
-        }
-
-        tx.commit().await?;
-
-        let _ = log_action(
-            db,
-            Some(school_id),
-            Some(user_id),
-            "ISSUE_TRANSFER_CERTIFICATES",
-            Some("USERS"),
-            None,
-            Some(json!({
-                "count": issued_count,
-                "user_ids": payload.user_ids,
-                "reason": payload.reason
-            })),
-            None,
+        let issuer_name = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT COALESCE(display_name, username) FROM users WHERE id = $1",
         )
-        .await;
+        .bind(user_id)
+        .fetch_optional(db)
+        .await
+        .ok()
+        .flatten()
+        .flatten()
+        .unwrap_or_else(|| "School Administrator".to_string());
+
+        let issue_payload = IssueReportPayload {
+            report_type: "transfer_certificate".to_string(),
+            student_ids: payload.user_ids,
+            academic_year: None,
+            custom_variables: None,
+            remarks: payload.reason,
+        };
+
+        let (issued_docs, _, _, _) =
+            Self::issue_report(db, school_id, user_id, &issuer_name, issue_payload).await?;
 
         Ok(IssueTransferCertificatesResponse {
             success: true,
-            issued_count,
+            issued_count: issued_docs.len(),
             message: format!(
                 "Successfully issued Transfer Certificate(s) for {} student(s)",
-                issued_count
+                issued_docs.len()
             ),
         })
     }

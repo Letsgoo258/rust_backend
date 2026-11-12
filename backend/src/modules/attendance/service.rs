@@ -11,7 +11,7 @@ use crate::{
                 AttendanceConfigDto, AttendanceSessionDetailResponse, AttendanceSessionSummary,
                 BulkEditAttendanceRequest, CollisionItem, RaiseAttendanceTicketRequest,
                 RecordAttendanceRequest, RegisterRow, ResolveCollisionRequest, StudentRosterItem,
-                TodayAttendanceStats, UpdateSingleRecordRequest,
+                TodayAttendanceStats, UpdateSingleRecordRequest, WeeklyHeatmapResponse,
             },
             repository::AttendanceRepository,
         },
@@ -643,5 +643,34 @@ impl AttendanceService {
     ) -> Result<Vec<RegisterRow>, AppError> {
         AttendanceRepository::get_register(pool, user.school_id, date_opt, class_section_id_opt)
             .await
+    }
+
+    /// Retrieve class-wise daily attendance heat map
+    pub async fn get_weekly_heatmap(
+        pool: &PgPool,
+        user: &User,
+        start_date_opt: Option<NaiveDate>,
+        end_date_opt: Option<NaiveDate>,
+    ) -> Result<WeeklyHeatmapResponse, AppError> {
+        let school_id = user.school_id;
+        let today = Utc::now().date_naive();
+
+        // If start_date not provided, default to Monday of the current week
+        use chrono::Datelike;
+        let start_date = match start_date_opt {
+            Some(d) => d,
+            None => {
+                let weekday = today.weekday().num_days_from_monday();
+                today - chrono::Duration::days(weekday as i64)
+            }
+        };
+
+        // If end_date not provided, default to Saturday of the week (start_date + 5 days)
+        let end_date = match end_date_opt {
+            Some(d) => d,
+            None => start_date + chrono::Duration::days(5),
+        };
+
+        AttendanceRepository::get_weekly_heatmap(pool, school_id, start_date, end_date).await
     }
 }

@@ -174,7 +174,7 @@ impl NavigationConfig {
                             name: "Results".into(),
                             path: "/dashboard/academics/results".into(),
                             icon: "reports".into(),
-                            capability: Some("academics:view".into()),
+                            capability: Some("exams:view_results".into()),
                             badge: None,
                         },
                         NavigationItem {

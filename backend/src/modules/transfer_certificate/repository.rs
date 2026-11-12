@@ -366,6 +366,7 @@ impl TransferCertificateRepository {
             Option<String>,
             Option<String>,
             Option<String>,
+            Option<Uuid>,
         )>,
         sqlx::Error,
     > {
@@ -379,11 +380,12 @@ impl TransferCertificateRepository {
                 Option<String>,
                 Option<String>,
                 Option<String>,
+                Option<Uuid>,
             ),
         >(
             r#"
             SELECT u.id, u.first_name, u.last_name, u.display_name, u.admission_number,
-                   sec.name as section_name, c.name as class_name
+                   sec.name as section_name, c.name as class_name, cs.id as class_section_id
             FROM users u
             LEFT JOIN enrollments e ON e.student_id = u.id AND e.status = 'ACTIVE'
             LEFT JOIN class_sections cs ON cs.id = COALESCE(e.class_section_id, u.class_section_id)
@@ -540,8 +542,8 @@ impl TransferCertificateRepository {
         Ok((rows, total))
     }
 
-    pub async fn cancel_issued_report(
-        db: &PgPool,
+    pub async fn cancel_issued_report_tx(
+        tx: &mut Transaction<'_, Postgres>,
         school_id: Uuid,
         report_id: Uuid,
         cancelled_by: Uuid,
@@ -566,10 +568,33 @@ impl TransferCertificateRepository {
         .bind(reason)
         .bind(report_id)
         .bind(school_id)
-        .execute(db)
+        .execute(&mut **tx)
         .await?;
 
         Ok(result.rows_affected())
+    }
+
+    #[allow(dead_code)]
+    pub async fn cancel_issued_report(
+        db: &PgPool,
+        school_id: Uuid,
+        report_id: Uuid,
+        cancelled_by: Uuid,
+        cancelled_by_name: Option<String>,
+        reason: &str,
+    ) -> Result<u64, sqlx::Error> {
+        let mut tx = db.begin().await?;
+        let res = Self::cancel_issued_report_tx(
+            &mut tx,
+            school_id,
+            report_id,
+            cancelled_by,
+            cancelled_by_name,
+            reason,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(res)
     }
 
     pub async fn mark_student_tc_issued(
@@ -584,7 +609,13 @@ impl TransferCertificateRepository {
                SET status = 'TC_ISSUED',
                    updated_at = NOW(),
                    updated_by_user_id = $1
-               WHERE id = $2 AND (school_id = $3 OR $4)"#,
+               WHERE id = $2 
+                 AND (school_id = $3 OR $4)
+                 AND EXISTS (
+                     SELECT 1 FROM user_roles ur 
+                     JOIN roles r ON ur.role_id = r.id 
+                     WHERE ur.user_id = users.id AND r.name = 'STUDENT'
+                 )"#,
         )
         .bind(updated_by)
         .bind(user_id)
@@ -610,5 +641,113 @@ impl TransferCertificateRepository {
         .await?;
 
         Ok(result.rows_affected())
+    }
+
+    pub async fn drop_active_subject_enrollments(
+        tx: &mut Transaction<'_, Postgres>,
+        student_id: Uuid,
+    ) -> Result<u64, sqlx::Error> {
+        let result = sqlx::query(
+            r#"UPDATE student_subject_enrollments
+               SET status = 'DROPPED', updated_at = NOW()
+               WHERE student_id = $1 AND status = 'ACTIVE'"#,
+        )
+        .bind(student_id)
+        .execute(&mut **tx)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
+    pub async fn revoke_user_sessions(
+        tx: &mut Transaction<'_, Postgres>,
+        user_id: Uuid,
+    ) -> Result<(), sqlx::Error> {
+        // Invalidate web portal sessions
+        let _ = sqlx::query(
+            r#"UPDATE user_sessions
+               SET revoked_at = NOW()
+               WHERE user_id = $1 AND revoked_at IS NULL"#,
+        )
+        .bind(user_id)
+        .execute(&mut **tx)
+        .await;
+
+        // Invalidate WhatsApp sessions
+        let _ = sqlx::query(
+            r#"UPDATE whatsapp_user_sessions
+               SET is_revoked = TRUE, updated_at = NOW()
+               WHERE user_id = $1"#,
+        )
+        .bind(user_id)
+        .execute(&mut **tx)
+        .await;
+
+        // Clean up pending security tokens / action OTPs / password resets
+        let _ = sqlx::query(r#"DELETE FROM admin_action_otps WHERE user_id = $1"#)
+            .bind(user_id)
+            .execute(&mut **tx)
+            .await;
+
+        let _ = sqlx::query(r#"DELETE FROM password_resets WHERE user_id = $1"#)
+            .bind(user_id)
+            .execute(&mut **tx)
+            .await;
+
+        Ok(())
+    }
+
+    pub async fn record_class_section_withdrawal(
+        tx: &mut Transaction<'_, Postgres>,
+        school_id: Uuid,
+        class_section_id: Uuid,
+        student_id: Uuid,
+        updated_by: Uuid,
+        student_name: &str,
+    ) -> Result<(), sqlx::Error> {
+        let _ = sqlx::query(
+            r#"INSERT INTO class_section_history (
+                school_id, class_section_id, updated_by_user_id,
+                change_type, old_value, new_value, created_at
+            ) VALUES (
+                $1, $2, $3, 'STUDENT_TC_WITHDRAWAL', $4, 'TC_ISSUED', NOW()
+            )"#,
+        )
+        .bind(school_id)
+        .bind(class_section_id)
+        .bind(updated_by)
+        .bind(format!("Student: {} ({})", student_name, student_id))
+        .execute(&mut **tx)
+        .await;
+
+        Ok(())
+    }
+
+    pub async fn record_entity_withdrawal_history(
+        tx: &mut Transaction<'_, Postgres>,
+        school_id: Uuid,
+        student_id: Uuid,
+        updated_by: Uuid,
+        doc_number: &str,
+    ) -> Result<(), sqlx::Error> {
+        let _ = sqlx::query(
+            r#"INSERT INTO entity_change_history (
+                school_id, entity_type, entity_id, action,
+                updated_by_user_id, before_state, after_state, created_at
+            ) VALUES (
+                $1, 'STUDENT_TC', $2, 'WITHDRAW', $3,
+                jsonb_build_object('status', 'ACTIVE'),
+                jsonb_build_object('status', 'TC_ISSUED', 'document_number', $4),
+                NOW()
+            )"#,
+        )
+        .bind(school_id)
+        .bind(student_id)
+        .bind(updated_by)
+        .bind(doc_number)
+        .execute(&mut **tx)
+        .await;
+
+        Ok(())
     }
 }

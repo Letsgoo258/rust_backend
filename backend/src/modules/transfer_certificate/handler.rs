@@ -294,6 +294,10 @@ impl TransferCertificateHandler {
             )
             .await?;
 
+        crate::modules::users::repository::UserRepository::invalidate_users_cache(Some(
+            user.school_id,
+        ));
+
         Ok((
             StatusCode::OK,
             Json(json!({

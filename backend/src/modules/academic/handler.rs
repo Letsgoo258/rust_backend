@@ -9,6 +9,7 @@ use axum::{
     Json,
 };
 use serde::Deserialize;
+use sqlx::Row;
 
 #[derive(Debug, Deserialize)]
 pub struct CreateAcademicYearPayload {
@@ -121,6 +122,58 @@ pub async fn create_academic_year(
         Json(serde_json::json!({
             "message": "Academic year created successfully",
             "academic_year_id": academic_year_id
+        })),
+    ))
+}
+
+#[tracing::instrument(err, skip(state, auth_session))]
+pub async fn get_academic_years(
+    auth_session: AuthSession,
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, AppError> {
+    let user = auth_session
+        .user
+        .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+    let rows = sqlx::query(
+        r#"
+        SELECT id, name, start_date::TEXT, end_date::TEXT, status
+        FROM academic_years
+        WHERE school_id = $1
+        ORDER BY start_date DESC, created_at DESC
+        "#,
+    )
+    .bind(user.school_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| AppError::InternalServerError(e.to_string()))?;
+
+    let mut academic_years = Vec::new();
+    let mut default_year_id = None;
+
+    for (idx, r) in rows.iter().enumerate() {
+        let id: uuid::Uuid = r.get("id");
+        let status: String = r.get("status");
+        if status.eq_ignore_ascii_case("ACTIVE") && default_year_id.is_none() {
+            default_year_id = Some(id);
+        } else if idx == 0 && default_year_id.is_none() {
+            default_year_id = Some(id);
+        }
+
+        academic_years.push(serde_json::json!({
+            "id": id,
+            "name": r.get::<String, _>("name"),
+            "start_date": r.get::<String, _>("start_date"),
+            "end_date": r.get::<String, _>("end_date"),
+            "status": status,
+        }));
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "academic_years": academic_years,
+            "default_year_id": default_year_id,
         })),
     ))
 }

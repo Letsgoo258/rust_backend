@@ -34,6 +34,11 @@ pub fn router() -> Router<AppState> {
             "/collisions/:id/resolve",
             post(AttendanceHandler::resolve_collision),
         )
+        .route("/heatmap", get(AttendanceHandler::get_weekly_heatmap))
+        .route(
+            "/weekly-heatmap",
+            get(AttendanceHandler::get_weekly_heatmap),
+        )
         .route(
             "/config",
             get(AttendanceHandler::get_config).put(AttendanceHandler::update_config),

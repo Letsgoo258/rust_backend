@@ -2,10 +2,10 @@ use crate::{
     modules::academic::handler::{
         assign_students_bulk, bulk_assign_class, create_academic_year, create_bulk_classes,
         create_bulk_subject_types, create_bulk_subjects, delete_subject, delete_subject_type,
-        get_academic_teachers, get_academics_dashboard_config, get_class_capacity,
-        get_class_section_history, get_class_section_students, get_my_class, get_school_stats,
-        get_subject_types, get_subjects, lookup_admission_numbers, update_class_section,
-        update_subject,
+        get_academic_teachers, get_academic_years, get_academics_dashboard_config,
+        get_class_capacity, get_class_section_history, get_class_section_students, get_my_class,
+        get_school_stats, get_subject_types, get_subjects, lookup_admission_numbers,
+        update_class_section, update_subject,
     },
     state::AppState,
 };
@@ -16,7 +16,7 @@ use axum::{
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/years", post(create_academic_year))
+        .route("/years", post(create_academic_year).get(get_academic_years))
         .route("/classes", post(create_bulk_classes))
         .route("/subjects", post(create_bulk_subjects).get(get_subjects))
         .route("/subjects/:id", put(update_subject).delete(delete_subject))
@@ -31,6 +31,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/class-section/:id/students",
             get(get_class_section_students),
+        )
+        .route(
+            "/class-section/:id/core-subjects",
+            get(crate::modules::academic::exams::ExamHandler::get_section_core_subjects),
         )
         .route("/my-class", get(get_my_class))
         .route("/teachers", get(get_academic_teachers))
@@ -126,5 +130,70 @@ pub fn router() -> Router<AppState> {
         .route(
             "/calendar/check",
             get(crate::modules::academic::calendar::CalendarHandler::check_holiday),
+        )
+        // Exam Events & Timetable Scheduling
+        .route(
+            "/exam-events",
+            get(crate::modules::academic::exams::ExamHandler::list_exam_events)
+                .post(crate::modules::academic::exams::ExamHandler::create_exam_event),
+        )
+        .route(
+            "/exam-events/:id",
+            get(crate::modules::academic::exams::ExamHandler::get_exam_event_detail),
+        )
+        .route(
+            "/exam-events/:id/classes",
+            post(crate::modules::academic::exams::ExamHandler::add_class_schedule),
+        )
+        .route(
+            "/exam-events/:event_id/classes/:class_section_id/timetable",
+            post(crate::modules::academic::exams::ExamHandler::save_class_timetable),
+        )
+        .route(
+            "/exam-events/:event_id/classes/:class_section_id/publish-whatsapp",
+            post(crate::modules::academic::exams::ExamHandler::publish_class_whatsapp),
+        )
+        .route(
+            "/exam-events/:event_id/classes/:schedule_id",
+            delete(crate::modules::academic::exams::ExamHandler::delete_class_schedule),
+        )
+        // Exams & Assignments Recording Engine
+        .route(
+            "/exams",
+            get(crate::modules::academic::exams::ExamHandler::list_exams)
+                .post(crate::modules::academic::exams::ExamHandler::create_exam),
+        )
+        .route(
+            "/exams/:id",
+            get(crate::modules::academic::exams::ExamHandler::get_exam_detail),
+        )
+        .route(
+            "/exams/:id/marks",
+            post(crate::modules::academic::exams::ExamHandler::save_exam_marks),
+        )
+        .route(
+            "/exams/:id/notify",
+            post(crate::modules::academic::exams::ExamHandler::notify_exam),
+        )
+        .route(
+            "/assignments",
+            get(crate::modules::academic::exams::ExamHandler::list_assignments)
+                .post(crate::modules::academic::exams::ExamHandler::create_assignment),
+        )
+        .route(
+            "/assignments/:id",
+            get(crate::modules::academic::exams::ExamHandler::get_assignment_detail),
+        )
+        .route(
+            "/assignments/:id/marks",
+            post(crate::modules::academic::exams::ExamHandler::save_assignment_marks),
+        )
+        .route(
+            "/assignments/:id/notify",
+            post(crate::modules::academic::exams::ExamHandler::notify_assignment),
+        )
+        .route(
+            "/class-section/:id/scores",
+            get(crate::modules::academic::exams::ExamHandler::get_class_section_scores),
         )
 }

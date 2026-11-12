@@ -221,3 +221,61 @@ pub struct RaiseAttendanceTicketRequest {
     pub reason: String,
     pub collision_type: Option<String>,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct WeeklyHeatmapQuery {
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeatmapDayHeader {
+    pub date: String,
+    pub day_name: String,
+    pub formatted: String,
+    pub is_today: bool,
+    pub is_future: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClassDayAttendanceSlot {
+    pub date: String,
+    pub day_name: String,
+    pub rate: Option<i32>,
+    pub status: String, // "RECORDED", "PENDING", "NOT_RECORDED", "FUTURE"
+    pub present_count: i64,
+    pub absent_count: i64,
+    pub late_count: i64,
+    pub total_records: i64,
+    pub session_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClassHeatmapRow {
+    pub class_section_id: Uuid,
+    pub class_name: String,
+    pub section_name: String,
+    pub class_code: Option<String>,
+    pub section_code: Option<String>,
+    pub class_teacher_name: Option<String>,
+    pub enrolled_count: i64,
+    pub days: Vec<ClassDayAttendanceSlot>,
+    pub weekly_avg_rate: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WeeklyHeatmapSummary {
+    pub overall_attendance_rate: Option<i32>,
+    pub total_recorded_sessions: i64,
+    pub best_class_section: Option<String>,
+    pub lowest_class_section: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WeeklyHeatmapResponse {
+    pub start_date: String,
+    pub end_date: String,
+    pub day_headers: Vec<HeatmapDayHeader>,
+    pub rows: Vec<ClassHeatmapRow>,
+    pub summary: WeeklyHeatmapSummary,
+}

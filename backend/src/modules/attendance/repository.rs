@@ -6,8 +6,10 @@ use crate::{
     error::AppError,
     modules::attendance::dto::{
         AttendanceConfigDto, AttendanceCorrectionLog, AttendanceSessionDetailResponse,
-        AttendanceSessionSummary, CollisionItem, RecordWithSessionInfo, RegisterRow,
-        StudentAttendanceDetail, StudentAttendanceInput, StudentRosterItem, TodayAttendanceStats,
+        AttendanceSessionSummary, ClassDayAttendanceSlot, ClassHeatmapRow, CollisionItem,
+        HeatmapDayHeader, RecordWithSessionInfo, RegisterRow, StudentAttendanceDetail,
+        StudentAttendanceInput, StudentRosterItem, TodayAttendanceStats, WeeklyHeatmapResponse,
+        WeeklyHeatmapSummary,
     },
 };
 
@@ -1208,5 +1210,231 @@ impl AttendanceRepository {
         tx.commit().await?;
 
         Ok(())
+    }
+
+    /// Retrieve class-wise daily attendance heat map for a given date range
+    pub async fn get_weekly_heatmap(
+        pool: &PgPool,
+        school_id: Uuid,
+        start_date: NaiveDate,
+        end_date: NaiveDate,
+    ) -> Result<WeeklyHeatmapResponse, AppError> {
+        let today = Utc::now().date_naive();
+
+        // 1. Generate Day Headers for the date range
+        let mut day_headers = Vec::new();
+        let mut curr = start_date;
+        while curr <= end_date {
+            let day_name = curr.format("%a").to_string();
+            let formatted = curr.format("%b %-d").to_string();
+            let is_today = curr == today;
+            let is_future = curr > today;
+
+            day_headers.push(HeatmapDayHeader {
+                date: curr.format("%Y-%m-%d").to_string(),
+                day_name,
+                formatted,
+                is_today,
+                is_future,
+            });
+
+            curr = match curr.succ_opt() {
+                Some(next) => next,
+                None => break,
+            };
+        }
+
+        // 2. Query all active class sections with their attendance on each day
+        let rows = sqlx::query(
+            r#"
+            SELECT 
+                cs.id as class_section_id,
+                c.name as class_name,
+                sec.name as section_name,
+                c.code as class_code,
+                sec.code as section_code,
+                COALESCE(NULLIF(u.display_name, ''), u.username) as class_teacher_name,
+                (SELECT COUNT(*) FROM enrollments e WHERE e.class_section_id = cs.id AND e.status = 'ACTIVE') as enrolled_count,
+                d.date::date::text as slot_date,
+                to_char(d.date, 'Dy') as slot_day_name,
+                COUNT(r.id) as total_records,
+                COUNT(CASE WHEN r.status = 'PRESENT' THEN 1 END) as present_count,
+                COUNT(CASE WHEN r.status = 'ABSENT' THEN 1 END) as absent_count,
+                COUNT(CASE WHEN r.status = 'LATE' THEN 1 END) as late_count,
+                CASE 
+                    WHEN COUNT(r.id) > 0 THEN ROUND((COUNT(CASE WHEN r.status = 'PRESENT' THEN 1 END)::numeric / COUNT(r.id)) * 100)::int
+                    ELSE NULL 
+                END as attendance_rate,
+                MAX(s.id::text) as session_id
+            FROM class_sections cs
+            JOIN classes c ON cs.class_id = c.id
+            JOIN sections sec ON cs.section_id = sec.id
+            LEFT JOIN users u ON cs.class_teacher_staff_id = u.id
+            CROSS JOIN generate_series($2::date, $3::date, '1 day'::interval) d(date)
+            LEFT JOIN attendance_sessions s ON s.class_section_id = cs.id AND s.date = d.date::date AND s.school_id = c.school_id
+            LEFT JOIN attendance_records r ON r.attendance_session_id = s.id
+            WHERE c.school_id = $1 AND cs.status = 'ACTIVE'
+            GROUP BY cs.id, c.name, sec.name, c.code, sec.code, u.display_name, u.username, d.date
+            ORDER BY c.name ASC, sec.name ASC, d.date ASC;
+            "#,
+        )
+        .bind(school_id)
+        .bind(start_date)
+        .bind(end_date)
+        .fetch_all(pool)
+        .await?;
+
+        // 3. Group by class_section_id
+        use std::collections::BTreeMap;
+        struct IntermediateRow {
+            class_name: String,
+            section_name: String,
+            class_code: Option<String>,
+            section_code: Option<String>,
+            class_teacher_name: Option<String>,
+            enrolled_count: i64,
+            slots: Vec<ClassDayAttendanceSlot>,
+        }
+
+        let mut class_map: BTreeMap<Uuid, IntermediateRow> = BTreeMap::new();
+        let mut class_order: Vec<Uuid> = Vec::new();
+
+        for r in rows {
+            let cs_id: Uuid = r.get("class_section_id");
+            let class_name: String = r.get("class_name");
+            let section_name: String = r.get("section_name");
+            let class_code: Option<String> = r.try_get("class_code").ok();
+            let section_code: Option<String> = r.try_get("section_code").ok();
+            let class_teacher_name: Option<String> = r.try_get("class_teacher_name").ok();
+            let enrolled_count: i64 = r.try_get("enrolled_count").unwrap_or(0);
+            let slot_date: String = r.get("slot_date");
+            let slot_day_name: String = r.get("slot_day_name");
+            let total_records: i64 = r.try_get("total_records").unwrap_or(0);
+            let present_count: i64 = r.try_get("present_count").unwrap_or(0);
+            let absent_count: i64 = r.try_get("absent_count").unwrap_or(0);
+            let late_count: i64 = r.try_get("late_count").unwrap_or(0);
+            let attendance_rate: Option<i32> = r.try_get("attendance_rate").ok();
+            let session_id_str: Option<String> = r.try_get("session_id").ok();
+            let session_id = session_id_str.and_then(|s| Uuid::parse_str(&s).ok());
+
+            let parsed_date = NaiveDate::parse_from_str(&slot_date, "%Y-%m-%d").unwrap_or(today);
+            let status = if total_records > 0 {
+                "RECORDED".to_string()
+            } else if parsed_date > today {
+                "FUTURE".to_string()
+            } else if parsed_date == today {
+                "PENDING".to_string()
+            } else {
+                "NOT_RECORDED".to_string()
+            };
+
+            let slot = ClassDayAttendanceSlot {
+                date: slot_date,
+                day_name: slot_day_name,
+                rate: attendance_rate,
+                status,
+                present_count,
+                absent_count,
+                late_count,
+                total_records,
+                session_id,
+            };
+
+            if !class_map.contains_key(&cs_id) {
+                class_order.push(cs_id);
+                class_map.insert(
+                    cs_id,
+                    IntermediateRow {
+                        class_name,
+                        section_name,
+                        class_code,
+                        section_code,
+                        class_teacher_name,
+                        enrolled_count,
+                        slots: vec![slot],
+                    },
+                );
+            } else if let Some(entry) = class_map.get_mut(&cs_id) {
+                entry.slots.push(slot);
+            }
+        }
+
+        // 4. Build output rows & summary stats
+        let mut result_rows = Vec::new();
+        let mut total_rates = Vec::new();
+        let mut total_recorded_sessions = 0i64;
+        let mut best_class: Option<(String, i32)> = None;
+        let mut lowest_class: Option<(String, i32)> = None;
+
+        for cs_id in class_order {
+            if let Some(entry) = class_map.remove(&cs_id) {
+                let recorded_rates: Vec<i32> = entry
+                    .slots
+                    .iter()
+                    .filter_map(|s| if s.status == "RECORDED" { s.rate } else { None })
+                    .collect();
+
+                let weekly_avg_rate = if !recorded_rates.is_empty() {
+                    let sum: i32 = recorded_rates.iter().sum();
+                    Some((sum as f64 / recorded_rates.len() as f64).round() as i32)
+                } else {
+                    None
+                };
+
+                let class_label = format!("{} - {}", entry.class_name, entry.section_name);
+                if let Some(avg) = weekly_avg_rate {
+                    total_rates.push(avg);
+                    total_recorded_sessions += recorded_rates.len() as i64;
+
+                    match &best_class {
+                        None => best_class = Some((class_label.clone(), avg)),
+                        Some((_, cur_best)) if avg > *cur_best => {
+                            best_class = Some((class_label.clone(), avg))
+                        }
+                        _ => {}
+                    }
+
+                    match &lowest_class {
+                        None => lowest_class = Some((class_label.clone(), avg)),
+                        Some((_, cur_lowest)) if avg < *cur_lowest => {
+                            lowest_class = Some((class_label.clone(), avg))
+                        }
+                        _ => {}
+                    }
+                }
+
+                result_rows.push(ClassHeatmapRow {
+                    class_section_id: cs_id,
+                    class_name: entry.class_name,
+                    section_name: entry.section_name,
+                    class_code: entry.class_code,
+                    section_code: entry.section_code,
+                    class_teacher_name: entry.class_teacher_name,
+                    enrolled_count: entry.enrolled_count,
+                    days: entry.slots,
+                    weekly_avg_rate,
+                });
+            }
+        }
+
+        let overall_attendance_rate = if !total_rates.is_empty() {
+            let sum: i32 = total_rates.iter().sum();
+            Some((sum as f64 / total_rates.len() as f64).round() as i32)
+        } else {
+            None
+        };
+
+        Ok(WeeklyHeatmapResponse {
+            start_date: start_date.format("%Y-%m-%d").to_string(),
+            end_date: end_date.format("%Y-%m-%d").to_string(),
+            day_headers,
+            rows: result_rows,
+            summary: WeeklyHeatmapSummary {
+                overall_attendance_rate,
+                total_recorded_sessions,
+                best_class_section: best_class.map(|(name, rate)| format!("{name} ({rate}%)")),
+                lowest_class_section: lowest_class.map(|(name, rate)| format!("{name} ({rate}%)")),
+            },
+        })
     }
 }

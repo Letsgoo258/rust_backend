@@ -1,5 +1,6 @@
 pub mod calendar;
 pub mod electives;
+pub mod exams;
 pub mod handler;
 pub mod repository;
 pub mod timetable;

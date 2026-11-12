@@ -15,7 +15,7 @@ use crate::{
             dto::{
                 AttendanceConfigDto, BulkEditAttendanceRequest, RaiseAttendanceTicketRequest,
                 RecordAttendanceRequest, RegisterQuery, ResolveCollisionRequest,
-                UpdateSingleRecordRequest,
+                UpdateSingleRecordRequest, WeeklyHeatmapQuery,
             },
             service::AttendanceService,
         },
@@ -372,5 +372,32 @@ impl AttendanceHandler {
             "success": true,
             "message": "Attendance session and associated student records deleted successfully."
         })))
+    }
+
+    /// Class-wise daily attendance heat map for a date range
+    pub async fn get_weekly_heatmap(
+        auth_session: AuthSession,
+        State(state): State<AppState>,
+        Query(params): Query<WeeklyHeatmapQuery>,
+    ) -> Result<impl IntoResponse, AppError> {
+        let user = auth_session
+            .user
+            .ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+
+        let start_date_opt = params
+            .start_date
+            .as_deref()
+            .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
+
+        let end_date_opt = params
+            .end_date
+            .as_deref()
+            .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
+
+        let heatmap =
+            AttendanceService::get_weekly_heatmap(&state.db, &user, start_date_opt, end_date_opt)
+                .await?;
+
+        Ok(Json(heatmap))
     }
 }

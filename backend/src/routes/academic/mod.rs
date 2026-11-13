@@ -33,6 +33,10 @@ pub fn router() -> Router<AppState> {
             get(get_class_section_students),
         )
         .route(
+            "/classes/:id/students",
+            get(get_class_section_students),
+        )
+        .route(
             "/class-section/:id/core-subjects",
             get(crate::modules::academic::exams::ExamHandler::get_section_core_subjects),
         )

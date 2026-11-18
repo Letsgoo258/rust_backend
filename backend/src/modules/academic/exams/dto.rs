@@ -272,11 +272,12 @@ pub struct ClassScoreItemSummary {
     pub affects_overall: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct StudentItemScore {
     pub item_id: Uuid,
     pub marks_obtained: Option<f64>,
     pub is_absent: bool,
+    pub remarks: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

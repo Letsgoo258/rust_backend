@@ -1357,7 +1357,7 @@ impl ExamRepository {
         // 4. Fetch all exam marks for this class section
         let exam_mark_rows = sqlx::query(
             r#"
-            SELECT em.exam_id, em.student_id, em.marks_obtained::FLOAT8 as marks_obtained, em.is_absent
+            SELECT em.exam_id, em.student_id, em.marks_obtained::FLOAT8 as marks_obtained, em.is_absent, em.remarks
             FROM exam_marks em
             JOIN exams e ON em.exam_id = e.id
             WHERE e.class_section_id = $1 AND e.school_id = $2
@@ -1372,7 +1372,7 @@ impl ExamRepository {
         // 5. Fetch all assignment marks for this class section
         let assignment_mark_rows = sqlx::query(
             r#"
-            SELECT am.assignment_id, am.student_id, am.marks_obtained::FLOAT8 as marks_obtained, am.is_absent
+            SELECT am.assignment_id, am.student_id, am.marks_obtained::FLOAT8 as marks_obtained, am.is_absent, am.remarks
             FROM assignment_marks am
             JOIN assignments a ON am.assignment_id = a.id
             WHERE a.class_section_id = $1 AND a.school_id = $2
@@ -1396,6 +1396,7 @@ impl ExamRepository {
                         item_id: em.get("exam_id"),
                         marks_obtained: em.get("marks_obtained"),
                         is_absent: em.get("is_absent"),
+                        remarks: em.get("remarks"),
                     });
                 }
             }
@@ -1407,6 +1408,7 @@ impl ExamRepository {
                         item_id: am.get("assignment_id"),
                         marks_obtained: am.get("marks_obtained"),
                         is_absent: am.get("is_absent"),
+                        remarks: am.get("remarks"),
                     });
                 }
             }
@@ -2285,6 +2287,64 @@ impl ExamRepository {
         if res.rows_affected() == 0 {
             return Err(AppError::NotFound("Exam schedule not found".into()));
         }
+
+        Ok(())
+    }
+
+    /// Deletes an exam event and cascades to all child exams, marks, and class links
+    pub async fn delete_exam_event(
+        pool: &PgPool,
+        school_id: Uuid,
+        event_id: Uuid,
+    ) -> Result<(), AppError> {
+        let mut tx = pool
+            .begin()
+            .await
+            .map_err(|e| AppError::InternalServerError(e.to_string()))?;
+
+        // 1. Delete associated exam marks for all exams under this exam event
+        let _ = sqlx::query(
+            r#"
+            DELETE FROM exam_marks
+            WHERE exam_id IN (SELECT id FROM exams WHERE exam_event_id = $1 AND school_id = $2)
+            "#,
+        )
+        .bind(event_id)
+        .bind(school_id)
+        .execute(&mut *tx)
+        .await;
+
+        // 2. Delete child exams under this exam event
+        let _ = sqlx::query("DELETE FROM exams WHERE exam_event_id = $1 AND school_id = $2")
+            .bind(event_id)
+            .bind(school_id)
+            .execute(&mut *tx)
+            .await;
+
+        // 3. Delete assigned classes from exam_event_classes
+        let _ = sqlx::query(
+            "DELETE FROM exam_event_classes WHERE exam_event_id = $1 AND school_id = $2",
+        )
+        .bind(event_id)
+        .bind(school_id)
+        .execute(&mut *tx)
+        .await;
+
+        // 4. Delete the exam event itself
+        let res = sqlx::query("DELETE FROM exam_events WHERE id = $1 AND school_id = $2")
+            .bind(event_id)
+            .bind(school_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AppError::InternalServerError(e.to_string()))?;
+
+        if res.rows_affected() == 0 {
+            return Err(AppError::NotFound("Exam event not found".into()));
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| AppError::InternalServerError(e.to_string()))?;
 
         Ok(())
     }

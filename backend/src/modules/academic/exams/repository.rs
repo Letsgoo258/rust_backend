@@ -6,7 +6,7 @@ use crate::{
         CreateAssignmentPayload, CreateExamEventPayload, CreateExamPayload, ExamDetailResponse,
         ExamEventAssignedClassItem, ExamEventListItem, ExamEventResponse, ExamFilterQuery,
         ExamResponse, SaveClassExamTimetablePayload, SaveMarksPayload, SectionCoreSubjectItem,
-        StudentItemScore, StudentMarksItem, StudentScoresSummary,
+        StudentItemScore, StudentMarksItem, StudentScoresSummary, UpdateExamEventPayload,
     },
     utils::whatsapp::send_whatsapp_message,
 };
@@ -111,25 +111,20 @@ impl ExamRepository {
         pool: &PgPool,
         school_id: Uuid,
         user_id: Uuid,
-        is_admin: bool,
+        _is_admin: bool,
         class_section_id: Uuid,
         subject_id: Uuid,
     ) -> Result<bool, AppError> {
-        if is_admin {
-            return Ok(true);
-        }
-
-        // Check if user has EXAM_COORDINATOR or academic management role
-        let is_coordinator = sqlx::query_scalar::<_, bool>(
+        // Super Admin and School Admin are strictly prohibited from adding, editing, or deleting marks
+        let is_admin_or_super = sqlx::query_scalar::<_, bool>(
             r#"
             SELECT EXISTS (
                 SELECT 1 FROM user_roles ur
                 JOIN roles r ON ur.role_id = r.id
-                WHERE ur.user_id = $1 AND r.code IN ('EXAM_COORDINATOR', 'VICE_PRINCIPAL', 'PRINCIPAL')
+                WHERE ur.user_id = $1 AND r.code IN ('SUPER_ADMIN', 'SCHOOL_ADMIN', 'HEADMASTER', 'PRINCIPAL')
             ) OR EXISTS (
-                SELECT 1 FROM user_capability_grants ucg
-                WHERE ucg.user_id = $1 AND ucg.capability IN ('exams:enter_marks', 'academics:manage_curriculum')
-                  AND (ucg.expires_at IS NULL OR ucg.expires_at > now())
+                SELECT 1 FROM users u
+                WHERE u.id = $1 AND (u.is_platform_admin = true OR u.is_tenant_admin = true)
             )
             "#,
         )
@@ -138,31 +133,11 @@ impl ExamRepository {
         .await
         .unwrap_or(false);
 
-        if is_coordinator {
-            return Ok(true);
+        if is_admin_or_super {
+            return Ok(false);
         }
 
-        // Check if user is the assigned class teacher for this class_section
-        let is_class_teacher = sqlx::query_scalar::<_, bool>(
-            r#"
-            SELECT EXISTS (
-                SELECT 1 FROM class_sections cs
-                JOIN staff s ON cs.class_teacher_id = s.id
-                WHERE cs.id = $1 AND s.user_id = $2
-            )
-            "#,
-        )
-        .bind(class_section_id)
-        .bind(user_id)
-        .fetch_one(pool)
-        .await
-        .unwrap_or(false);
-
-        if is_class_teacher {
-            return Ok(true);
-        }
-
-        // Check if user is assigned in timetable_slots or substitutions (including co-teachers / elective slots)
+        // Only the assigned subject teacher (timetable slot, substitution, or elective group teacher) can edit/save marks
         let is_subject_teacher = sqlx::query_scalar::<_, bool>(
             r#"
             SELECT EXISTS (
@@ -204,7 +179,7 @@ impl ExamRepository {
             return Ok(true);
         }
 
-        // Only authorized users (admins, coordinators, class teachers, subject teachers) can edit marks
+        // Default: strictly view-only for all other staff and administrators
         Ok(false)
     }
 
@@ -389,6 +364,7 @@ impl ExamRepository {
             whatsapp_notified: row.get("whatsapp_notified"),
             created_by: row.get("created_by"),
             created_at: row.get("created_at"),
+            can_edit: None,
         })
     }
 
@@ -482,6 +458,7 @@ impl ExamRepository {
                 whatsapp_notified: row.get("whatsapp_notified"),
                 created_by: row.get("created_by"),
                 created_at: row.get("created_at"),
+                can_edit: None,
             })
             .collect();
 
@@ -896,22 +873,42 @@ impl ExamRepository {
         pool: &PgPool,
         school_id: Uuid,
         user_id: Uuid,
-        is_admin: bool,
+        _is_admin: bool,
         assignment_id: Uuid,
     ) -> Result<AssignmentDetailResponse, AppError> {
         let assignment = Self::get_assignment_by_id(pool, school_id, assignment_id).await?;
 
-        let can_edit = is_admin
-            || assignment.teacher_user_id == user_id
-            || Self::can_user_edit_marks(
-                pool,
-                school_id,
-                user_id,
-                is_admin,
-                assignment.class_section_id,
-                assignment.subject_id,
+        let is_super_or_admin = sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS (
+                SELECT 1 FROM user_roles ur
+                JOIN roles r ON ur.role_id = r.id
+                WHERE ur.user_id = $1 AND r.code IN ('SUPER_ADMIN', 'SCHOOL_ADMIN', 'HEADMASTER', 'PRINCIPAL')
+            ) OR EXISTS (
+                SELECT 1 FROM users u
+                WHERE u.id = $1 AND (u.is_platform_admin = true OR u.is_tenant_admin = true)
             )
-            .await?;
+            "#,
+        )
+        .bind(user_id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(false);
+
+        let can_edit = if is_super_or_admin {
+            false
+        } else {
+            assignment.teacher_user_id == user_id
+                || Self::can_user_edit_marks(
+                    pool,
+                    school_id,
+                    user_id,
+                    false,
+                    assignment.class_section_id,
+                    assignment.subject_id,
+                )
+                .await?
+        };
 
         let rows = sqlx::query(
             r#"
@@ -974,23 +971,43 @@ impl ExamRepository {
         pool: &PgPool,
         school_id: Uuid,
         user_id: Uuid,
-        is_admin: bool,
+        _is_admin: bool,
         assignment_id: Uuid,
         payload: SaveMarksPayload,
     ) -> Result<(), AppError> {
         let assignment = Self::get_assignment_by_id(pool, school_id, assignment_id).await?;
 
-        let can_edit = is_admin
-            || assignment.teacher_user_id == user_id
-            || Self::can_user_edit_marks(
-                pool,
-                school_id,
-                user_id,
-                is_admin,
-                assignment.class_section_id,
-                assignment.subject_id,
+        let is_super_or_admin = sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS (
+                SELECT 1 FROM user_roles ur
+                JOIN roles r ON ur.role_id = r.id
+                WHERE ur.user_id = $1 AND r.code IN ('SUPER_ADMIN', 'SCHOOL_ADMIN', 'HEADMASTER', 'PRINCIPAL')
+            ) OR EXISTS (
+                SELECT 1 FROM users u
+                WHERE u.id = $1 AND (u.is_platform_admin = true OR u.is_tenant_admin = true)
             )
-            .await?;
+            "#,
+        )
+        .bind(user_id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(false);
+
+        let can_edit = if is_super_or_admin {
+            false
+        } else {
+            assignment.teacher_user_id == user_id
+                || Self::can_user_edit_marks(
+                    pool,
+                    school_id,
+                    user_id,
+                    false,
+                    assignment.class_section_id,
+                    assignment.subject_id,
+                )
+                .await?
+        };
 
         if !can_edit {
             return Err(AppError::Forbidden(
@@ -1463,7 +1480,7 @@ impl ExamRepository {
             .await;
         }
 
-        Self::get_exam_event_detail(pool, school_id, event_id).await
+        Self::get_exam_event_detail(pool, school_id, event_id, Some(user_id)).await
     }
 
     /// Lists Exam Events for a given academic year with class count and earliest scheduled date
@@ -1532,6 +1549,7 @@ impl ExamRepository {
         pool: &PgPool,
         school_id: Uuid,
         event_id: Uuid,
+        user_id: Option<Uuid>,
     ) -> Result<ExamEventResponse, AppError> {
         let row = sqlx::query(
             r#"
@@ -1579,16 +1597,26 @@ impl ExamRepository {
         .await
         .map_err(|e| AppError::InternalServerError(e.to_string()))?;
 
-        let schedules = schedule_rows
-            .into_iter()
-            .map(|r| ExamResponse {
+        let mut schedules = Vec::with_capacity(schedule_rows.len());
+        for r in schedule_rows {
+            let cs_id: Uuid = r.get("class_section_id");
+            let sub_id: Uuid = r.get("subject_id");
+            let can_edit = if let Some(uid) = user_id {
+                Self::can_user_edit_marks(pool, school_id, uid, false, cs_id, sub_id)
+                    .await
+                    .unwrap_or(false)
+            } else {
+                false
+            };
+
+            schedules.push(ExamResponse {
                 id: r.get("id"),
                 exam_event_id: r.try_get("exam_event_id").ok().flatten(),
                 school_id: r.get("school_id"),
                 academic_year_id: r.get("academic_year_id"),
                 term_id: r.get("term_id"),
-                class_section_id: r.get("class_section_id"),
-                subject_id: r.get("subject_id"),
+                class_section_id: cs_id,
+                subject_id: sub_id,
                 class_name: r.get("class_name"),
                 section_name: r.get("section_name"),
                 subject_name: r.get("subject_name"),
@@ -1606,8 +1634,9 @@ impl ExamRepository {
                 whatsapp_notified: r.get("whatsapp_notified"),
                 created_by: r.get("created_by"),
                 created_at: r.get("created_at"),
-            })
-            .collect();
+                can_edit: Some(can_edit),
+            });
+        }
 
         // Fetch assigned classes from exam_event_classes (and auto-include any that have exams but no entry)
         let assigned_class_rows = sqlx::query(
@@ -1675,6 +1704,114 @@ impl ExamRepository {
         })
     }
 
+    /// Updates an existing Exam Event configuration (name, type, affects_overall, status, assigned classes)
+    pub async fn update_exam_event(
+        pool: &PgPool,
+        school_id: Uuid,
+        user_id: Uuid,
+        event_id: Uuid,
+        payload: UpdateExamEventPayload,
+    ) -> Result<ExamEventResponse, AppError> {
+        let mut tx = pool
+            .begin()
+            .await
+            .map_err(|e| AppError::InternalServerError(e.to_string()))?;
+
+        // 1. Update basic event fields
+        if let Some(ref name) = payload.name {
+            sqlx::query("UPDATE exam_events SET name = $1 WHERE id = $2 AND school_id = $3")
+                .bind(name.trim())
+                .bind(event_id)
+                .bind(school_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| AppError::InternalServerError(e.to_string()))?;
+        }
+
+        if let Some(ref exam_type) = payload.exam_type {
+            sqlx::query("UPDATE exam_events SET exam_type = $1 WHERE id = $2 AND school_id = $3")
+                .bind(exam_type.trim())
+                .bind(event_id)
+                .bind(school_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| AppError::InternalServerError(e.to_string()))?;
+
+            let _ = sqlx::query(
+                "UPDATE exams SET exam_type = $1 WHERE exam_event_id = $2 AND school_id = $3",
+            )
+            .bind(exam_type.trim())
+            .bind(event_id)
+            .bind(school_id)
+            .execute(&mut *tx)
+            .await;
+        }
+
+        if let Some(affects_overall) = payload.affects_overall {
+            sqlx::query(
+                "UPDATE exam_events SET affects_overall = $1 WHERE id = $2 AND school_id = $3",
+            )
+            .bind(affects_overall)
+            .bind(event_id)
+            .bind(school_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| AppError::InternalServerError(e.to_string()))?;
+
+            let _ = sqlx::query(
+                "UPDATE exams SET affects_overall = $1 WHERE exam_event_id = $2 AND school_id = $3",
+            )
+            .bind(affects_overall)
+            .bind(event_id)
+            .bind(school_id)
+            .execute(&mut *tx)
+            .await;
+        }
+
+        if let Some(ref status) = payload.status {
+            sqlx::query("UPDATE exam_events SET status = $1 WHERE id = $2 AND school_id = $3")
+                .bind(status.trim())
+                .bind(event_id)
+                .bind(school_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| AppError::InternalServerError(e.to_string()))?;
+        }
+
+        // 2. Sync assigned classes if provided
+        if let Some(ref class_ids) = payload.class_section_ids {
+            // Remove classes that are no longer assigned
+            let _ = sqlx::query(
+                "DELETE FROM exam_event_classes WHERE exam_event_id = $1 AND school_id = $2 AND NOT (class_section_id = ANY($3))",
+            )
+            .bind(event_id)
+            .bind(school_id)
+            .bind(class_ids)
+            .execute(&mut *tx)
+            .await;
+
+            // Insert newly assigned classes
+            for cs_id in class_ids {
+                let _ = sqlx::query(
+                    "INSERT INTO exam_event_classes (school_id, exam_event_id, class_section_id)
+                     VALUES ($1, $2, $3)
+                     ON CONFLICT (exam_event_id, class_section_id) DO NOTHING",
+                )
+                .bind(school_id)
+                .bind(event_id)
+                .bind(cs_id)
+                .execute(&mut *tx)
+                .await;
+            }
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| AppError::InternalServerError(e.to_string()))?;
+
+        Self::get_exam_event_detail(pool, school_id, event_id, Some(user_id)).await
+    }
+
     /// Fetches ALL distinct subjects for a class section — both Core and Elective.
     /// Used by exam timetable assignment so all 10 papers are shown and schedulable individually.
     pub async fn get_section_all_subjects(
@@ -1740,7 +1877,7 @@ impl ExamRepository {
         event_id: Uuid,
         payload: AddClassExamSchedulePayload,
     ) -> Result<Vec<ExamResponse>, AppError> {
-        let event = Self::get_exam_event_detail(pool, school_id, event_id).await?;
+        let event = Self::get_exam_event_detail(pool, school_id, event_id, Some(user_id)).await?;
 
         let exam_date =
             NaiveDate::parse_from_str(&payload.exam_date, "%Y-%m-%d").map_err(|_| {
@@ -1845,7 +1982,7 @@ impl ExamRepository {
         class_section_id: Uuid,
         payload: SaveClassExamTimetablePayload,
     ) -> Result<usize, AppError> {
-        let event = Self::get_exam_event_detail(pool, school_id, event_id).await?;
+        let event = Self::get_exam_event_detail(pool, school_id, event_id, Some(user_id)).await?;
 
         // Determine which sections to apply to (current section, or all sections of this class)
         let mut target_section_ids = vec![class_section_id];

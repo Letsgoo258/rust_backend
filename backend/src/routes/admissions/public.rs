@@ -22,7 +22,7 @@ use crate::{
 
 #[derive(Debug, Deserialize)]
 pub struct ValidateTokenQuery {
-    pub token: String,
+    pub token: Option<String>,
     pub phone: Option<String>,
 }
 
@@ -335,7 +335,7 @@ pub async fn get_captcha_challenge() -> Result<impl IntoResponse, AppError> {
 }
 
 /// GET /api/v1/admissions/public/validate-token
-/// Validates a pre-verified WhatsApp token and returns target phone/email
+/// Validates a pre-verified WhatsApp token or verified phone session and returns target phone/email
 pub async fn validate_preverified_token(
     State(state): State<AppState>,
     Query(query): Query<ValidateTokenQuery>,
@@ -352,25 +352,50 @@ pub async fn validate_preverified_token(
     } else {
         clean_phone.clone()
     };
+    let phone_plus91 = format!("+91{}", phone_10);
 
-    let otp_row = sqlx::query_as::<_, (Uuid, String, bool, chrono::DateTime<Utc>)>(
-        r#"
-        SELECT id, target, verified, expires_at
-        FROM admission_otps
-        WHERE verification_token = $1
-          AND target_type = 'PHONE'
-          AND verified = true
-          AND expires_at > now()
-        ORDER BY created_at DESC
-        LIMIT 1
-        "#,
-    )
-    .bind(&query.token)
-    .fetch_optional(&state.db)
-    .await?;
+    let token_clean = query.token.as_deref().unwrap_or("").trim();
+
+    let otp_row = if !token_clean.is_empty() {
+        sqlx::query_as::<_, (Uuid, String, bool, chrono::DateTime<Utc>, Option<String>)>(
+            r#"
+            SELECT id, target, verified, expires_at, verification_token
+            FROM admission_otps
+            WHERE verification_token = $1
+              AND target_type = 'PHONE'
+              AND verified = true
+              AND expires_at > now()
+            ORDER BY created_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(token_clean)
+        .fetch_optional(&state.db)
+        .await?
+    } else if !clean_phone.is_empty() {
+        sqlx::query_as::<_, (Uuid, String, bool, chrono::DateTime<Utc>, Option<String>)>(
+            r#"
+            SELECT id, target, verified, expires_at, verification_token
+            FROM admission_otps
+            WHERE (target = $1 OR target = $2 OR target = $3)
+              AND target_type = 'PHONE'
+              AND verified = true
+              AND expires_at > now()
+            ORDER BY created_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(&clean_phone)
+        .bind(&phone_10)
+        .bind(&phone_plus91)
+        .fetch_optional(&state.db)
+        .await?
+    } else {
+        None
+    };
 
     match otp_row {
-        Some((_, target, verified, _)) => {
+        Some((_, target, verified, _, v_token)) => {
             if !clean_phone.is_empty()
                 && !target.contains(&phone_10)
                 && !clean_phone.contains(&target)
@@ -379,6 +404,14 @@ pub async fn validate_preverified_token(
                     "Token does not match the provided phone number".into(),
                 ));
             }
+
+            let effective_token = v_token.unwrap_or_else(|| {
+                if !token_clean.is_empty() {
+                    token_clean.to_string()
+                } else {
+                    format!("phone_verified_{}", Uuid::new_v4())
+                }
+            });
 
             // Also check if an associated guardian/parent exists in users or admission_guardians
             let user_info = sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>, Option<String>)>(
@@ -425,7 +458,7 @@ pub async fn validate_preverified_token(
                 "phone": target,
                 "email": email_opt,
                 "guardian_name": guardian_name,
-                "token": query.token,
+                "token": effective_token,
                 "message": "Mobile number is pre-verified via WhatsApp"
             })))
         }
@@ -440,11 +473,12 @@ pub async fn send_phone_otp(
     State(state): State<AppState>,
     Json(payload): Json<SendOtpPayload>,
 ) -> Result<impl IntoResponse, AppError> {
-    let clean_phone: String = payload
-        .target
-        .chars()
-        .filter(|c| c.is_ascii_digit())
-        .collect();
+    let raw_target = payload.target.trim();
+    let normalized = crate::utils::phone::normalize_phone_number(raw_target);
+    let jid_digits = normalized.trim_start_matches('+');
+
+    let clean_phone: String = raw_target.chars().filter(|c| c.is_ascii_digit()).collect();
+
     if clean_phone.len() < 10 {
         return Err(AppError::BadRequest(
             "Please provide a valid 10-digit mobile number".into(),
@@ -457,6 +491,19 @@ pub async fn send_phone_otp(
     };
     let otp_str = otp.to_string();
 
+    // Clean up previous unverified OTPs for this number
+    let _ = sqlx::query(
+        r#"
+        DELETE FROM admission_otps
+        WHERE (target = $1 OR target = $2 OR target = $3) AND target_type = 'PHONE' AND verified = false
+        "#,
+    )
+    .bind(&clean_phone)
+    .bind(&normalized)
+    .bind(jid_digits)
+    .execute(&state.db)
+    .await;
+
     sqlx::query(
         r#"
         INSERT INTO admission_otps (target, target_type, otp_code, expires_at)
@@ -468,20 +515,20 @@ pub async fn send_phone_otp(
     .execute(&state.db)
     .await?;
 
-    // Attempt to dispatch via connected WhatsApp bot directly
-    let jid = format!("{clean_phone}@s.whatsapp.net");
+    // Format proper WhatsApp JID with country code e.g. 919876543210@s.whatsapp.net
+    let jid = format!("{jid_digits}@s.whatsapp.net");
     let msg = format!(
         "🔐 *ERAVAYA Admission Verification*\n\nYour one-time phone verification code is: *{otp_str}*\n\nThis code expires in 10 minutes. Please enter it on the admission application page."
     );
-    let _ = send_whatsapp_message(&state.db, &jid, &msg, None).await;
+    let _ = crate::utils::whatsapp::send_urgent_whatsapp_message(&state.db, &jid, &msg, None).await;
 
     println!("============================================================");
     println!("🎓 [ADMISSION WHATSAPP OTP DISPATCHED]");
-    println!("Target Phone: {}", clean_phone);
+    println!("Target Phone: {} (JID: {})", clean_phone, jid);
     println!("Verification Code: {}", otp_str);
     println!("============================================================");
 
-    tracing::info!(phone = %clean_phone, otp = %otp_str, "Dispatched admission phone OTP");
+    tracing::info!(phone = %clean_phone, jid = %jid, otp = %otp_str, "Dispatched admission phone OTP");
 
     Ok(Json(json!({
         "success": true,
@@ -495,22 +542,24 @@ pub async fn verify_phone_otp(
     State(state): State<AppState>,
     Json(payload): Json<VerifyOtpPayload>,
 ) -> Result<impl IntoResponse, AppError> {
-    let clean_phone: String = payload
-        .target
-        .chars()
-        .filter(|c| c.is_ascii_digit())
-        .collect();
+    let raw_target = payload.target.trim();
+    let normalized = crate::utils::phone::normalize_phone_number(raw_target);
+    let jid_digits = normalized.trim_start_matches('+');
+
+    let clean_phone: String = raw_target.chars().filter(|c| c.is_ascii_digit()).collect();
 
     let otp_row = sqlx::query_as::<_, (Uuid, String, chrono::DateTime<Utc>)>(
         r#"
         SELECT id, otp_code, expires_at
         FROM admission_otps
-        WHERE target = $1 AND target_type = 'PHONE' AND verified = false
+        WHERE (target = $1 OR target = $2 OR target = $3) AND target_type = 'PHONE' AND verified = false
         ORDER BY created_at DESC
         LIMIT 1
         "#,
     )
     .bind(&clean_phone)
+    .bind(&normalized)
+    .bind(jid_digits)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| {
@@ -981,7 +1030,9 @@ pub async fn submit_admission_application(
         "{} {}",
         payload.applicant_first_name, payload.applicant_last_name
     );
-    let jid = format!("{clean_phone}@s.whatsapp.net");
+    let normalized_guardian = crate::utils::phone::normalize_phone_number(&payload.guardian_phone);
+    let jid_digits = normalized_guardian.trim_start_matches('+');
+    let jid = format!("{jid_digits}@s.whatsapp.net");
     let confirm_msg = format!(
         "🎉 *ERAVAYA Admission Application Submitted!*\n\n\
         Dear *{}*,\n\

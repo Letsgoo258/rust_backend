@@ -414,23 +414,27 @@ pub async fn send_whatsapp_message(
     text: &str,
     idempotency_key: Option<&str>,
 ) -> Result<Uuid> {
-    let effective_recipient = if is_localhost_or_dev() {
-        let dev_target = "+918848656908";
-        println!("============================================================");
-        println!("🔧 [LOCALHOST / DEV WHATSAPP ROUTE]");
-        println!("Original Recipient: {}", recipient);
-        println!("Routed To Test Number: {}", dev_target);
-        println!("Message: {}", text);
-        println!("============================================================");
-        dev_target
-    } else {
-        println!("============================================================");
-        println!("💬 [WHATSAPP DISPATCHED TO REAL SERVICE]");
-        println!("Recipient: {}", recipient);
-        println!("Message: {}", text);
-        println!("============================================================");
-        recipient
-    };
+    let effective_recipient =
+        if let Ok(override_phone) = std::env::var("DEV_WHATSAPP_OVERRIDE_PHONE") {
+            if !override_phone.trim().is_empty() {
+                println!("============================================================");
+                println!("🔧 [DEV WHATSAPP ROUTE OVERRIDDEN]");
+                println!("Original Recipient: {}", recipient);
+                println!("Routed To Dev Override: {}", override_phone);
+                println!("Message: {}", text);
+                println!("============================================================");
+                override_phone
+            } else {
+                recipient.to_string()
+            }
+        } else {
+            println!("============================================================");
+            println!("💬 [WHATSAPP DISPATCHED TO RECIPIENT]");
+            println!("Recipient: {}", recipient);
+            println!("Message: {}", text);
+            println!("============================================================");
+            recipient.to_string()
+        };
 
     let queue = QueueManager::new(pool.clone());
     let payload = serde_json::json!({
@@ -438,7 +442,7 @@ pub async fn send_whatsapp_message(
         "skip_typing": false,
     });
     queue
-        .enqueue(effective_recipient, "text", payload, 0, idempotency_key)
+        .enqueue(&effective_recipient, "text", payload, 0, idempotency_key)
         .await
 }
 
@@ -456,28 +460,35 @@ pub async fn send_urgent_whatsapp_message(
     text: &str,
     idempotency_key: Option<&str>,
 ) -> Result<Uuid> {
-    if is_localhost_or_dev() {
-        println!("============================================================");
-        println!("🛑 [LOCALHOST DETECTED - URGENT WHATSAPP LIVE SEND BLOCKED]");
-        println!("Recipient: {}", recipient);
-        println!("Message: {}", text);
-        println!("Notice: Real WhatsApp socket dispatch skipped on localhost to prevent multi-device conflict with cloud.");
-        println!("============================================================");
-        return Ok(Uuid::new_v4());
-    }
+    let effective_recipient =
+        if let Ok(override_phone) = std::env::var("DEV_WHATSAPP_OVERRIDE_PHONE") {
+            if !override_phone.trim().is_empty() {
+                println!("============================================================");
+                println!("🔧 [DEV URGENT WHATSAPP ROUTE OVERRIDDEN]");
+                println!("Original Recipient: {}", recipient);
+                println!("Routed To Dev Override: {}", override_phone);
+                println!("Message: {}", text);
+                println!("============================================================");
+                override_phone
+            } else {
+                recipient.to_string()
+            }
+        } else {
+            println!("============================================================");
+            println!("💬 [URGENT WHATSAPP DISPATCHED TO RECIPIENT]");
+            println!("Recipient: {}", recipient);
+            println!("Message: {}", text);
+            println!("============================================================");
+            recipient.to_string()
+        };
 
-    println!("============================================================");
-    println!("💬 [URGENT WHATSAPP DISPATCHED TO REAL SERVICE]");
-    println!("Recipient: {}", recipient);
-    println!("Message: {}", text);
-    println!("============================================================");
     let queue = QueueManager::new(pool.clone());
     let payload = serde_json::json!({
         "text": text,
         "skip_typing": true,
     });
     queue
-        .enqueue(recipient, "text", payload, 10, idempotency_key)
+        .enqueue(&effective_recipient, "text", payload, 10, idempotency_key)
         .await
 }
 

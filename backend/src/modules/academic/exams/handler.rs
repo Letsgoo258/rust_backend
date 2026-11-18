@@ -5,7 +5,7 @@ use crate::{
             dto::{
                 AddClassExamSchedulePayload, AssignmentFilterQuery, CreateAssignmentPayload,
                 CreateExamEventPayload, CreateExamPayload, ExamFilterQuery,
-                SaveClassExamTimetablePayload, SaveMarksPayload,
+                SaveClassExamTimetablePayload, SaveMarksPayload, UpdateExamEventPayload,
             },
             repository::ExamRepository,
         },
@@ -87,7 +87,26 @@ impl ExamHandler {
             .user
             .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
 
-        let event = ExamRepository::get_exam_event_detail(&state.db, user.school_id, id).await?;
+        let event =
+            ExamRepository::get_exam_event_detail(&state.db, user.school_id, id, Some(user.id))
+                .await?;
+        Ok((StatusCode::OK, Json(event)))
+    }
+
+    /// PUT /api/v1/academic/exam-events/:id
+    pub async fn update_exam_event(
+        auth_session: AuthSession,
+        State(state): State<AppState>,
+        Path(id): Path<Uuid>,
+        Json(payload): Json<UpdateExamEventPayload>,
+    ) -> Result<impl IntoResponse, AppError> {
+        let user = auth_session
+            .user
+            .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+        let event =
+            ExamRepository::update_exam_event(&state.db, user.school_id, user.id, id, payload)
+                .await?;
         Ok((StatusCode::OK, Json(event)))
     }
 
@@ -257,13 +276,23 @@ impl ExamHandler {
             .user
             .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
 
-        let is_admin = user.is_school_admin()
+        let is_admin_or_super = user.is_school_admin()
             || user.roles.iter().any(|r| {
                 r.eq_ignore_ascii_case("SUPER_ADMIN")
-                    || r.eq_ignore_ascii_case("EXAM_COORDINATOR")
-                    || r.eq_ignore_ascii_case("VICE_PRINCIPAL")
+                    || r.eq_ignore_ascii_case("SCHOOL_ADMIN")
+                    || r.eq_ignore_ascii_case("HEADMASTER")
                     || r.eq_ignore_ascii_case("PRINCIPAL")
             });
+
+        if is_admin_or_super {
+            return Err(AppError::Forbidden(
+                "Access denied: Super Admin and School Admin can only view results. Assignment marks can only be entered and saved by respective subject teachers.".into(),
+            ));
+        }
+
+        let is_admin = user.roles.iter().any(|r| {
+            r.eq_ignore_ascii_case("EXAM_COORDINATOR") || r.eq_ignore_ascii_case("VICE_PRINCIPAL")
+        });
 
         if !is_admin {
             return Err(AppError::Forbidden(
@@ -300,13 +329,23 @@ impl ExamHandler {
             .user
             .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
 
-        let is_admin = user.is_school_admin()
+        let is_admin_or_super = user.is_school_admin()
             || user.roles.iter().any(|r| {
                 r.eq_ignore_ascii_case("SUPER_ADMIN")
-                    || r.eq_ignore_ascii_case("EXAM_COORDINATOR")
-                    || r.eq_ignore_ascii_case("VICE_PRINCIPAL")
+                    || r.eq_ignore_ascii_case("SCHOOL_ADMIN")
+                    || r.eq_ignore_ascii_case("HEADMASTER")
                     || r.eq_ignore_ascii_case("PRINCIPAL")
             });
+
+        if is_admin_or_super {
+            return Err(AppError::Forbidden(
+                "Access denied: Super Admin and School Admin can only view results. Assignment marks can only be entered and saved by respective subject teachers.".into(),
+            ));
+        }
+
+        let is_admin = user.roles.iter().any(|r| {
+            r.eq_ignore_ascii_case("EXAM_COORDINATOR") || r.eq_ignore_ascii_case("VICE_PRINCIPAL")
+        });
 
         let detail =
             ExamRepository::get_exam_detail(&state.db, user.school_id, user.id, is_admin, id)
@@ -326,13 +365,23 @@ impl ExamHandler {
             .user
             .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
 
-        let is_admin = user.is_school_admin()
+        let is_admin_or_super = user.is_school_admin()
             || user.roles.iter().any(|r| {
                 r.eq_ignore_ascii_case("SUPER_ADMIN")
-                    || r.eq_ignore_ascii_case("EXAM_COORDINATOR")
-                    || r.eq_ignore_ascii_case("VICE_PRINCIPAL")
+                    || r.eq_ignore_ascii_case("SCHOOL_ADMIN")
+                    || r.eq_ignore_ascii_case("HEADMASTER")
                     || r.eq_ignore_ascii_case("PRINCIPAL")
             });
+
+        if is_admin_or_super {
+            return Err(AppError::Forbidden(
+                "Access denied: Super Admin and School Admin can only view results. Marks can only be entered and saved by respective subject teachers.".into(),
+            ));
+        }
+
+        let is_admin = user.roles.iter().any(|r| {
+            r.eq_ignore_ascii_case("EXAM_COORDINATOR") || r.eq_ignore_ascii_case("VICE_PRINCIPAL")
+        });
 
         ExamRepository::save_exam_marks(&state.db, user.school_id, user.id, is_admin, id, payload)
             .await?;
@@ -428,13 +477,23 @@ impl ExamHandler {
             .user
             .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
 
-        let is_admin = user.is_school_admin()
+        let is_admin_or_super = user.is_school_admin()
             || user.roles.iter().any(|r| {
                 r.eq_ignore_ascii_case("SUPER_ADMIN")
-                    || r.eq_ignore_ascii_case("EXAM_COORDINATOR")
-                    || r.eq_ignore_ascii_case("VICE_PRINCIPAL")
+                    || r.eq_ignore_ascii_case("SCHOOL_ADMIN")
+                    || r.eq_ignore_ascii_case("HEADMASTER")
                     || r.eq_ignore_ascii_case("PRINCIPAL")
             });
+
+        if is_admin_or_super {
+            return Err(AppError::Forbidden(
+                "Access denied: Super Admin and School Admin can only view results. Assignment marks can only be entered and saved by respective subject teachers.".into(),
+            ));
+        }
+
+        let is_admin = user.roles.iter().any(|r| {
+            r.eq_ignore_ascii_case("EXAM_COORDINATOR") || r.eq_ignore_ascii_case("VICE_PRINCIPAL")
+        });
 
         let detail =
             ExamRepository::get_assignment_detail(&state.db, user.school_id, user.id, is_admin, id)
@@ -454,13 +513,23 @@ impl ExamHandler {
             .user
             .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
 
-        let is_admin = user.is_school_admin()
+        let is_admin_or_super = user.is_school_admin()
             || user.roles.iter().any(|r| {
                 r.eq_ignore_ascii_case("SUPER_ADMIN")
-                    || r.eq_ignore_ascii_case("EXAM_COORDINATOR")
-                    || r.eq_ignore_ascii_case("VICE_PRINCIPAL")
+                    || r.eq_ignore_ascii_case("SCHOOL_ADMIN")
+                    || r.eq_ignore_ascii_case("HEADMASTER")
                     || r.eq_ignore_ascii_case("PRINCIPAL")
             });
+
+        if is_admin_or_super {
+            return Err(AppError::Forbidden(
+                "Access denied: Super Admin and School Admin can only view results. Assignment marks can only be entered and saved by respective subject teachers.".into(),
+            ));
+        }
+
+        let is_admin = user.roles.iter().any(|r| {
+            r.eq_ignore_ascii_case("EXAM_COORDINATOR") || r.eq_ignore_ascii_case("VICE_PRINCIPAL")
+        });
 
         ExamRepository::save_assignment_marks(
             &state.db,

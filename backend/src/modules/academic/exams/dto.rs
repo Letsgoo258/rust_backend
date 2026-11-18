@@ -148,6 +148,17 @@ pub struct ExamResponse {
     pub whatsapp_notified: bool,
     pub created_by: Option<Uuid>,
     pub created_at: String,
+    #[serde(default)]
+    pub can_edit: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateExamEventPayload {
+    pub name: Option<String>,
+    pub exam_type: Option<String>,
+    pub affects_overall: Option<bool>,
+    pub status: Option<String>,
+    pub class_section_ids: Option<Vec<Uuid>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

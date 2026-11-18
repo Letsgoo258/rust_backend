@@ -143,7 +143,8 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/exam-events/:id",
-            get(crate::modules::academic::exams::ExamHandler::get_exam_event_detail),
+            get(crate::modules::academic::exams::ExamHandler::get_exam_event_detail)
+                .put(crate::modules::academic::exams::ExamHandler::update_exam_event),
         )
         .route(
             "/exam-events/:id/classes",

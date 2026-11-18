@@ -11,10 +11,11 @@ pub fn default_enabled_keys(role_code: &str) -> HashSet<&'static str> {
         "SUPER_ADMIN" | "SCHOOL_ADMIN" | "HEADMASTER" | "PRINCIPAL" => {
             for (key, _, _, _) in catalogue() {
                 // School Admins and Super Admins are strictly prohibited from initial attendance recording
-                // and from directly saving exam marks (they can only view results)
+                // and from directly entering/saving/editing exam marks (they can only view results)
                 if key != "attendance:record"
                     && key != "attendance:mark"
                     && key != "exams:save_marks"
+                    && key != "exams:enter_marks"
                 {
                     set.insert(key);
                 }
@@ -80,9 +81,7 @@ pub fn default_enabled_keys(role_code: &str) -> HashSet<&'static str> {
             set.insert("users:export");
             set.insert("academics:view");
             set.insert("academics:assign_students");
-            set.insert("exams:enter_marks");
             set.insert("exams:view_results");
-            set.insert("exams:save_marks");
             set.insert("attendance:view");
             set.insert("attendance:record");
             set.insert("attendance:mark");

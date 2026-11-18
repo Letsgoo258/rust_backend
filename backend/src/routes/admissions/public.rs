@@ -31,6 +31,8 @@ pub struct UploadDocumentPayload {
     pub admission_id: Uuid,
     pub application_number: String,
     pub image_base64: String,
+    pub document_type: Option<String>,
+    pub file_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -276,6 +278,28 @@ pub async fn get_public_admission_config(
         )
         .collect();
 
+    // 3. Fetch active classes configured for this school
+    let classes_rows = sqlx::query_as::<_, (Uuid, String)>(
+        r#"
+        SELECT id, name
+        FROM classes
+        WHERE school_id = $1
+        ORDER BY sequence ASC, name ASC
+        "#,
+    )
+    .bind(school_id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    let classes: Vec<serde_json::Value> = classes_rows
+        .into_iter()
+        .map(|(id, name)| json!({ "id": id, "name": name }))
+        .collect();
+
+    let bot_phone =
+        std::env::var("WHATSAPP_BOT_PHONE").unwrap_or_else(|_| "919605449544".to_string());
+
     Ok(Json(json!({
         "success": true,
         "school_id": school_id,
@@ -286,7 +310,9 @@ pub async fn get_public_admission_config(
         "academic_year_id": config.academic_year_id,
         "academic_year_name": config.academic_year_name,
         "required_docs": config.required_docs,
-        "custom_fields": custom_fields
+        "custom_fields": custom_fields,
+        "classes": classes,
+        "whatsapp_bot_phone": bot_phone
     })))
 }
 
@@ -1229,11 +1255,70 @@ pub async fn upload_admission_document(
     };
 
     // 3. Upload to ImageKit / local archive with 24-hour signed link
+    let doc_type = payload.document_type.as_deref().unwrap_or("form");
     let file_clean = application_number.replace(['/', ' '], "_");
-    let file_name = format!("Admission_Form_{file_clean}.png");
-    let folder = format!("/admissions/{ay_name}");
+    let file_name = if let Some(ref custom_name) = payload.file_name {
+        custom_name.clone()
+    } else if doc_type == "form" {
+        format!("Admission_Form_{file_clean}.png")
+    } else {
+        format!("{doc_type}_{file_clean}.png")
+    };
+    let folder = format!("/admissions/{ay_name}/{file_clean}");
 
     let upload_res = ImageKitClient::upload_document(image_bytes, &file_name, &folder).await?;
+
+    // If uploading a supporting document attachment (e.g. birth_cert, address_proof, photo):
+    if doc_type != "form" {
+        let field_key = format!("doc_{doc_type}_url");
+        let field_id: Option<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM custom_fields WHERE school_id = $1 AND field_key = $2",
+        )
+        .bind(school_id)
+        .bind(&field_key)
+        .fetch_optional(&state.db)
+        .await?;
+
+        let fid = match field_id {
+            Some(id) => id,
+            None => {
+                let display_title = format!("Document: {}", doc_type.replace('_', " "));
+                sqlx::query_scalar(
+                    r#"
+                    INSERT INTO custom_fields (school_id, entity_type, field_name, field_key, field_type, is_required)
+                    VALUES ($1, 'ADMISSION', $2, $3, 'TEXT', false)
+                    RETURNING id
+                    "#,
+                )
+                .bind(school_id)
+                .bind(&display_title)
+                .bind(&field_key)
+                .fetch_one(&state.db)
+                .await?
+            }
+        };
+
+        sqlx::query(
+            r#"
+            INSERT INTO admission_custom_values (admission_id, field_id, value)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (admission_id, field_id) DO UPDATE SET value = EXCLUDED.value
+            "#,
+        )
+        .bind(admission_id)
+        .bind(fid)
+        .bind(&upload_res.signed_url_24h)
+        .execute(&state.db)
+        .await?;
+
+        return Ok(Json(json!({
+            "success": true,
+            "document_url": upload_res.signed_url_24h,
+            "file_id": upload_res.file_id,
+            "expires_at": upload_res.expires_at,
+            "message": format!("Document {doc_type} uploaded successfully to ImageKit")
+        })));
+    }
 
     // 4. Retrieve applicant and guardian contacts
     let applicant_name = sqlx::query_as::<_, (String, String)>(

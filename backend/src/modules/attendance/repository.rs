@@ -1219,7 +1219,20 @@ impl AttendanceRepository {
         start_date: NaiveDate,
         end_date: NaiveDate,
     ) -> Result<WeeklyHeatmapResponse, AppError> {
-        let today = Utc::now().date_naive();
+        let school_tz_str: Option<String> =
+            sqlx::query_scalar("SELECT timezone FROM schools WHERE id = $1")
+                .bind(school_id)
+                .fetch_optional(pool)
+                .await
+                .unwrap_or(None);
+        let today_time =
+            crate::utils::datetime::DateUtils::today_in_timezone(school_tz_str.as_deref());
+        let today = chrono::NaiveDate::from_ymd_opt(
+            today_time.year(),
+            today_time.month() as u32,
+            today_time.day() as u32,
+        )
+        .unwrap_or_else(|| Utc::now().date_naive());
 
         // 1. Generate Day Headers for the date range
         let mut day_headers = Vec::new();

@@ -555,12 +555,20 @@ impl ImageKitClient {
         file_name: &str,
         folder: &str,
     ) -> Result<ImageKitUploadResult, AppError> {
+        let mime = if file_name.ends_with(".pdf") {
+            Some("application/pdf".to_string())
+        } else if file_name.ends_with(".jpg") || file_name.ends_with(".jpeg") {
+            Some("image/jpeg".to_string())
+        } else {
+            Some("image/png".to_string())
+        };
+
         Self::upload_file(
             file_bytes,
             ImageKitUploadOptions {
                 file_name: file_name.to_string(),
                 folder: folder.to_string(),
-                mime_type: Some("image/png".to_string()),
+                mime_type: mime,
                 tags: vec!["admission_document".to_string()],
                 use_unique_file_name: false,
                 is_private: false,

@@ -355,6 +355,7 @@ async fn test_change_subject_success() {
             new_elective_group_id: None,
             is_elective_slot: false,
             co_teacher_staff_ids: vec![],
+            is_shared: false,
         },
     )
     .await;
@@ -430,6 +431,7 @@ async fn test_change_subject_teacher_clash() {
             new_elective_group_id: None,
             is_elective_slot: false,
             co_teacher_staff_ids: vec![],
+            is_shared: false,
         },
     )
     .await;
@@ -495,6 +497,7 @@ async fn test_change_subject_duplicate_subject_at_slot() {
             new_elective_group_id: None,
             is_elective_slot: false,
             co_teacher_staff_ids: vec![],
+            is_shared: false,
         },
     )
     .await;
@@ -562,6 +565,7 @@ async fn test_change_subject_elective_with_group() {
             new_elective_group_id: Some(elective_group_id),
             is_elective_slot: true,
             co_teacher_staff_ids: vec![],
+            is_shared: false,
         },
     )
     .await;

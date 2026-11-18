@@ -107,7 +107,9 @@ pub struct SwapSlotsInput {
     pub slot_b_id: Uuid,
 }
 
+#[allow(dead_code)]
 pub type ChangeSlotSubjectInput = ChangeSubjectInput;
+#[allow(dead_code)]
 pub type ChangeSlotClassInput = ChangeClassInput;
 
 pub struct TimetableService;

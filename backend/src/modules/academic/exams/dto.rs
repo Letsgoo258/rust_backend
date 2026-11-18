@@ -87,6 +87,7 @@ pub struct SaveClassExamTimetablePayload {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct AddClassExamSchedulePayload {
     pub class_section_id: Uuid,
     #[serde(default)]

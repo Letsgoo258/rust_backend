@@ -110,6 +110,34 @@ impl ExamHandler {
         Ok((StatusCode::OK, Json(event)))
     }
 
+    /// DELETE /api/v1/academic/exam-events/:id
+    pub async fn delete_exam_event(
+        auth_session: AuthSession,
+        State(state): State<AppState>,
+        Path(id): Path<Uuid>,
+    ) -> Result<impl IntoResponse, AppError> {
+        let user = auth_session
+            .user
+            .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+        if !user.is_school_admin() {
+            return Err(AppError::Forbidden(
+                "Access denied: Deleting exam events is strictly reserved for School Administrators."
+                    .into(),
+            ));
+        }
+
+        ExamRepository::delete_exam_event(&state.db, user.school_id, id).await?;
+
+        Ok((
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "success": true,
+                "message": "Exam event deleted successfully."
+            })),
+        ))
+    }
+
     /// GET /api/v1/academic/class-section/:id/core-subjects
     /// Returns ALL subjects (Core + Elective) for the class section for exam scheduling
     pub async fn get_section_core_subjects(

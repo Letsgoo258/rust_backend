@@ -317,37 +317,32 @@ impl ImageKitClient {
 
             let file_data_uri = format!("data:{};base64,{}", upload_mime, b64_file);
 
-            let mut form_params = vec![
-                ("file", file_data_uri),
-                ("fileName", opts.file_name.clone()),
-                ("folder", opts.folder.clone()),
-                (
+            let mut form = reqwest::multipart::Form::new()
+                .text("file", file_data_uri)
+                .text("fileName", opts.file_name.clone())
+                .text("folder", opts.folder.clone())
+                .text(
                     "useUniqueFileName",
                     if opts.use_unique_file_name {
                         "true"
                     } else {
                         "false"
-                    }
-                    .to_string(),
-                ),
-                (
+                    },
+                )
+                .text(
                     "isPrivateFile",
-                    if opts.is_private { "true" } else { "false" }.to_string(),
-                ),
-            ];
+                    if opts.is_private { "true" } else { "false" },
+                );
 
             let tags_str = opts.tags.join(",");
             if !tags_str.is_empty() {
-                form_params.push(("tags", tags_str));
+                form = form.text("tags", tags_str);
             }
-
-            let encoded_body = serde_urlencoded::to_string(&form_params).unwrap_or_default();
 
             let resp = client
                 .post("https://upload.imagekit.io/api/v1/files/upload")
                 .header("Authorization", format!("Basic {}", basic_auth))
-                .header("Content-Type", "application/x-www-form-urlencoded")
-                .body(encoded_body)
+                .multipart(form)
                 .send()
                 .await;
 

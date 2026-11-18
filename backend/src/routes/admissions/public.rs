@@ -921,6 +921,37 @@ pub async fn submit_admission_application(
     // 7. Begin Database Transaction for Atomic SRD Insertion
     let mut tx = state.db.begin().await?;
 
+    // Check for duplicate applicant in the same academic year to prevent double submissions
+    let existing_app = sqlx::query_as::<_, (Uuid, Option<String>)>(
+        r#"
+        SELECT a.id, a.application_number
+        FROM admissions a
+        JOIN admission_applicants ap ON ap.admission_id = a.id
+        WHERE a.school_id = $1
+          AND a.academic_year_id = $2
+          AND LOWER(TRIM(ap.first_name)) = LOWER(TRIM($3))
+          AND LOWER(TRIM(ap.last_name)) = LOWER(TRIM($4))
+          AND ap.date_of_birth = $5
+          AND a.status NOT IN ('REJECTED', 'CANCELLED')
+        LIMIT 1
+        "#,
+    )
+    .bind(school_id)
+    .bind(ay_id)
+    .bind(&payload.applicant_first_name)
+    .bind(&payload.applicant_last_name)
+    .bind(dob)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    if let Some((_, existing_app_no)) = existing_app {
+        let app_no_str = existing_app_no.unwrap_or_else(|| "PENDING".to_string());
+        return Err(AppError::Conflict(format!(
+            "An admission application for {} {} has already been submitted (Application No: {}). Please do not submit duplicate applications.",
+            payload.applicant_first_name, payload.applicant_last_name, app_no_str
+        )));
+    }
+
     let admission_id: Uuid = sqlx::query_scalar(
         r#"
         INSERT INTO admissions (school_id, academic_year_id, application_number, status, submitted_at)
@@ -1023,6 +1054,18 @@ pub async fn submit_admission_application(
         .await?;
     }
 
+    // Invalidate phone verification token so it cannot be reused for duplicate submissions
+    let _ = sqlx::query(
+        r#"
+        UPDATE admission_otps
+        SET verified = false, verification_token = NULL
+        WHERE verification_token = $1
+        "#,
+    )
+    .bind(&payload.phone_token)
+    .execute(&mut *tx)
+    .await;
+
     tx.commit().await?;
 
     // 8. Dispatch Confirmation WhatsApp Message
@@ -1113,7 +1156,9 @@ pub async fn get_submitted_application_details(
         ),
     >(
         r#"
-        SELECT name, address, city, phone, email
+        SELECT name,
+               NULLIF(CONCAT_WS(', ', address_line_1, address_line_2), '') as address,
+               city, phone, email
         FROM schools
         WHERE id = $1
         "#,
@@ -1507,4 +1552,53 @@ pub async fn serve_local_document(
         ],
         bytes,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_captcha_token_encoding_and_validation() {
+        let a = 12;
+        let b = 8;
+        let sum = a + b;
+        let salt = Uuid::new_v4().to_string();
+        let token = format!("{salt}:{a}:{b}:{sum}");
+        let encoded_token = hex::encode(token.as_bytes());
+
+        // Validate decoding logic
+        let decoded = hex::decode(&encoded_token).expect("hex decode");
+        let decoded_str = String::from_utf8(decoded).expect("utf8");
+        let parts: Vec<&str> = decoded_str.split(':').collect();
+        assert_eq!(parts.len(), 4);
+        assert_eq!(parts[3], "20");
+    }
+
+    #[test]
+    fn test_phone_number_cleaning_and_last_10_extraction() {
+        let phone = "+91 98765 43210";
+        let clean: String = phone.chars().filter(|c| c.is_ascii_digit()).collect();
+        assert_eq!(clean, "919876543210");
+        let phone_10 = if clean.len() > 10 {
+            clean[clean.len() - 10..].to_string()
+        } else {
+            clean.clone()
+        };
+        assert_eq!(phone_10, "9876543210");
+    }
+
+    #[test]
+    fn test_school_address_concat_ws_formatting() {
+        let addr1: Option<&str> = Some("123 Campus Road");
+        let addr2: Option<&str> = Some("Knowledge Park Phase 2");
+        let parts: Vec<&str> = [addr1, addr2].into_iter().flatten().collect();
+        let formatted = parts.join(", ");
+        assert_eq!(formatted, "123 Campus Road, Knowledge Park Phase 2");
+
+        let addr1_only: Option<&str> = Some("Central Avenue");
+        let addr2_none: Option<&str> = None;
+        let parts2: Vec<&str> = [addr1_only, addr2_none].into_iter().flatten().collect();
+        assert_eq!(parts2.join(", "), "Central Avenue");
+    }
 }

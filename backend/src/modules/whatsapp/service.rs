@@ -528,6 +528,16 @@ impl WhatsAppMessageService {
                         ];
                     }
 
+                    // If user provides a fresh explicit "take attendance" command, break out of existing state
+                    if menus::attendance::is_take_attendance(trimmed) {
+                        let _ =
+                            WhatsAppRepository::clear_conversation_state(pool, session.id).await;
+                        info!(sender = %sender_jid, "User initiated fresh take attendance command; clearing previous state");
+                        return vec![
+                            menus::attendance::start_attendance_flow(pool, &context, trimmed).await,
+                        ];
+                    }
+
                     info!(sender = %sender_jid, state = %state_type, "Handling interactive WhatsApp conversation step");
                     return vec![
                         menus::attendance::handle_attendance_conversation_step(
@@ -584,7 +594,9 @@ impl WhatsAppMessageService {
                             context.role
                         )];
                     }
-                    return vec![menus::attendance::start_attendance_flow(pool, &context).await];
+                    return vec![
+                        menus::attendance::start_attendance_flow(pool, &context, trimmed).await,
+                    ];
                 }
 
                 // 1️⃣ Attendance Menu
@@ -686,6 +698,34 @@ impl WhatsAppMessageService {
             Utc::now(),
         )
         .await;
+
+        // Immediate feedback: If teacher is submitting attendance roll-call, enqueue "⏳ Processing..." first
+        if let Ok(Some(session)) = WhatsAppRepository::get_session_by_jid(pool, sender_jid).await {
+            if let Ok(Some((state_type, _))) =
+                WhatsAppRepository::get_conversation_state(pool, session.id).await
+            {
+                if state_type == "ATTENDANCE_WAITING_FOR_ABSENTEES" {
+                    let is_cancel = trimmed.eq_ignore_ascii_case("cancel")
+                        || trimmed.eq_ignore_ascii_case("exit")
+                        || trimmed.eq_ignore_ascii_case("abort");
+                    let is_date = trimmed.starts_with("date")
+                        || trimmed.starts_with("yesterday")
+                        || trimmed.starts_with("today");
+                    if !is_cancel
+                        && !is_date
+                        && menus::attendance::parse_attendance_command(trimmed).is_ok()
+                    {
+                        let _ = send_whatsapp_message(
+                            pool,
+                            sender_jid,
+                            "⏳ Processing attendance...",
+                            None,
+                        )
+                        .await;
+                    }
+                }
+            }
+        }
 
         // 2. Generate replies
         let replies = Self::generate_reply_messages(pool, sender_jid, None, trimmed).await;

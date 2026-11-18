@@ -1,3 +1,4 @@
+use crate::modules::whatsapp::menus::attendance::parse_attendance_command;
 use crate::modules::whatsapp::repository::WhatsAppRepository;
 use crate::modules::whatsapp::service::WhatsAppMessageService;
 use crate::utils::whatsapp::{parse_jid, WhatsAppClient};
@@ -79,6 +80,39 @@ impl WhatsAppReplyWorker {
         }
 
         let start_time = std::time::Instant::now();
+        let wa_client = self.client.client();
+
+        // Immediate UX feedback: If teacher is submitting attendance roll-call (absent/present query),
+        // send "⏳ Processing attendance..." directly over WebSocket immediately so they receive instant feedback while DB processing runs!
+        let mut sent_processing_indicator = false;
+        if let Ok(Some(session)) =
+            WhatsAppRepository::get_session_by_jid(&self.pool, &sender_jid).await
+        {
+            if let Ok(Some((state_type, _))) =
+                WhatsAppRepository::get_conversation_state(&self.pool, session.id).await
+            {
+                if state_type == "ATTENDANCE_WAITING_FOR_ABSENTEES" {
+                    let is_cancel = text.eq_ignore_ascii_case("cancel")
+                        || text.eq_ignore_ascii_case("exit")
+                        || text.eq_ignore_ascii_case("abort");
+                    let is_date = text.starts_with("date")
+                        || text.starts_with("yesterday")
+                        || text.starts_with("today");
+                    if !is_cancel && !is_date && parse_attendance_command(text).is_ok() {
+                        if let Ok(jid) = parse_jid(&sender_jid) {
+                            if wa_client
+                                .send_text(jid, "⏳ Processing attendance...")
+                                .await
+                                .is_ok()
+                            {
+                                sent_processing_indicator = true;
+                                info!(sender = %sender_jid, "Dispatched immediate 'Processing attendance...' confirmation over WebSocket");
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         // 1. Generate reply messages (returns 2 messages for registration/login so link is easy to copy/paste)
         let reply_messages = WhatsAppMessageService::generate_reply_messages(
@@ -94,7 +128,6 @@ impl WhatsAppReplyWorker {
         }
 
         // 2. Deliver through WhatsApp socket with natural human reading delay and typing presence
-        let wa_client = self.client.client();
         match parse_jid(&sender_jid) {
             Ok(jid) => {
                 for (idx, msg) in reply_messages.iter().enumerate() {
@@ -106,8 +139,13 @@ impl WhatsAppReplyWorker {
                         tokio::time::sleep(Duration::from_millis(between_pause)).await;
                     }
 
-                    // Display realistic "typing..." presence with random reading/typing jitter
-                    simulate_human_typing(&wa_client, &jid, msg.len()).await;
+                    // Display realistic "typing..." presence only if we haven't already sent a processing indicator
+                    if !sent_processing_indicator {
+                        simulate_human_typing(&wa_client, &jid, msg.len()).await;
+                    } else {
+                        // Deliver receipt swiftly without artificial typing delay
+                        tokio::time::sleep(Duration::from_millis(150)).await;
+                    }
 
                     match wa_client.send_text(jid.clone(), msg).await {
                         Ok(_) => {

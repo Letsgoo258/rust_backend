@@ -314,14 +314,14 @@ impl UserRepository {
                 // Trigram similarity for typo tolerance
                 qb.push(" OR similarity(COALESCE(u.first_name, ''), ");
                 qb.push_bind(clean_search.to_string());
-                qb.push(") >= 0.25");
+                qb.push(") >= 0.35");
                 qb.push(" OR similarity(COALESCE(u.last_name, ''), ");
                 qb.push_bind(clean_search.to_string());
-                qb.push(") >= 0.25");
+                qb.push(") >= 0.35");
                 qb.push(" OR word_similarity(");
                 qb.push_bind(clean_search.to_string());
                 qb.push(
-                    ", COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '')) >= 0.55",
+                    ", COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '')) >= 0.60",
                 );
                 qb.push(")");
             }

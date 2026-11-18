@@ -10,7 +10,7 @@ use crate::{
     state::AppState,
 };
 use axum::{
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
     Router,
 };
 
@@ -62,7 +62,20 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/timetable/slots/:id",
-            delete(crate::modules::academic::timetable::TimetableHandler::delete_slot),
+            get(crate::modules::academic::timetable::TimetableHandler::get_slot_by_id)
+                .delete(crate::modules::academic::timetable::TimetableHandler::delete_slot),
+        )
+        .route(
+            "/timetable/slots/:id/change-subject",
+            patch(crate::modules::academic::timetable::TimetableHandler::change_slot_subject),
+        )
+        .route(
+            "/timetable/slots/:id/change-class",
+            patch(crate::modules::academic::timetable::TimetableHandler::change_slot_class),
+        )
+        .route(
+            "/timetable/slots/swap",
+            post(crate::modules::academic::timetable::TimetableHandler::swap_slots),
         )
         .route(
             "/timetable/auto-generate",

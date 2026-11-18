@@ -76,6 +76,40 @@ pub struct CreateSubstitutionInput {
     pub reason: Option<String>,
 }
 
+// ─── DTOs for new timetable mutation APIs ────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangeSubjectInput {
+    pub new_subject_id: Uuid,
+    pub new_teacher_staff_id: Option<Uuid>,
+    #[serde(default)]
+    pub co_teacher_staff_ids: Vec<Uuid>,
+    pub new_room_id: Option<Uuid>,
+    pub new_elective_group_id: Option<Uuid>,
+    #[serde(default)]
+    pub is_elective_slot: bool,
+    #[serde(default)]
+    pub is_shared: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangeClassInput {
+    pub new_class_section_id: Uuid,
+    pub new_teacher_staff_id: Option<Uuid>,
+    pub new_room_id: Option<Uuid>,
+    #[serde(default)]
+    pub is_shared: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SwapSlotsInput {
+    pub slot_a_id: Uuid,
+    pub slot_b_id: Uuid,
+}
+
+pub type ChangeSlotSubjectInput = ChangeSubjectInput;
+pub type ChangeSlotClassInput = ChangeClassInput;
+
 pub struct TimetableService;
 
 impl TimetableService {
@@ -610,5 +644,241 @@ impl TimetableService {
         config: serde_json::Value,
     ) -> Result<(), AppError> {
         TimetableRepository::save_timetable_config(pool, school_id, config).await
+    }
+
+    // ─── New timetable mutation service methods ───────────────────────────────
+
+    /// GET a single slot with full join data
+    pub async fn get_slot_by_id(
+        pool: &PgPool,
+        school_id: Uuid,
+        slot_id: Uuid,
+    ) -> Result<TimetableSlotRow, AppError> {
+        TimetableRepository::get_slot_by_id(pool, school_id, slot_id).await
+    }
+
+    /// PATCH — change the subject (and optionally teacher/room/elective) of a slot
+    pub async fn change_slot_subject(
+        pool: &PgPool,
+        school_id: Uuid,
+        slot_id: Uuid,
+        input: ChangeSubjectInput,
+    ) -> Result<TimetableSlotRow, AppError> {
+        // 1. Fetch the existing slot (ownership + existence check)
+        let existing = TimetableRepository::get_slot_by_id(pool, school_id, slot_id).await?;
+
+        let teacher_staff_id = input
+            .new_teacher_staff_id
+            .unwrap_or(existing.teacher_staff_id);
+
+        // 2. Subject conflict: another slot with the new subject already in this class/day/period?
+        let subject_conflict = TimetableRepository::subject_conflict_exists(
+            pool,
+            school_id,
+            existing.class_section_id,
+            existing.day_of_week,
+            existing.period_number,
+            input.new_subject_id,
+            slot_id,
+        )
+        .await?;
+
+        if subject_conflict {
+            return Err(AppError::Conflict(
+                "Another slot with this subject already exists for this class section at the same day and period".into(),
+            ));
+        }
+
+        // 3. Teacher clash: is the new teacher already scheduled somewhere else at this day+period?
+        if !input.is_shared {
+            let clash_res = Self::check_clashes(
+                pool,
+                school_id,
+                &CheckClashRequest {
+                    day_of_week: existing.day_of_week,
+                    period_number: existing.period_number,
+                    teacher_staff_id,
+                    room_id: input.new_room_id,
+                    exclude_slot_id: Some(slot_id),
+                    class_section_id: Some(existing.class_section_id),
+                },
+            )
+            .await?;
+
+            if clash_res.has_clash {
+                return Err(AppError::Conflict(format!(
+                    "Schedule conflict: {}",
+                    clash_res.clashes[0].message
+                )));
+            }
+        }
+
+        // 4. Apply the update
+        TimetableRepository::change_slot_subject(
+            pool,
+            school_id,
+            slot_id,
+            input.new_subject_id,
+            teacher_staff_id,
+            &input.co_teacher_staff_ids,
+            input.is_shared,
+            input.new_room_id,
+            input.new_elective_group_id,
+            input.is_elective_slot,
+        )
+        .await?;
+
+        // 5. Return updated slot
+        TimetableRepository::get_slot_by_id(pool, school_id, slot_id).await
+    }
+
+    /// PATCH — move a slot to a different class section
+    pub async fn change_slot_class(
+        pool: &PgPool,
+        school_id: Uuid,
+        slot_id: Uuid,
+        input: ChangeClassInput,
+    ) -> Result<TimetableSlotRow, AppError> {
+        // 1. Fetch the existing slot (ownership + existence check)
+        let existing = TimetableRepository::get_slot_by_id(pool, school_id, slot_id).await?;
+
+        // 2. Check if new class_section already has ANY slot at same day+period (unless shared)
+        if !input.is_shared {
+            let period_conflict = TimetableRepository::class_section_period_conflict_exists(
+                pool,
+                school_id,
+                input.new_class_section_id,
+                existing.day_of_week,
+                existing.period_number,
+                slot_id,
+            )
+            .await?;
+
+            if period_conflict {
+                return Err(AppError::Conflict(
+                    "The target class section already has a slot scheduled at this day and period"
+                        .into(),
+                ));
+            }
+        }
+
+        // 3. Teacher clash check for new assignment
+        let teacher_staff_id = input
+            .new_teacher_staff_id
+            .unwrap_or(existing.teacher_staff_id);
+
+        if !input.is_shared {
+            let clash_res = Self::check_clashes(
+                pool,
+                school_id,
+                &CheckClashRequest {
+                    day_of_week: existing.day_of_week,
+                    period_number: existing.period_number,
+                    teacher_staff_id,
+                    room_id: input.new_room_id,
+                    exclude_slot_id: Some(slot_id),
+                    class_section_id: Some(input.new_class_section_id),
+                },
+            )
+            .await?;
+
+            if clash_res.has_clash {
+                return Err(AppError::Conflict(format!(
+                    "Schedule conflict: {}",
+                    clash_res.clashes[0].message
+                )));
+            }
+        }
+
+        // 4. Apply the update
+        TimetableRepository::change_slot_class(
+            pool,
+            school_id,
+            slot_id,
+            input.new_class_section_id,
+            input.new_teacher_staff_id,
+            input.new_room_id,
+            input.is_shared,
+        )
+        .await?;
+
+        // 5. Return updated slot
+        TimetableRepository::get_slot_by_id(pool, school_id, slot_id).await
+    }
+
+    /// POST — swap day/period between two slots atomically
+    pub async fn swap_slots(
+        pool: &PgPool,
+        school_id: Uuid,
+        input: SwapSlotsInput,
+    ) -> Result<(TimetableSlotRow, TimetableSlotRow), AppError> {
+        if input.slot_a_id == input.slot_b_id {
+            return Err(AppError::BadRequest(
+                "Cannot swap a slot with itself".into(),
+            ));
+        }
+
+        // Fetch both slots first (ownership + existence validation)
+        let slot_a = TimetableRepository::get_slot_by_id(pool, school_id, input.slot_a_id).await?;
+        let slot_b = TimetableRepository::get_slot_by_id(pool, school_id, input.slot_b_id).await?;
+
+        // Teacher clash checks after the swap: slot_a's teacher at slot_b's day/period, and vice versa
+        // We skip cross-section checks when slots are from the same class section (they just trade periods)
+        let same_section = slot_a.class_section_id == slot_b.class_section_id;
+
+        if !slot_a.is_shared && !same_section {
+            let clash = Self::check_clashes(
+                pool,
+                school_id,
+                &CheckClashRequest {
+                    day_of_week: slot_b.day_of_week,
+                    period_number: slot_b.period_number,
+                    teacher_staff_id: slot_a.teacher_staff_id,
+                    room_id: slot_a.room_id,
+                    exclude_slot_id: Some(input.slot_b_id),
+                    class_section_id: Some(slot_a.class_section_id),
+                },
+            )
+            .await?;
+            if clash.has_clash {
+                return Err(AppError::Conflict(format!(
+                    "Swap conflict for slot A's teacher: {}",
+                    clash.clashes[0].message
+                )));
+            }
+        }
+
+        if !slot_b.is_shared && !same_section {
+            let clash = Self::check_clashes(
+                pool,
+                school_id,
+                &CheckClashRequest {
+                    day_of_week: slot_a.day_of_week,
+                    period_number: slot_a.period_number,
+                    teacher_staff_id: slot_b.teacher_staff_id,
+                    room_id: slot_b.room_id,
+                    exclude_slot_id: Some(input.slot_a_id),
+                    class_section_id: Some(slot_b.class_section_id),
+                },
+            )
+            .await?;
+            if clash.has_clash {
+                return Err(AppError::Conflict(format!(
+                    "Swap conflict for slot B's teacher: {}",
+                    clash.clashes[0].message
+                )));
+            }
+        }
+
+        // Perform the atomic swap
+        TimetableRepository::swap_slots(pool, school_id, input.slot_a_id, input.slot_b_id).await?;
+
+        // Return both updated slots
+        let updated_a =
+            TimetableRepository::get_slot_by_id(pool, school_id, input.slot_a_id).await?;
+        let updated_b =
+            TimetableRepository::get_slot_by_id(pool, school_id, input.slot_b_id).await?;
+
+        Ok((updated_a, updated_b))
     }
 }

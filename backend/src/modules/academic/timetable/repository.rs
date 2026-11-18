@@ -1263,6 +1263,360 @@ impl TimetableRepository {
 
     // =========================================================================
     // QUERY INTENT:
+    // 1. What: Fetches a single timetable slot by id with full join data.
+    // 2. Joins & Foreign Keys:
+    //    - timetable_slots.class_section_id -> class_sections.id -> classes / sections
+    //    - timetable_slots.subject_id -> subjects.id
+    //    - timetable_slots.teacher_staff_id -> staff.id -> users.id
+    //    - timetable_slots.room_id -> rooms.id (optional)
+    // 3. Why & Correctness:
+    //    - Scoped by school_id to enforce multi-tenant isolation.
+    // =========================================================================
+    pub async fn get_slot_by_id(
+        pool: &PgPool,
+        school_id: Uuid,
+        slot_id: Uuid,
+    ) -> Result<TimetableSlotRow, AppError> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+                ts.id, ts.school_id, ts.academic_year_id, ts.class_section_id,
+                c.name as class_name, s.name as section_name,
+                ts.day_of_week, ts.period_number,
+                ts.start_time::text as start_time, ts.end_time::text as end_time,
+                ts.subject_id, subj.name as subject_name, subj.code as subject_code, subj.color as subject_color,
+                ts.teacher_staff_id,
+                COALESCE(NULLIF(u.display_name, ''), u.username, 'Staff') as teacher_name,
+                COALESCE(ts.co_teacher_staff_ids, '{}') as co_teacher_staff_ids,
+                COALESCE(ts.is_shared, false) as is_shared,
+                ts.room_id, r.name as room_name,
+                ts.elective_group_id,
+                COALESCE(ts.is_elective_slot, false) as is_elective_slot,
+                ts.status
+            FROM timetable_slots ts
+            JOIN class_sections cs ON ts.class_section_id = cs.id
+            JOIN classes c ON cs.class_id = c.id
+            JOIN sections s ON cs.section_id = s.id
+            JOIN subjects subj ON ts.subject_id = subj.id
+            JOIN staff st ON ts.teacher_staff_id = st.id
+            JOIN users u ON st.user_id = u.id
+            LEFT JOIN rooms r ON ts.room_id = r.id
+            WHERE ts.id = $1 AND ts.school_id = $2 AND ts.status = 'ACTIVE'
+            "#,
+        )
+        .bind(slot_id)
+        .bind(school_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Timetable slot not found".into()))?;
+
+        Ok(TimetableSlotRow {
+            id: row.get("id"),
+            school_id: row.get("school_id"),
+            academic_year_id: row.get("academic_year_id"),
+            class_section_id: row.get("class_section_id"),
+            class_name: row.get("class_name"),
+            section_name: row.get("section_name"),
+            day_of_week: row.get("day_of_week"),
+            period_number: row.get("period_number"),
+            start_time: row.get("start_time"),
+            end_time: row.get("end_time"),
+            subject_id: row.get("subject_id"),
+            subject_name: row.get("subject_name"),
+            subject_code: row.get("subject_code"),
+            subject_color: row.get("subject_color"),
+            teacher_staff_id: row.get("teacher_staff_id"),
+            teacher_name: row.get("teacher_name"),
+            co_teacher_staff_ids: row.try_get("co_teacher_staff_ids").unwrap_or_default(),
+            is_shared: row.try_get("is_shared").unwrap_or(false),
+            room_id: row.get("room_id"),
+            room_name: row.get("room_name"),
+            elective_group_id: row.try_get("elective_group_id").ok().flatten(),
+            is_elective_slot: row.try_get("is_elective_slot").unwrap_or(false),
+            status: row.get("status"),
+        })
+    }
+
+    // =========================================================================
+    // QUERY INTENT:
+    // 1. What: Checks if another slot with a given subject already exists for the
+    //    same class_section at the same day+period (for subject-change conflict detection).
+    // 2. Joins & Foreign Keys: timetable_slots unique constraint fields
+    // 3. Why & Correctness:
+    //    - ON CONFLICT is on (class_section_id, day_of_week, period_number, subject_id).
+    //    - Excludes the slot being edited so a no-op update on same subject doesn't self-conflict.
+    // =========================================================================
+    pub async fn subject_conflict_exists(
+        pool: &PgPool,
+        school_id: Uuid,
+        class_section_id: Uuid,
+        day_of_week: i32,
+        period_number: i32,
+        subject_id: Uuid,
+        exclude_slot_id: Uuid,
+    ) -> Result<bool, AppError> {
+        let exists: bool = sqlx::query_scalar(
+            r#"
+            SELECT EXISTS(
+                SELECT 1 FROM timetable_slots
+                WHERE school_id = $1
+                  AND class_section_id = $2
+                  AND day_of_week = $3
+                  AND period_number = $4
+                  AND subject_id = $5
+                  AND id != $6
+                  AND status = 'ACTIVE'
+            )
+            "#,
+        )
+        .bind(school_id)
+        .bind(class_section_id)
+        .bind(day_of_week)
+        .bind(period_number)
+        .bind(subject_id)
+        .bind(exclude_slot_id)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(exists)
+    }
+
+    // =========================================================================
+    // QUERY INTENT:
+    // 1. What: Checks whether a slot already exists for a target class_section at
+    //    a given day+period (for change-class conflict detection).
+    // 2. Joins & Foreign Keys: timetable_slots.class_section_id, day_of_week, period_number
+    // 3. Why & Correctness:
+    //    - Prevents moving a slot into a time that the target class_section already has occupied.
+    //    - Excludes the slot being moved itself.
+    // =========================================================================
+    pub async fn class_section_period_conflict_exists(
+        pool: &PgPool,
+        school_id: Uuid,
+        class_section_id: Uuid,
+        day_of_week: i32,
+        period_number: i32,
+        exclude_slot_id: Uuid,
+    ) -> Result<bool, AppError> {
+        let exists: bool = sqlx::query_scalar(
+            r#"
+            SELECT EXISTS(
+                SELECT 1 FROM timetable_slots
+                WHERE school_id = $1
+                  AND class_section_id = $2
+                  AND day_of_week = $3
+                  AND period_number = $4
+                  AND id != $5
+                  AND status = 'ACTIVE'
+            )
+            "#,
+        )
+        .bind(school_id)
+        .bind(class_section_id)
+        .bind(day_of_week)
+        .bind(period_number)
+        .bind(exclude_slot_id)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(exists)
+    }
+
+    // =========================================================================
+    // QUERY INTENT:
+    // 1. What: Updates the subject/teacher/co-teachers/room/elective fields of a slot.
+    // 2. Joins & Foreign Keys:
+    //    - subject_id -> subjects.id
+    //    - teacher_staff_id -> staff.id
+    //    - room_id -> rooms.id (optional)
+    //    - elective_group_id -> elective_groups.id (optional)
+    // 3. Why & Correctness:
+    //    - Targeted UPDATE; does not touch day_of_week/period_number/class_section_id/times.
+    //    - Scoped by school_id for multi-tenant isolation.
+    // =========================================================================
+    pub async fn change_slot_subject(
+        pool: &PgPool,
+        school_id: Uuid,
+        slot_id: Uuid,
+        subject_id: Uuid,
+        teacher_staff_id: Uuid,
+        co_teacher_staff_ids: &[Uuid],
+        is_shared: bool,
+        room_id: Option<Uuid>,
+        elective_group_id: Option<Uuid>,
+        is_elective_slot: bool,
+    ) -> Result<(), AppError> {
+        let rows_affected = sqlx::query(
+            r#"
+            UPDATE timetable_slots
+            SET
+                subject_id = $1,
+                teacher_staff_id = $2,
+                co_teacher_staff_ids = $3,
+                is_shared = $4,
+                room_id = $5,
+                elective_group_id = $6,
+                is_elective_slot = $7,
+                updated_at = NOW()
+            WHERE id = $8 AND school_id = $9
+            "#,
+        )
+        .bind(subject_id)
+        .bind(teacher_staff_id)
+        .bind(co_teacher_staff_ids)
+        .bind(is_shared)
+        .bind(room_id)
+        .bind(elective_group_id)
+        .bind(is_elective_slot)
+        .bind(slot_id)
+        .bind(school_id)
+        .execute(pool)
+        .await?
+        .rows_affected();
+
+        if rows_affected == 0 {
+            return Err(AppError::NotFound("Timetable slot not found".into()));
+        }
+
+        Ok(())
+    }
+
+    // =========================================================================
+    // QUERY INTENT:
+    // 1. What: Moves a timetable slot to a different class_section, optionally
+    //    updating teacher and room as well.
+    // 2. Joins & Foreign Keys:
+    //    - class_section_id -> class_sections.id
+    //    - teacher_staff_id -> staff.id (optional update)
+    //    - room_id -> rooms.id (optional update)
+    // 3. Why & Correctness:
+    //    - Only updates class_section_id and optionally teacher/room/is_shared.
+    //    - Scoped by school_id for multi-tenant isolation.
+    // =========================================================================
+    pub async fn change_slot_class(
+        pool: &PgPool,
+        school_id: Uuid,
+        slot_id: Uuid,
+        new_class_section_id: Uuid,
+        teacher_staff_id: Option<Uuid>,
+        room_id: Option<Uuid>,
+        is_shared: bool,
+    ) -> Result<(), AppError> {
+        let rows_affected = sqlx::query(
+            r#"
+            UPDATE timetable_slots
+            SET
+                class_section_id = $1,
+                teacher_staff_id = COALESCE($2, teacher_staff_id),
+                room_id = $3,
+                is_shared = $4,
+                updated_at = NOW()
+            WHERE id = $5 AND school_id = $6
+            "#,
+        )
+        .bind(new_class_section_id)
+        .bind(teacher_staff_id)
+        .bind(room_id)
+        .bind(is_shared)
+        .bind(slot_id)
+        .bind(school_id)
+        .execute(pool)
+        .await?
+        .rows_affected();
+
+        if rows_affected == 0 {
+            return Err(AppError::NotFound("Timetable slot not found".into()));
+        }
+
+        Ok(())
+    }
+
+    // =========================================================================
+    // QUERY INTENT:
+    // 1. What: Atomically swaps the day_of_week, period_number, start_time, and
+    //    end_time between two timetable slots inside a single transaction.
+    // 2. Joins & Foreign Keys: timetable_slots.id, timetable_slots.school_id
+    // 3. Why & Correctness:
+    //    - Uses CTEs so both rows are updated in one statement, avoiding constraint
+    //      violations that would occur if the swap were done in two sequential updates.
+    //    - Both slots must belong to the same school (multi-tenant isolation).
+    // =========================================================================
+    pub async fn swap_slots(
+        pool: &PgPool,
+        school_id: Uuid,
+        slot_a_id: Uuid,
+        slot_b_id: Uuid,
+    ) -> Result<(), AppError> {
+        let mut tx = pool.begin().await?;
+
+        // Lock both rows in a deterministic order to prevent deadlocks
+        let (a_id, b_id) = if slot_a_id < slot_b_id {
+            (slot_a_id, slot_b_id)
+        } else {
+            (slot_b_id, slot_a_id)
+        };
+
+        // Fetch both slots within the transaction (also serves as existence + ownership check)
+        let slot_a: Option<(i32, i32, String, String)> = sqlx::query_as(
+            "SELECT day_of_week, period_number, start_time::text, end_time::text
+             FROM timetable_slots WHERE id = $1 AND school_id = $2 FOR UPDATE",
+        )
+        .bind(a_id)
+        .bind(school_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let slot_b: Option<(i32, i32, String, String)> = sqlx::query_as(
+            "SELECT day_of_week, period_number, start_time::text, end_time::text
+             FROM timetable_slots WHERE id = $1 AND school_id = $2 FOR UPDATE",
+        )
+        .bind(b_id)
+        .bind(school_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let (a_day, a_period, a_start, a_end) = slot_a.ok_or_else(|| {
+            AppError::NotFound(format!("Slot {} not found or access denied", a_id))
+        })?;
+        let (b_day, b_period, b_start, b_end) = slot_b.ok_or_else(|| {
+            AppError::NotFound(format!("Slot {} not found or access denied", b_id))
+        })?;
+
+        // Set a <- b's timing
+        sqlx::query(
+            "UPDATE timetable_slots SET day_of_week = $1, period_number = $2, start_time = $3::time, end_time = $4::time, updated_at = NOW()
+             WHERE id = $5 AND school_id = $6",
+        )
+        .bind(b_day)
+        .bind(b_period)
+        .bind(&b_start)
+        .bind(&b_end)
+        .bind(a_id)
+        .bind(school_id)
+        .execute(&mut *tx)
+        .await?;
+
+        // Set b <- a's timing
+        sqlx::query(
+            "UPDATE timetable_slots SET day_of_week = $1, period_number = $2, start_time = $3::time, end_time = $4::time, updated_at = NOW()
+             WHERE id = $5 AND school_id = $6",
+        )
+        .bind(a_day)
+        .bind(a_period)
+        .bind(&a_start)
+        .bind(&a_end)
+        .bind(b_id)
+        .bind(school_id)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        Ok(())
+    }
+
+    // =========================================================================
+    // QUERY INTENT:
     // 1. What: Fetches complete notification context for a newly assigned substitution.
     // 2. Joins & Foreign Keys:
     //    - timetable_slots.class_section_id -> class_sections.id -> classes / sections

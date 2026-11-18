@@ -11,7 +11,8 @@ use uuid::Uuid;
 use crate::error::AppError;
 use crate::modules::academic::timetable::generator::AutoGenerateRequest;
 use crate::modules::academic::timetable::service::{
-    BatchSaveSlotsPayload, CheckClashRequest, CreateSubstitutionInput, TimetableService,
+    BatchSaveSlotsPayload, ChangeClassInput, ChangeSubjectInput, CheckClashRequest,
+    CreateSubstitutionInput, SwapSlotsInput, TimetableService,
 };
 use crate::modules::auth::backend::AuthSession;
 use crate::state::AppState;
@@ -410,6 +411,110 @@ impl TimetableHandler {
             Json(
                 serde_json::json!({ "message": "School timetable configuration saved successfully" }),
             ),
+        ))
+    }
+
+    // ─── New timetable mutation handlers ─────────────────────────────────────
+
+    /// GET /api/v1/academic/timetable/slots/:id
+    pub async fn get_slot_by_id(
+        auth_session: AuthSession,
+        State(state): State<AppState>,
+        Path(slot_id): Path<Uuid>,
+    ) -> Result<impl IntoResponse, AppError> {
+        let user = auth_session
+            .user
+            .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+        let slot = TimetableService::get_slot_by_id(&state.db, user.school_id, slot_id).await?;
+
+        Ok((StatusCode::OK, Json(serde_json::json!({ "slot": slot }))))
+    }
+
+    /// PATCH /api/v1/academic/timetable/slots/:id/change-subject
+    pub async fn change_slot_subject(
+        auth_session: AuthSession,
+        State(state): State<AppState>,
+        Path(slot_id): Path<Uuid>,
+        Json(input): Json<ChangeSubjectInput>,
+    ) -> Result<impl IntoResponse, AppError> {
+        let user = auth_session
+            .user
+            .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+        if !user.is_school_admin() && !user.has_capability("academics:manage_curriculum") {
+            return Err(AppError::Forbidden(
+                "Only School Admins or authorized faculty can edit timetable slots".into(),
+            ));
+        }
+
+        let slot = TimetableService::change_slot_subject(&state.db, user.school_id, slot_id, input)
+            .await?;
+
+        Ok((
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "message": "Timetable slot subject updated successfully",
+                "slot": slot
+            })),
+        ))
+    }
+
+    /// PATCH /api/v1/academic/timetable/slots/:id/change-class
+    pub async fn change_slot_class(
+        auth_session: AuthSession,
+        State(state): State<AppState>,
+        Path(slot_id): Path<Uuid>,
+        Json(input): Json<ChangeClassInput>,
+    ) -> Result<impl IntoResponse, AppError> {
+        let user = auth_session
+            .user
+            .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+        if !user.is_school_admin() && !user.has_capability("academics:manage_curriculum") {
+            return Err(AppError::Forbidden(
+                "Only School Admins or authorized faculty can edit timetable slots".into(),
+            ));
+        }
+
+        let slot =
+            TimetableService::change_slot_class(&state.db, user.school_id, slot_id, input).await?;
+
+        Ok((
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "message": "Timetable slot class section updated successfully",
+                "slot": slot
+            })),
+        ))
+    }
+
+    /// POST /api/v1/academic/timetable/slots/swap
+    pub async fn swap_slots(
+        auth_session: AuthSession,
+        State(state): State<AppState>,
+        Json(input): Json<SwapSlotsInput>,
+    ) -> Result<impl IntoResponse, AppError> {
+        let user = auth_session
+            .user
+            .ok_or_else(|| AppError::Unauthorized("Not logged in".into()))?;
+
+        if !user.is_school_admin() && !user.has_capability("academics:manage_curriculum") {
+            return Err(AppError::Forbidden(
+                "Only School Admins or authorized faculty can swap timetable slots".into(),
+            ));
+        }
+
+        let (slot_a, slot_b) =
+            TimetableService::swap_slots(&state.db, user.school_id, input).await?;
+
+        Ok((
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "message": "Timetable slots swapped successfully",
+                "slot_a": slot_a,
+                "slot_b": slot_b
+            })),
         ))
     }
 }

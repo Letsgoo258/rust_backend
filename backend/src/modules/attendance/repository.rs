@@ -1225,16 +1225,20 @@ impl AttendanceRepository {
         let mut day_headers = Vec::new();
         let mut curr = start_date;
         while curr <= end_date {
-            let day_name = curr.format("%a").to_string();
+            let day_name = curr.format("%A").to_string();
+            let day_short = curr.format("%a").to_string();
             let formatted = curr.format("%b %-d").to_string();
             let is_today = curr == today;
+            let is_past = curr < today;
             let is_future = curr > today;
 
             day_headers.push(HeatmapDayHeader {
                 date: curr.format("%Y-%m-%d").to_string(),
                 day_name,
+                day_short,
                 formatted,
                 is_today,
+                is_past,
                 is_future,
             });
 
@@ -1254,13 +1258,20 @@ impl AttendanceRepository {
                 c.code as class_code,
                 sec.code as section_code,
                 COALESCE(NULLIF(u.display_name, ''), u.username) as class_teacher_name,
-                (SELECT COUNT(*) FROM enrollments e WHERE e.class_section_id = cs.id AND e.status = 'ACTIVE') as enrolled_count,
+                (
+                    SELECT COUNT(DISTINCT stu_id) FROM (
+                        SELECT e.student_id as stu_id FROM enrollments e WHERE e.class_section_id = cs.id AND (e.status = 'ACTIVE' OR e.status IS NULL)
+                        UNION
+                        SELECT u_stu.id as stu_id FROM users u_stu WHERE u_stu.class_section_id = cs.id AND (u_stu.status = 'ACTIVE' OR u_stu.status IS NULL)
+                    ) combined_enrolled
+                ) as enrolled_count,
                 d.date::date::text as slot_date,
                 to_char(d.date, 'Dy') as slot_day_name,
                 COUNT(r.id) as total_records,
                 COUNT(CASE WHEN r.status = 'PRESENT' THEN 1 END) as present_count,
                 COUNT(CASE WHEN r.status = 'ABSENT' THEN 1 END) as absent_count,
                 COUNT(CASE WHEN r.status = 'LATE' THEN 1 END) as late_count,
+                COUNT(CASE WHEN r.status = 'EXCUSED' THEN 1 END) as excused_count,
                 CASE 
                     WHEN COUNT(r.id) > 0 THEN ROUND((COUNT(CASE WHEN r.status = 'PRESENT' THEN 1 END)::numeric / COUNT(r.id)) * 100)::int
                     ELSE NULL 
@@ -1269,11 +1280,12 @@ impl AttendanceRepository {
             FROM class_sections cs
             JOIN classes c ON cs.class_id = c.id
             JOIN sections sec ON cs.section_id = sec.id
-            LEFT JOIN users u ON cs.class_teacher_staff_id = u.id
+            LEFT JOIN staff st ON cs.class_teacher_staff_id = st.id
+            LEFT JOIN users u ON u.id = COALESCE(st.user_id, cs.class_teacher_staff_id)
             CROSS JOIN generate_series($2::date, $3::date, '1 day'::interval) d(date)
             LEFT JOIN attendance_sessions s ON s.class_section_id = cs.id AND s.date = d.date::date AND s.school_id = c.school_id
             LEFT JOIN attendance_records r ON r.attendance_session_id = s.id
-            WHERE c.school_id = $1 AND cs.status = 'ACTIVE'
+            WHERE c.school_id = $1 AND (cs.status = 'ACTIVE' OR cs.status IS NULL)
             GROUP BY cs.id, c.name, sec.name, c.code, sec.code, u.display_name, u.username, d.date
             ORDER BY c.name ASC, sec.name ASC, d.date ASC;
             "#,
@@ -1313,6 +1325,7 @@ impl AttendanceRepository {
             let present_count: i64 = r.try_get("present_count").unwrap_or(0);
             let absent_count: i64 = r.try_get("absent_count").unwrap_or(0);
             let late_count: i64 = r.try_get("late_count").unwrap_or(0);
+            let excused_count: i64 = r.try_get("excused_count").unwrap_or(0);
             let attendance_rate: Option<i32> = r.try_get("attendance_rate").ok();
             let session_id_str: Option<String> = r.try_get("session_id").ok();
             let session_id = session_id_str.and_then(|s| Uuid::parse_str(&s).ok());
@@ -1332,10 +1345,17 @@ impl AttendanceRepository {
                 date: slot_date,
                 day_name: slot_day_name,
                 rate: attendance_rate,
+                attendance_rate,
                 status,
                 present_count,
                 absent_count,
                 late_count,
+                excused_count,
+                enrolled_count: if enrolled_count > 0 {
+                    enrolled_count
+                } else {
+                    total_records
+                },
                 total_records,
                 session_id,
             };
@@ -1403,6 +1423,12 @@ impl AttendanceRepository {
                     }
                 }
 
+                let recorded_days_count = entry
+                    .slots
+                    .iter()
+                    .filter(|s| s.status == "RECORDED")
+                    .count() as i64;
+
                 result_rows.push(ClassHeatmapRow {
                     class_section_id: cs_id,
                     class_name: entry.class_name,
@@ -1411,8 +1437,11 @@ impl AttendanceRepository {
                     section_code: entry.section_code,
                     class_teacher_name: entry.class_teacher_name,
                     enrolled_count: entry.enrolled_count,
-                    days: entry.slots,
+                    days: entry.slots.clone(),
+                    slots: entry.slots,
                     weekly_avg_rate,
+                    weekly_rate: weekly_avg_rate,
+                    recorded_days_count,
                 });
             }
         }
@@ -1424,14 +1453,22 @@ impl AttendanceRepository {
             None
         };
 
+        let total_enrolled: i64 = result_rows.iter().map(|r| r.enrolled_count).sum();
+        let total_sessions_expected = (result_rows.len() * day_headers.len()) as i64;
+
         Ok(WeeklyHeatmapResponse {
             start_date: start_date.format("%Y-%m-%d").to_string(),
             end_date: end_date.format("%Y-%m-%d").to_string(),
+            days: day_headers.clone(),
             day_headers,
             rows: result_rows,
             summary: WeeklyHeatmapSummary {
                 overall_attendance_rate,
+                average_weekly_rate: overall_attendance_rate,
                 total_recorded_sessions,
+                total_sessions_recorded: total_recorded_sessions,
+                total_enrolled,
+                total_sessions_expected,
                 best_class_section: best_class.map(|(name, rate)| format!("{name} ({rate}%)")),
                 lowest_class_section: lowest_class.map(|(name, rate)| format!("{name} ({rate}%)")),
             },

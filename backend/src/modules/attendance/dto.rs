@@ -232,8 +232,12 @@ pub struct WeeklyHeatmapQuery {
 pub struct HeatmapDayHeader {
     pub date: String,
     pub day_name: String,
+    #[serde(default)]
+    pub day_short: String,
     pub formatted: String,
     pub is_today: bool,
+    #[serde(default)]
+    pub is_past: bool,
     pub is_future: bool,
 }
 
@@ -242,10 +246,14 @@ pub struct ClassDayAttendanceSlot {
     pub date: String,
     pub day_name: String,
     pub rate: Option<i32>,
+    pub attendance_rate: Option<i32>,
     pub status: String, // "RECORDED", "PENDING", "NOT_RECORDED", "FUTURE"
     pub present_count: i64,
     pub absent_count: i64,
     pub late_count: i64,
+    #[serde(default)]
+    pub excused_count: i64,
+    pub enrolled_count: i64,
     pub total_records: i64,
     pub session_id: Option<Uuid>,
 }
@@ -260,13 +268,21 @@ pub struct ClassHeatmapRow {
     pub class_teacher_name: Option<String>,
     pub enrolled_count: i64,
     pub days: Vec<ClassDayAttendanceSlot>,
+    pub slots: Vec<ClassDayAttendanceSlot>,
     pub weekly_avg_rate: Option<i32>,
+    pub weekly_rate: Option<i32>,
+    #[serde(default)]
+    pub recorded_days_count: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WeeklyHeatmapSummary {
     pub overall_attendance_rate: Option<i32>,
+    pub average_weekly_rate: Option<i32>,
     pub total_recorded_sessions: i64,
+    pub total_sessions_recorded: i64,
+    pub total_enrolled: i64,
+    pub total_sessions_expected: i64,
     pub best_class_section: Option<String>,
     pub lowest_class_section: Option<String>,
 }
@@ -276,6 +292,7 @@ pub struct WeeklyHeatmapResponse {
     pub start_date: String,
     pub end_date: String,
     pub day_headers: Vec<HeatmapDayHeader>,
+    pub days: Vec<HeatmapDayHeader>,
     pub rows: Vec<ClassHeatmapRow>,
     pub summary: WeeklyHeatmapSummary,
 }

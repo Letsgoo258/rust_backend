@@ -369,7 +369,7 @@ impl UserRepository {
         let limit: i64 = filters
             .get("limit")
             .and_then(|s| s.parse::<i64>().ok())
-            .unwrap_or(300);
+            .unwrap_or(10000);
 
         // Fast In-Memory Cache Lookup (5-Second TTL)
         let cache_key = format!(

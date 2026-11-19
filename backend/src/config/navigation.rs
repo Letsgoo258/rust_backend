@@ -390,6 +390,13 @@ impl NavigationConfig {
                 section: "MODULES".into(),
                 items: vec![
                     NavigationItem {
+                        name: "Print Studio".into(),
+                        path: "/dashboard/modules/print-studio".into(),
+                        icon: "certificate".into(),
+                        capability: Some("settings:view".into()),
+                        badge: None,
+                    },
+                    NavigationItem {
                         name: "Notification Engine".into(),
                         path: "/dashboard/modules/notifications".into(),
                         icon: "graphics".into(),

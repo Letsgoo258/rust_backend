@@ -4,6 +4,7 @@ pub mod attendance;
 pub mod auth;
 pub mod cron;
 pub mod health;
+pub mod print_queue;
 pub mod settings;
 pub mod storage;
 pub mod telemetry;
@@ -24,6 +25,7 @@ pub fn app_router() -> Router<AppState> {
         .nest("/api/v1/attendance", attendance::router())
         .nest("/api/v1/telemetry", telemetry::router())
         .nest("/api/v1/cron", cron::router())
+        .nest("/api/v1/print-queue", print_queue::router())
         .nest("/api/v1/settings", settings::router())
         .nest("/api/v1/storage", storage::router())
         .nest(

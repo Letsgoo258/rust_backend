@@ -94,13 +94,6 @@ impl NavigationConfig {
                     badge: None,
                 },
                 NavigationItem {
-                    name: "Print Studio".into(),
-                    path: "/dashboard/modules/print-studio".into(),
-                    icon: "printer".into(),
-                    capability: Some("settings:view".into()),
-                    badge: None,
-                },
-                NavigationItem {
                     name: "Modules".into(),
                     path: "/dashboard/modules".into(),
                     icon: "grid".into(),
@@ -294,13 +287,6 @@ impl NavigationConfig {
                             badge: None,
                         },
                         NavigationItem {
-                            name: "Print Studio".into(),
-                            path: "/dashboard/modules/print-studio".into(),
-                            icon: "printer".into(),
-                            capability: Some("settings:view".into()),
-                            badge: None,
-                        },
-                        NavigationItem {
                             name: "Transfer certificate".into(),
                             path: "/dashboard/users?action=transfer_certificate".into(),
                             icon: "certificate".into(),
@@ -331,13 +317,6 @@ impl NavigationConfig {
                         name: "Modules Config".into(),
                         path: "/dashboard/school-setting?tab=modules_config".into(),
                         icon: "grid".into(),
-                        capability: Some("settings:view".into()),
-                        badge: None,
-                    },
-                    NavigationItem {
-                        name: "Print Studio".into(),
-                        path: "/dashboard/modules/print-studio".into(),
-                        icon: "printer".into(),
                         capability: Some("settings:view".into()),
                         badge: None,
                     },

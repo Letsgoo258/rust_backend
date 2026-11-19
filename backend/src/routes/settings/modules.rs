@@ -219,6 +219,7 @@ pub fn get_default_modules() -> Vec<ModuleConfigItem> {
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(get_modules_overview))
+        .route("/my-assignments", get(get_my_module_assignments))
         .route("/config", post(save_module_config))
         .route("/assign-staff", post(assign_staff_to_module))
         .route(
@@ -380,6 +381,54 @@ pub async fn get_modules_overview(
         "modules": modules,
         "assignments": assignments,
         "staff": staff_list
+    })))
+}
+
+/// GET /api/v1/settings/modules/my-assignments
+/// Returns the current user's assigned modules and access tiers
+pub async fn get_my_module_assignments(
+    auth_session: AuthSession,
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, AppError> {
+    let user = auth_session
+        .user
+        .ok_or_else(|| AppError::Unauthorized("Not authenticated".into()))?;
+
+    let is_admin = user
+        .roles
+        .iter()
+        .any(|r| r.eq_ignore_ascii_case("SUPER_ADMIN"))
+        || user.is_school_admin();
+
+    let saved_assignments_val = sqlx::query_scalar::<_, serde_json::Value>(
+        r#"
+        SELECT value
+        FROM school_settings
+        WHERE school_id = $1 AND key = 'modules_staff_assignments'
+        "#,
+    )
+    .bind(user.school_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let mut my_modules: Vec<String> = Vec::new();
+    let mut my_assignments: Vec<StaffModuleAssignment> = Vec::new();
+
+    if let Some(val) = saved_assignments_val {
+        if let Ok(assignments) = serde_json::from_value::<Vec<StaffModuleAssignment>>(val) {
+            for asg in assignments {
+                if asg.user_id == user.id && asg.status == "ACTIVE" {
+                    my_modules.push(asg.module_key.clone());
+                    my_assignments.push(asg);
+                }
+            }
+        }
+    }
+
+    Ok(Json(json!({
+        "is_admin": is_admin,
+        "assigned_modules": my_modules,
+        "assignments": my_assignments
     })))
 }
 

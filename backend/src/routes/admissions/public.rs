@@ -252,7 +252,9 @@ pub async fn get_public_admission_config(
         r#"
         SELECT id, field_name, field_key, field_type, is_required, options_json, display_order
         FROM custom_fields
-        WHERE school_id = $1 AND entity_type IN ('ADMISSION', 'STUDENT')
+        WHERE school_id = $1
+          AND entity_type IN ('ADMISSION', 'STUDENT', 'ALL', 'USER')
+          AND field_key NOT LIKE 'doc_%'
         ORDER BY display_order ASC, field_name ASC
         "#,
     )

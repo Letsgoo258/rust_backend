@@ -85,6 +85,7 @@ pub fn router() -> Router<AppState> {
         .route("/search", get(search_print_desk))
         .route("/:id/status", patch(update_job_status))
         .route("/:id", delete(cancel_print_job))
+        .layer(axum::extract::DefaultBodyLimit::max(50 * 1024 * 1024))
 }
 
 /// Verify if the user has Print Center Desk privileges
@@ -193,7 +194,16 @@ pub async fn enqueue_print_job(
     let norm_phone = payload
         .recipient_phone
         .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
         .map(crate::utils::phone::normalize_phone_number);
+
+    let recipient_adm = payload
+        .recipient_admission_number
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
 
     let options = payload.options.unwrap_or_else(|| {
         json!({
@@ -244,7 +254,7 @@ pub async fn enqueue_print_job(
     .bind(&payload.title)
     .bind(&payload.recipient_name)
     .bind(norm_phone)
-    .bind(&payload.recipient_admission_number)
+    .bind(recipient_adm)
     .bind(&payload.file_url)
     .bind(&payload.file_name)
     .bind(payload.file_size_bytes.unwrap_or(0))
@@ -252,7 +262,11 @@ pub async fn enqueue_print_job(
     .bind(options)
     .bind(metadata)
     .fetch_one(&state.db)
-    .await?;
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to enqueue print job into print_queue: {:?}", e);
+        AppError::Database(e)
+    })?;
 
     Ok(Json(json!({
         "success": true,
@@ -643,4 +657,63 @@ pub async fn cancel_print_job(
         "success": true,
         "message": "Print job cancelled and removed"
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deserialize_minimal_enqueue_payload() {
+        let json_str = r#"{
+            "document_type": "DATA_EXPORT",
+            "title": "Students Export.csv",
+            "recipient_name": "Admin"
+        }"#;
+
+        let payload: Result<EnqueuePrintJobPayload, _> = serde_json::from_str(json_str);
+        assert!(payload.is_ok());
+        let p = payload.unwrap();
+        assert_eq!(p.document_type, "DATA_EXPORT");
+        assert_eq!(p.title, "Students Export.csv");
+        assert_eq!(p.recipient_name, "Admin");
+        assert!(p.recipient_phone.is_none());
+        assert!(p.recipient_admission_number.is_none());
+        assert!(p.file_url.is_none());
+        assert!(p.file_size_bytes.is_none());
+        assert!(p.copies.is_none());
+        assert!(p.options.is_none());
+        assert!(p.metadata.is_none());
+    }
+
+    #[test]
+    fn test_deserialize_full_enqueue_payload() {
+        let json_str = r#"{
+            "document_type": "CUSTOM_UPLOAD",
+            "title": "Report Card.pdf",
+            "recipient_name": "John Doe",
+            "recipient_phone": "+91 98765 43210",
+            "recipient_admission_number": "ADM001",
+            "file_url": "data:application/pdf;base64,JVBERi0xLjQK...",
+            "file_name": "Report Card.pdf",
+            "file_size_bytes": 1048576,
+            "copies": 3,
+            "options": {
+                "color": "COLOR",
+                "paper_size": "A4",
+                "orientation": "PORTRAIT"
+            },
+            "metadata": {
+                "converted_from_csv": true,
+                "notes": "Urgent print"
+            }
+        }"#;
+
+        let payload: EnqueuePrintJobPayload = serde_json::from_str(json_str).unwrap();
+        assert_eq!(payload.document_type, "CUSTOM_UPLOAD");
+        assert_eq!(payload.copies, Some(3));
+        assert_eq!(payload.file_size_bytes, Some(1048576));
+        assert!(payload.options.is_some());
+        assert!(payload.metadata.is_some());
+    }
 }

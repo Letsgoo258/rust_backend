@@ -26,6 +26,7 @@ pub struct WhatsAppUserContext {
     pub session_id: Uuid,
     pub user_id: Uuid,
     pub school_id: Uuid,
+    pub school_name: String,
     pub role: String,
     pub capabilities: HashSet<String>,
     pub phone: String,
@@ -127,16 +128,16 @@ impl WhatsAppMessageService {
         )
     }
 
-    /// Formats the official ERAVAYA ERP welcome greeting.
+    /// Formats the official welcome greeting.
     #[allow(dead_code)]
     pub fn get_welcome_greeting() -> &'static str {
-        "👋 Hi! Welcome to ERAVAYA ERP.\n\nType *help* for the help menu or ask your query (e.g. attendance, fees, timetable, exams) to get assistance."
+        "👋 Hi! Welcome to School Portal.\n\nType *help* for the help menu or ask your query (e.g. attendance, fees, timetable, exams) to get assistance."
     }
 
     /// Formats the interactive help menu.
     #[allow(dead_code)]
     pub fn get_help_menu() -> &'static str {
-        "📋 *ERAVAYA ERP Assistance Menu*\n\n1️⃣ *Attendance* - Check student & staff attendance status\n2️⃣ *Fees* - View pending fee dues and receipt links\n3️⃣ *Exams* - View exam dates, schedules, and report cards\n4️⃣ *Timetable* - View class and subject timetable\n5️⃣ *Contact* - School office phone and support desk\n\n💡 You can also ask directly in plain text:\n_e.g., \"What is the fee payment deadline?\"_"
+        "📋 *Assistance Menu*\n\n1️⃣ *Attendance* - Check student & staff attendance status\n2️⃣ *Fees* - View pending fee dues and receipt links\n3️⃣ *Exams* - View exam dates, schedules, and report cards\n4️⃣ *Timetable* - View class and subject timetable\n5️⃣ *Contact* - School office phone and support desk\n\n💡 You can also ask directly in plain text:\n_e.g., \"What is the fee payment deadline?\"_"
     }
 
     pub fn is_logout(text: &str) -> bool {
@@ -184,9 +185,9 @@ impl WhatsAppMessageService {
         let clean_url = app_url.trim_end_matches('/');
         let login_link = format!("{clean_url}/login?redirect=/auth/whatsapp-link");
 
-        let intro = "🔒 *ERAVAYA ERP Authentication Required*\n\n\
-            Welcome to ERAVAYA ERP! To protect student data and privacy, WhatsApp assistance is only available for active, logged-in users.\n\n\
-            Please log in to your ERAVAYA account to connect WhatsApp:".to_string();
+        let intro = "🔒 *School Portal Authentication Required*\n\n\
+            Welcome! To protect student data and privacy, WhatsApp assistance is only available for active, logged-in users.\n\n\
+            Please log in to your account to connect WhatsApp:".to_string();
 
         (intro, login_link)
     }
@@ -198,7 +199,7 @@ impl WhatsAppMessageService {
         let login_link = format!("{clean_url}/login?redirect=/auth/whatsapp-link");
 
         let intro = "⏰ *Session Expired or Inactive*\n\n\
-            Your ERAVAYA WhatsApp session has expired for your security.\n\n\
+            Your WhatsApp session has expired for your security.\n\n\
             Please log in to your account to re-activate your session:"
             .to_string();
 
@@ -214,7 +215,7 @@ impl WhatsAppMessageService {
         let intro = format!(
             "⚠️ *Session Dropped ({reason})*\n\n\
             For your security and anti-spoofing protection, this WhatsApp session has been terminated.\n\n\
-            Please log in to ERAVAYA ERP to verify your credentials and reconnect:"
+            Please log in to your account to verify your credentials and reconnect:"
         );
 
         (intro, login_link)
@@ -235,7 +236,7 @@ impl WhatsAppMessageService {
         };
 
         format!(
-            "📋 *ERAVAYA ERP Menu*\n\
+            "📋 *{} Menu*\n\
             👤 *Account*: {name} (*{}*)\n\n\
             {attendance_item}\n\
             2️⃣ *Fees* - View pending dues, fee breakdown & receipts\n\
@@ -245,7 +246,7 @@ impl WhatsAppMessageService {
             6️⃣ *Logout* - Sign out of WhatsApp\n\n\
             💡 You can also ask directly:\n\
             _e.g., \"What are my fee dues for this term?\"_",
-            context.role
+            context.school_name, context.role
         )
     }
 
@@ -315,14 +316,14 @@ impl WhatsAppMessageService {
 
                 if link_token.consumed {
                     return vec![
-                        "❌ *Link Code Already Used*\n\nThis linking code has already been consumed. Please log in to ERAVAYA ERP to generate a fresh link token:".to_string(),
+                        "❌ *Link Code Already Used*\n\nThis linking code has already been consumed. Please log in to your account to generate a fresh link token:".to_string(),
                         login_url,
                     ];
                 }
 
                 if link_token.expires_at <= Utc::now() {
                     return vec![
-                        "⏰ *Link Code Expired*\n\nThis linking code has expired (15-minute validity). Please log in to ERAVAYA ERP to generate a fresh code:".to_string(),
+                        "⏰ *Link Code Expired*\n\nThis linking code has expired (15-minute validity). Please log in to your account to generate a fresh code:".to_string(),
                         login_url,
                     ];
                 }
@@ -330,6 +331,15 @@ impl WhatsAppMessageService {
                 // Consume link token
                 let _ = WhatsAppRepository::consume_link_token(pool, &link_token.token, sender_jid)
                     .await;
+
+                let school_name: String =
+                    sqlx::query_scalar("SELECT name FROM schools WHERE id = $1")
+                        .bind(link_token.school_id)
+                        .fetch_optional(pool)
+                        .await
+                        .ok()
+                        .flatten()
+                        .unwrap_or_else(|| "School".to_string());
 
                 // Resolve user capabilities
                 let caps = CapabilityController::resolve_user_capabilities(
@@ -376,13 +386,13 @@ impl WhatsAppMessageService {
                     user_id = %link_token.user_id,
                     role = %link_token.role_code,
                     ip = %link_token.ip_address,
-                    "WhatsApp session successfully authenticated and linked with ERAVAYA ERP"
+                    "WhatsApp session successfully authenticated and linked with school portal"
                 );
 
                 return vec![format!(
                     "🎉 *WhatsApp Connected Successfully!*\n\n\
                     Welcome, *{display_name}* (*{}*)!\n\
-                    Your WhatsApp session is now active and securely linked to your ERAVAYA ERP account.\n\n\
+                    Your WhatsApp session is now active and securely linked to your {school_name} account.\n\n\
                     🔒 *Security Details*:\n\
                     • Linked IP: `{}`\n\
                     • Session: Active (7-day rolling expiry)\n\n\
@@ -434,7 +444,7 @@ impl WhatsAppMessageService {
                             SELECT EXISTS (
                                 SELECT 1 FROM whatsapp_outbox
                                 WHERE recipient_jid = $1
-                                  AND payload->>'text' LIKE '%ERAVAYA ERP Authentication Required%'
+                                  AND (payload->>'text' LIKE '%Authentication Required%' OR payload->>'text' LIKE '%ERAVAYA ERP Authentication Required%')
                                   AND created_at > NOW() - INTERVAL '24 hours'
                             )
                             "#,
@@ -505,6 +515,10 @@ impl WhatsAppMessageService {
                     session_id: session.id,
                     user_id: session.user_id,
                     school_id: session.school_id,
+                    school_name: session
+                        .school_name
+                        .clone()
+                        .unwrap_or_else(|| "School".to_string()),
                     role: session.role_code.clone(),
                     capabilities,
                     phone: session.phone.clone(),
@@ -555,7 +569,7 @@ impl WhatsAppMessageService {
                 if Self::is_logout(trimmed) {
                     let _ = WhatsAppRepository::terminate_session(pool, sender_jid).await;
                     info!(sender = %sender_jid, "User logged out of WhatsApp session");
-                    return vec!["🔒 *Signed Out Successfully*\n\nYour ERAVAYA WhatsApp session has been closed. Send any message when you wish to log in or link again.".to_string()];
+                    return vec!["🔒 *Signed Out Successfully*\n\nYour WhatsApp session has been closed. Send any message when you wish to log in or link again.".to_string()];
                 }
 
                 if Self::is_help_request(trimmed) {
@@ -566,7 +580,8 @@ impl WhatsAppMessageService {
                 if Self::is_greeting(trimmed) {
                     let name = context.display_name.as_deref().unwrap_or("User");
                     return vec![format!(
-                        "👋 Hello, *{name}*!\n\nWelcome back to ERAVAYA ERP (Logged in as *{}*).\nType *help* to view your options or ask any question.",
+                        "👋 Hello, *{name}*!\n\nWelcome back to {} (Logged in as *{}*).\nType *help* to view your options or ask any question.",
+                        context.school_name,
                         context.role
                     )];
                 }
@@ -780,14 +795,14 @@ mod tests {
     #[test]
     fn test_welcome_greeting_content() {
         let greeting = WhatsAppMessageService::get_welcome_greeting();
-        assert!(greeting.contains("Hi! Welcome to ERAVAYA ERP"));
+        assert!(greeting.contains("Hi! Welcome to School Portal"));
         assert!(greeting.contains("help"));
     }
 
     #[test]
     fn test_fallback_message_content() {
         let fallback = menus::ai::format_fallback_message("Check my exam dates");
-        assert!(fallback.contains("ERAVAYA ERP Assistant"));
+        assert!(fallback.contains("School Assistant"));
         assert!(fallback.contains("Check my exam dates"));
         assert!(fallback.contains("help"));
     }
@@ -798,6 +813,7 @@ mod tests {
             session_id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),
             school_id: Uuid::new_v4(),
+            school_name: "Test School".to_string(),
             role: "SCHOOL_ADMIN".to_string(),
             capabilities: [
                 "attendance:view",
@@ -828,6 +844,7 @@ mod tests {
             session_id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),
             school_id: Uuid::new_v4(),
+            school_name: "Test School".to_string(),
             role: "TEACHER".to_string(),
             capabilities: [
                 "attendance:view",

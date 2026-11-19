@@ -51,7 +51,7 @@ pub async fn handle_admission_inquiry(
 
     let (school_id, school_name) = match school_row {
         Some((id, name)) => (id, name),
-        None => (Uuid::nil(), "ERAVAYA School".to_string()),
+        None => (Uuid::nil(), "School".to_string()),
     };
 
     // 2. Fetch admission settings from school_settings
@@ -102,7 +102,7 @@ pub async fn handle_admission_inquiry(
 
     if !is_open {
         return vec![format!(
-            "ℹ️ *ERAVAYA Admissions Notice*\n\n\
+            "ℹ️ *{school_name} Admissions Notice*\n\n\
             Admissions for *{school_name}* are currently *CLOSED*.\n\n\
             📅 *Intake Window*:\n\
             • Opens On: *{open_date}*\n\
@@ -310,7 +310,7 @@ pub async fn handle_admission_inquiry(
     let greeting = if let Some(name) = parent_name {
         format!("Welcome, *{name}*! 👋")
     } else {
-        "Welcome to *ERAVAYA Admissions*! 👋".to_string()
+        format!("Welcome to *{school_name} Admissions*! 👋")
     };
 
     let apply_action_label = if !enrolled_children.is_empty() || !existing_admissions.is_empty() {

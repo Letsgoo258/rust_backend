@@ -45,7 +45,7 @@ impl AlertReason {
                 "The WhatsApp client connection has been lost and auto-reconnect was unable to restore the session.".to_string()
             }
             AlertReason::ManualTest => {
-                "This is a verified test email sent by an administrator from the ERAVAYA School Settings dashboard. Your alert notification pipeline is operating normally.".to_string()
+                "This is a verified test email sent by an administrator from the School Settings dashboard. Your alert notification pipeline is operating normally.".to_string()
             }
         }
     }
@@ -206,7 +206,7 @@ fn build_alert_html(reason: &AlertReason, settings_url: &str, timestamp: DateTim
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 24px; color: #1e293b;">
   <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
     <div style="background-color: {border_color}; padding: 18px 24px; color: #ffffff;">
-      <h1 style="margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.02em;">ERAVAYA Alert System</h1>
+      <h1 style="margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -0.02em;">School Alert System</h1>
     </div>
 
     <div style="padding: 24px;">
@@ -233,7 +233,7 @@ fn build_alert_html(reason: &AlertReason, settings_url: &str, timestamp: DateTim
       </div>
 
       <p style="margin: 0; font-size: 12px; color: #94a3b8; text-align: center; line-height: 1.5;">
-        You are receiving this automated alert because you are listed as an administrator in the ERAVAYA school management system.
+        You are receiving this automated alert because you are listed as an administrator in the school management system.
       </p>
     </div>
   </div>

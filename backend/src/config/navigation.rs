@@ -38,7 +38,7 @@ impl NavigationConfig {
         NavigationTree {
             top_nav: vec![
                 NavigationItem {
-                    name: "Eravaya Home".into(),
+                    name: "Dashboard Home".into(),
                     path: "/dashboard".into(),
                     icon: "home".into(),
                     capability: None,

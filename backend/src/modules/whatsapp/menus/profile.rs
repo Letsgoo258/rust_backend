@@ -29,7 +29,7 @@ pub async fn handle_profile_query(
         .await
         .ok()
         .flatten()
-        .unwrap_or_else(|| "ERAVAYA School".to_string());
+        .unwrap_or_else(|| "School".to_string());
 
     format!(
         "👤 *Account Profile & Capabilities*\n\n\

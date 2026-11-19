@@ -51,7 +51,7 @@ pub async fn call_gemini_api(
         api_key
     );
 
-    let system_instruction = "You are ERAVAYA ERP's smart school WhatsApp assistant. \
+    let system_instruction = "You are a smart school WhatsApp assistant. \
 Respond in concise, helpful plain text suitable for WhatsApp (you may use *bold* or _italics_). \
 Always return your output as valid JSON with format: {\"reply\": \"<your response message>\", \"intent\": \"<query_category>\"}.";
 
@@ -105,7 +105,7 @@ pub fn format_fallback_message(query: &str) -> String {
     };
 
     format!(
-        "🤖 *ERAVAYA ERP Assistant*\n\nThank you for reaching out! We received your query:\n_{}_\n\nOur automated system is processing your request. An administrator or staff member has also been notified.\n\nType *help* anytime to view the assistance menu.",
+        "🤖 *School Assistant*\n\nThank you for reaching out! We received your query:\n_{}_\n\nOur automated system is processing your request. An administrator or staff member has also been notified.\n\nType *help* anytime to view the assistance menu.",
         display_query
     )
 }

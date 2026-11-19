@@ -1089,7 +1089,7 @@ impl ExamRepository {
             .bind(school_id)
             .fetch_one(pool)
             .await
-            .unwrap_or_else(|_| "ERAVAYA School".into());
+            .unwrap_or_else(|_| "School".into());
 
         // Find recipients (students with phone or guardians with phone)
         let recipients = sqlx::query_as::<_, (String,)>(
@@ -1126,7 +1126,7 @@ impl ExamRepository {
             *Exam:* {}\n\
             *Date:* {}{}\n\
             *Max Marks:* {} ({})\n\n\
-            _Official timetable and notifications are published on your ERAVAYA student portal._",
+            _Official timetable and notifications are published on your {school_name} student portal._",
             school_name,
             exam.class_name.as_deref().unwrap_or(""),
             exam.section_name.as_deref().unwrap_or(""),
@@ -1170,7 +1170,7 @@ impl ExamRepository {
             .bind(school_id)
             .fetch_one(pool)
             .await
-            .unwrap_or_else(|_| "ERAVAYA School".into());
+            .unwrap_or_else(|_| "School".into());
 
         let recipients = sqlx::query_as::<_, (String,)>(
             r#"

@@ -181,7 +181,7 @@ pub async fn handle_timetable_query(pool: &PgPool, context: &WhatsAppUserContext
                 {}\n\n\
                 👉 *View Full Weekly Timetable Matrix*:\n\
                 {clean_url}/dashboard/academics/timetable\n\n\
-                _Updated live from ERAVAYA Daily Timetable._",
+                _Updated live from Daily Timetable._",
                 slot_list
             );
         } else {
@@ -361,7 +361,7 @@ pub async fn handle_timetable_query(pool: &PgPool, context: &WhatsAppUserContext
                 {}\n\n\
                 👉 *Student & Parent Portal*:\n\
                 {clean_url}/dashboard\n\n\
-                _Live updates from ERAVAYA School Timetable._",
+                _Live updates from School Timetable._",
                 slot_list
             );
         } else {
@@ -376,7 +376,7 @@ pub async fn handle_timetable_query(pool: &PgPool, context: &WhatsAppUserContext
 
     // Default Fallback
     format!(
-        "📅 *ERAVAYA School Timetable*\n\n\
+        "📅 *School Timetable*\n\n\
         ⏰ *Standard Timings*: 09:00 AM – 03:30 PM\n\n\
         👉 *Log in to view complete class timetables and live teacher substitutions*:\n\
         {clean_url}/dashboard/academics/timetable\n\n\

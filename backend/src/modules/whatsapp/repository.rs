@@ -51,6 +51,7 @@ pub struct WhatsAppUserSessionRow {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub display_name: Option<String>,
+    pub school_name: Option<String>,
     pub username: Option<String>,
     pub ip_address: Option<String>,
     pub user_agent: Option<String>,
@@ -294,9 +295,11 @@ impl WhatsAppRepository {
                 s.expires_at, s.created_at, s.updated_at,
                 s.ip_address, s.user_agent, s.device_fingerprint, s.last_active_at,
                 s.is_revoked, s.suspicious_reason, s.login_token,
-                u.display_name, u.username
+                u.display_name, u.username,
+                sc.name as school_name
             FROM whatsapp_user_sessions s
             JOIN users u ON s.user_id = u.id
+            LEFT JOIN schools sc ON s.school_id = sc.id
             WHERE (s.sender_jid = $1 OR (s.phone != '' AND s.phone = $2))
             ORDER BY s.updated_at DESC
             LIMIT 1
@@ -318,6 +321,7 @@ impl WhatsAppRepository {
             created_at: r.get("created_at"),
             updated_at: r.get("updated_at"),
             display_name: r.get("display_name"),
+            school_name: r.try_get("school_name").ok().flatten(),
             username: r.get("username"),
             ip_address: r.get("ip_address"),
             user_agent: r.get("user_agent"),

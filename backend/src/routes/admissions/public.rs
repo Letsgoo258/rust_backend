@@ -38,12 +38,31 @@ pub struct UploadDocumentPayload {
 #[derive(Debug, Deserialize)]
 pub struct SendOtpPayload {
     pub target: String,
+    pub school_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct VerifyOtpPayload {
     pub target: String,
     pub otp: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OfficerRequestOtpPayload {
+    pub admission_id: Uuid,
+    pub phone: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OfficerVerifyOtpPayload {
+    pub admission_id: Uuid,
+    pub phone: String,
+    pub otp: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OfficerVerifiedDocsQuery {
+    pub token: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -93,6 +112,12 @@ pub fn router() -> Router<AppState> {
         .route("/verify-email-otp", post(verify_email_otp))
         .route("/submit", post(submit_admission_application))
         .route("/application/:id", get(get_submitted_application_details))
+        .route(
+            "/application/:id/verified-documents",
+            get(get_officer_verified_documents),
+        )
+        .route("/officer-request-otp", post(officer_request_otp))
+        .route("/officer-verify-otp", post(officer_verify_otp))
         .route("/upload-document", post(upload_admission_document))
         .route("/documents/:file_id", get(serve_local_document))
         .layer(axum::extract::DefaultBodyLimit::max(25 * 1024 * 1024))
@@ -487,6 +512,25 @@ pub async fn send_phone_otp(
         ));
     }
 
+    let school_name = if let Some(sid) = payload.school_id {
+        sqlx::query_scalar::<_, String>("SELECT name FROM schools WHERE id = $1")
+            .bind(sid)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "School".to_string())
+    } else {
+        sqlx::query_scalar::<_, String>(
+            "SELECT name FROM schools WHERE status = 'ACTIVE' ORDER BY created_at ASC LIMIT 1",
+        )
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "School".to_string())
+    };
+
     let otp: u32 = {
         let mut rng = rand::thread_rng();
         rng.gen_range(100_000..=999_999)
@@ -520,7 +564,8 @@ pub async fn send_phone_otp(
     // Format proper WhatsApp JID with country code e.g. 919876543210@s.whatsapp.net
     let jid = format!("{jid_digits}@s.whatsapp.net");
     let msg = format!(
-        "🔐 *ERAVAYA Admission Verification*\n\nYour one-time phone verification code is: *{otp_str}*\n\nThis code expires in 10 minutes. Please enter it on the admission application page."
+        "🔐 *{} Admission Verification*\n\nYour one-time phone verification code is: *{otp_str}*\n\nThis code expires in 10 minutes. Please enter it on the admission application page.",
+        school_name
     );
     let _ = crate::utils::whatsapp::send_urgent_whatsapp_message(&state.db, &jid, &msg, None).await;
 
@@ -632,17 +677,39 @@ pub async fn send_email_otp(
     .execute(&state.db)
     .await?;
 
+    let school_name = if let Some(sid) = payload.school_id {
+        sqlx::query_scalar::<_, String>("SELECT name FROM schools WHERE id = $1")
+            .bind(sid)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "School".to_string())
+    } else {
+        sqlx::query_scalar::<_, String>(
+            "SELECT name FROM schools WHERE status = 'ACTIVE' ORDER BY created_at ASC LIMIT 1",
+        )
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "School".to_string())
+    };
+
+    let email_subject = format!("{} Admission Verification Code", school_name);
     let email_body = format!(
-        "<h3>ERAVAYA Admission Verification</h3>\
+        "<h3>{} Admission Verification</h3>\
          <p>Your one-time email verification code is: <strong>{}</strong></p>\
          <p>This code expires in 10 minutes. Please enter it on the admission application page.</p>",
-        otp_str
+        school_name, otp_str
     );
     let to_email = clean_email.clone();
+    let s_name = school_name.clone();
     tokio::spawn(async move {
-        if let Err(e) = crate::utils::email::send_email(
+        if let Err(e) = crate::utils::email::send_email_with_sender(
+            Some(&s_name),
             &to_email,
-            "ERAVAYA Admission Verification Code",
+            &email_subject,
             &email_body,
         )
         .await
@@ -1079,13 +1146,14 @@ pub async fn submit_admission_application(
     let jid_digits = normalized_guardian.trim_start_matches('+');
     let jid = format!("{jid_digits}@s.whatsapp.net");
     let confirm_msg = format!(
-        "🎉 *ERAVAYA Admission Application Submitted!*\n\n\
+        "🎉 *{} Admission Application Submitted!*\n\n\
         Dear *{}*,\n\
         We have received the admission application for *{}* at *{}*.\n\n\
         📋 *Application Number*: *{}*\n\
         📅 *Academic Year*: *{}*\n\
         📌 *Status*: Submitted & Under Review\n\n\
         Our admissions desk has been notified. You can use your application number for any future updates or inquiries.",
+        school_name,
         payload.guardian_name,
         applicant_name,
         school_name,
@@ -1168,7 +1236,7 @@ pub async fn get_submitted_application_details(
     .bind(school_id)
     .fetch_optional(&state.db)
     .await?
-    .unwrap_or(("ERAVAYA Academy".to_string(), None, None, None, None));
+    .unwrap_or(("School".to_string(), None, None, None, None));
 
     // Academic year name
     let ay_name: String = if let Some(ay) = ay_id {
@@ -1340,7 +1408,7 @@ pub async fn upload_admission_document(
         .bind(school_id)
         .fetch_optional(&state.db)
         .await?
-        .unwrap_or_else(|| "ERAVAYA School".to_string());
+        .unwrap_or_else(|| "School".to_string());
 
     let ay_name: String = if let Some(ay) = ay_id {
         sqlx::query_scalar("SELECT name FROM academic_years WHERE id = $1")
@@ -1556,6 +1624,609 @@ pub async fn serve_local_document(
     ))
 }
 
+pub fn normalize_phone_last_10(phone: &str) -> String {
+    let clean: String = phone.chars().filter(|c| c.is_ascii_digit()).collect();
+    if clean.len() >= 10 {
+        clean[clean.len() - 10..].to_string()
+    } else {
+        clean
+    }
+}
+
+pub fn mask_email(email: &str) -> String {
+    let trimmed = email.trim();
+    if let Some((user, domain)) = trimmed.split_once('@') {
+        if user.len() <= 2 {
+            format!("{}***@{}", &user[0..1], domain)
+        } else {
+            let first = &user[0..1];
+            let last = &user[user.len() - 1..];
+            format!("{first}***{last}@{domain}")
+        }
+    } else {
+        "***@***.com".to_string()
+    }
+}
+
+/// POST /api/v1/admissions/public/officer-request-otp
+/// Authenticates phone number for scanned admission form and dispatches OTP to registered email.
+pub async fn officer_request_otp(
+    State(state): State<AppState>,
+    Json(payload): Json<OfficerRequestOtpPayload>,
+) -> Result<impl IntoResponse, AppError> {
+    let admission_id = payload.admission_id;
+
+    // 1. Verify admission record exists
+    let adm = sqlx::query_as::<_, (Uuid, Uuid, Option<String>)>(
+        "SELECT id, school_id, application_number FROM admissions WHERE id = $1",
+    )
+    .bind(admission_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Admission record not found".into()))?;
+
+    let (_, school_id, app_no_opt) = adm;
+    let app_number = app_no_opt.unwrap_or_else(|| "PENDING".to_string());
+
+    // 2. Fetch applicant and guardian contact info
+    let applicant = sqlx::query_as::<
+        _,
+        (
+            String,
+            Option<String>,
+            String,
+            Option<String>,
+            Option<String>,
+        ),
+    >(
+        r#"
+        SELECT first_name, middle_name, last_name, phone, email
+        FROM admission_applicants
+        WHERE admission_id = $1
+        LIMIT 1
+        "#,
+    )
+    .bind(admission_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let guardian = sqlx::query_as::<_, (String, String, Option<String>)>(
+        r#"
+        SELECT name, phone, email
+        FROM admission_guardians
+        WHERE admission_id = $1
+        LIMIT 1
+        "#,
+    )
+    .bind(admission_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    // 3. Match normalized phone number against applicant or guardian
+    let input_10 = normalize_phone_last_10(&payload.phone);
+    if input_10.is_empty() || input_10.len() < 7 {
+        return Err(AppError::BadRequest(
+            "Please provide a valid phone number (at least 10 digits).".into(),
+        ));
+    }
+
+    let applicant_phone_10 = applicant
+        .as_ref()
+        .and_then(|a| a.3.as_deref())
+        .map(normalize_phone_last_10);
+    let guardian_phone_10 = guardian.as_ref().map(|g| normalize_phone_last_10(&g.1));
+
+    let matches_applicant = applicant_phone_10.as_deref() == Some(&input_10);
+    let matches_guardian = guardian_phone_10.as_deref() == Some(&input_10);
+
+    if !matches_applicant && !matches_guardian {
+        return Err(AppError::BadRequest(
+            "The entered phone number does not match registered applicant or guardian records."
+                .into(),
+        ));
+    }
+
+    // 4. Resolve registered email address (guardian email preferred, fallback to applicant email)
+    let target_email = guardian
+        .as_ref()
+        .and_then(|g| g.2.clone())
+        .filter(|e| e.contains('@') && !e.trim().is_empty())
+        .or_else(|| {
+            applicant
+                .as_ref()
+                .and_then(|a| a.4.clone())
+                .filter(|e| e.contains('@') && !e.trim().is_empty())
+        })
+        .ok_or_else(|| {
+            AppError::BadRequest(
+                "No registered email found for this application record. Please contact school administration.".into(),
+            )
+        })?;
+
+    // 5. Generate secure 6-digit OTP
+    let otp: u32 = {
+        let mut rng = rand::thread_rng();
+        rng.gen_range(100_000..=999_999)
+    };
+    let otp_str = otp.to_string();
+
+    let target_key = format!("{}:{}", admission_id, input_10);
+
+    // Save to admission_otps
+    sqlx::query(
+        r#"
+        INSERT INTO admission_otps (target, target_type, otp_code, expires_at)
+        VALUES ($1, 'OFFICER_VERIFY', $2, now() + INTERVAL '10 minutes')
+        "#,
+    )
+    .bind(&target_key)
+    .bind(&otp_str)
+    .execute(&state.db)
+    .await?;
+
+    // Fetch school name for email branding
+    let school_name = sqlx::query_scalar::<_, String>("SELECT name FROM schools WHERE id = $1")
+        .bind(school_id)
+        .fetch_optional(&state.db)
+        .await?
+        .unwrap_or_else(|| "School".to_string());
+
+    // 6. Send OTP Email asynchronously
+    let email_dest = target_email.clone();
+    let email_otp = otp_str.clone();
+    let email_app_no = app_number.clone();
+    let email_school_name = school_name.clone();
+
+    tokio::spawn(async move {
+        let subject =
+            format!("{email_school_name} Document Verification Security Code – {email_app_no}");
+        let body = format!(
+            r#"<!DOCTYPE html>
+<html>
+<body style="margin: 0; padding: 24px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; color: #1e293b;">
+  <div style="max-width: 520px; margin: 0 auto; background: #ffffff; border: 2px solid #e2e8f0; border-radius: 24px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);">
+    <div style="background: #0284c7; padding: 24px; text-align: center; color: #ffffff;">
+      <div style="font-size: 11px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase; background: rgba(255,255,255,0.2); display: inline-block; padding: 4px 12px; border-radius: 9999px; margin-bottom: 8px;">
+        Institutional Verification Gate
+      </div>
+      <h1 style="margin: 0; font-size: 22px; font-weight: 900; letter-spacing: -0.5px;">Document Access OTP</h1>
+      <p style="margin: 6px 0 0; font-size: 13px; opacity: 0.9;">{email_school_name}</p>
+    </div>
+    <div style="padding: 28px 24px; text-align: center;">
+      <p style="margin: 0 0 16px; font-size: 14px; line-height: 1.6; color: #334155;">
+        An admissions officer has scanned the QR seal on your application <strong>{email_app_no}</strong> and requested authorization to view your uploaded supporting documents.
+      </p>
+      <div style="background: #f0f9ff; border: 2px dashed #0284c7; border-radius: 16px; padding: 20px; margin: 20px 0;">
+        <div style="font-size: 11px; font-weight: 700; color: #0284c7; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px;">One-Time Security Code</div>
+        <div style="font-family: monospace, Courier; font-size: 34px; font-weight: 900; letter-spacing: 8px; color: #0369a1;">
+          {email_otp}
+        </div>
+      </div>
+      <p style="margin: 0; font-size: 12px; color: #64748b; line-height: 1.5;">
+        Valid for <strong>10 minutes</strong>. Provide this code directly to the admissions officer to authorize viewing your admission files.
+      </p>
+    </div>
+    <div style="border-top: 1px solid #f1f5f9; padding: 16px 24px; background: #fafafa; text-align: center; font-size: 11px; color: #94a3b8;">
+      {email_school_name} • Authenticated Document Security
+    </div>
+  </div>
+</body>
+</html>"#
+        );
+
+        if let Err(e) = crate::utils::email::send_email_with_sender(
+            Some(&email_school_name),
+            &email_dest,
+            &subject,
+            &body,
+        )
+        .await
+        {
+            tracing::error!(
+                "Failed to dispatch officer verification OTP to {}: {}",
+                email_dest,
+                e
+            );
+        }
+    });
+
+    println!("============================================================");
+    println!("🛡️ [OFFICER VERIFICATION OTP DISPATCHED]");
+    println!("Application ID: {}", admission_id);
+    println!("Application No: {}", app_number);
+    println!("Matched Phone: {}", input_10);
+    println!("Target Email: {}", target_email);
+    println!("Verification Code: {}", otp_str);
+    println!("============================================================");
+
+    let masked_email = mask_email(&target_email);
+    let masked_phone = format!("******{}", &input_10[input_10.len().saturating_sub(4)..]);
+
+    Ok(Json(json!({
+        "success": true,
+        "masked_email": masked_email,
+        "masked_phone": masked_phone,
+        "admission_id": admission_id,
+        "application_number": app_number,
+        "message": format!("Verification code dispatched to registered email ({})", masked_email)
+    })))
+}
+
+/// POST /api/v1/admissions/public/officer-verify-otp
+/// Confirms the 6-digit email OTP and returns a session verification token for viewing uploaded files.
+pub async fn officer_verify_otp(
+    State(state): State<AppState>,
+    Json(payload): Json<OfficerVerifyOtpPayload>,
+) -> Result<impl IntoResponse, AppError> {
+    let input_10 = normalize_phone_last_10(&payload.phone);
+    let target_key = format!("{}:{}", payload.admission_id, input_10);
+
+    let row = sqlx::query_as::<_, (Uuid, String, chrono::DateTime<Utc>, bool)>(
+        r#"
+        SELECT id, otp_code, expires_at, verified
+        FROM admission_otps
+        WHERE target = $1 AND target_type = 'OFFICER_VERIFY'
+        ORDER BY created_at DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(&target_key)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| {
+        AppError::BadRequest(
+            "No active OTP request found for this mobile number. Please request a new code.".into(),
+        )
+    })?;
+
+    let (otp_id, db_otp, expires_at, _already_verified) = row;
+
+    if Utc::now() > expires_at {
+        return Err(AppError::BadRequest(
+            "Verification code has expired. Please request a new code.".into(),
+        ));
+    }
+
+    if db_otp.trim() != payload.otp.trim() {
+        return Err(AppError::BadRequest(
+            "Incorrect verification code. Please check and try again.".into(),
+        ));
+    }
+
+    // Generate secure session token (valid for 4 hours)
+    let token = format!("ov_{}_{}", Uuid::new_v4().simple(), Utc::now().timestamp());
+
+    sqlx::query(
+        r#"
+        UPDATE admission_otps
+        SET verified = true, verification_token = $1
+        WHERE id = $2
+        "#,
+    )
+    .bind(&token)
+    .bind(otp_id)
+    .execute(&state.db)
+    .await?;
+
+    Ok(Json(json!({
+        "success": true,
+        "verification_token": token,
+        "admission_id": payload.admission_id,
+        "message": "Authorization verified successfully."
+    })))
+}
+
+/// GET /api/v1/admissions/public/application/:id/verified-documents?token=...
+/// Returns full admission details and all uploaded documents for authenticated officer review.
+pub async fn get_officer_verified_documents(
+    State(state): State<AppState>,
+    Path(admission_id): Path<Uuid>,
+    Query(query): Query<OfficerVerifiedDocsQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    // 1. Authenticate verification token
+    let otp_row = sqlx::query_as::<_, (Uuid, String, chrono::DateTime<Utc>, bool)>(
+        r#"
+        SELECT id, target, created_at, verified
+        FROM admission_otps
+        WHERE verification_token = $1 AND target_type = 'OFFICER_VERIFY' AND verified = true
+        LIMIT 1
+        "#,
+    )
+    .bind(&query.token)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| {
+        AppError::Unauthorized(
+            "Invalid or expired document verification session. Please verify again.".into(),
+        )
+    })?;
+
+    let (_otp_id, target, created_at, _verified) = otp_row;
+
+    // Token valid for 4 hours
+    if Utc::now() - created_at > chrono::Duration::hours(4) {
+        return Err(AppError::Unauthorized(
+            "Verification session has expired. Please scan QR code and authenticate again.".into(),
+        ));
+    }
+
+    let expected_prefix = admission_id.to_string();
+    if !target.starts_with(&expected_prefix) {
+        return Err(AppError::Unauthorized(
+            "Verification token does not match the requested admission application.".into(),
+        ));
+    }
+
+    // 2. Fetch application and school details
+    let adm_row = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            Uuid,
+            Option<Uuid>,
+            Option<String>,
+            String,
+            Option<chrono::DateTime<Utc>>,
+        ),
+    >(
+        r#"
+        SELECT id, school_id, academic_year_id, application_number, status::text, submitted_at
+        FROM admissions
+        WHERE id = $1
+        "#,
+    )
+    .bind(admission_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| AppError::NotFound("Admission record not found".into()))?;
+
+    let (id, school_id, ay_id, app_no, status, submitted_at) = adm_row;
+    let app_number_str = app_no.clone().unwrap_or_else(|| "PENDING".to_string());
+
+    let school = sqlx::query_as::<
+        _,
+        (
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ),
+    >(
+        r#"
+        SELECT name, address_line1, city, phone, email
+        FROM schools
+        WHERE id = $1
+        "#,
+    )
+    .bind(school_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    let ay_name: String = if let Some(ay) = ay_id {
+        sqlx::query_scalar("SELECT name FROM academic_years WHERE id = $1")
+            .bind(ay)
+            .fetch_optional(&state.db)
+            .await?
+            .unwrap_or_else(|| "2026-2027".to_string())
+    } else {
+        "2026-2027".to_string()
+    };
+
+    let applicant = sqlx::query_as::<
+        _,
+        (
+            String,
+            Option<String>,
+            String,
+            NaiveDate,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ),
+    >(
+        r#"
+        SELECT first_name, middle_name, last_name, date_of_birth, gender, phone, email
+        FROM admission_applicants
+        WHERE admission_id = $1
+        LIMIT 1
+        "#,
+    )
+    .bind(admission_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let guardian = sqlx::query_as::<_, (String, String, String, Option<String>, Option<String>)>(
+        r#"
+        SELECT name, relationship, phone, email, occupation
+        FROM admission_guardians
+        WHERE admission_id = $1
+        LIMIT 1
+        "#,
+    )
+    .bind(admission_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    // 3. Fetch custom fields and compile documents list
+    let custom_values = sqlx::query_as::<_, (String, String, String)>(
+        r#"
+        SELECT cf.field_name, cf.field_key, acv.value
+        FROM admission_custom_values acv
+        JOIN custom_fields cf ON cf.id = acv.field_id
+        WHERE acv.admission_id = $1
+        ORDER BY cf.display_order ASC
+        "#,
+    )
+    .bind(admission_id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    let custom_fields_json: Vec<serde_json::Value> = custom_values
+        .iter()
+        .map(|(name, key, val)| {
+            json!({
+                "name": name,
+                "key": key,
+                "value": val
+            })
+        })
+        .collect();
+
+    // 4. Extract all uploaded documents
+    let mut documents: Vec<serde_json::Value> = Vec::new();
+    let mut student_photo_url: Option<String> = None;
+
+    for (field_name, field_key, value) in &custom_values {
+        let val_trimmed = value.trim();
+        let is_url_or_b64 =
+            val_trimmed.starts_with("http") || val_trimmed.starts_with("data:image");
+        let is_doc_key = field_key.starts_with("doc_")
+            || field_key.contains("document")
+            || field_key.contains("photo")
+            || field_key.contains("cert")
+            || field_key.contains("proof");
+
+        if is_doc_key || is_url_or_b64 {
+            let key_lower = field_key.to_lowercase();
+            let is_photo = key_lower.contains("photo") || key_lower.contains("passport");
+
+            if is_photo && student_photo_url.is_none() && is_url_or_b64 {
+                student_photo_url = Some(val_trimmed.to_string());
+            }
+
+            // Derive human-friendly title
+            let title = if key_lower.contains("photo") || key_lower.contains("passport") {
+                "Student Passport Photograph".to_string()
+            } else if key_lower.contains("birth") {
+                "Birth Certificate".to_string()
+            } else if key_lower.contains("address") || key_lower.contains("aadhaar") {
+                "Address & Identification Proof".to_string()
+            } else if key_lower.contains("report") || key_lower.contains("mark") {
+                "Previous Academic Report Card".to_string()
+            } else if key_lower.contains("tc") || key_lower.contains("transfer") {
+                "Transfer Certificate (TC)".to_string()
+            } else if key_lower.contains("medical") {
+                "Medical Fitness Certificate".to_string()
+            } else if key_lower.contains("caste") || key_lower.contains("category") {
+                "Caste / Category Certificate".to_string()
+            } else {
+                field_name.replace("Document: ", "")
+            };
+
+            let is_pdf = val_trimmed.to_lowercase().contains(".pdf");
+            let file_name = if is_pdf {
+                format!("{}.pdf", title.replace(['/', ' '], "_"))
+            } else {
+                format!("{}.jpg", title.replace(['/', ' '], "_"))
+            };
+
+            documents.push(json!({
+                "id": field_key,
+                "title": title,
+                "url": val_trimmed,
+                "file_name": file_name,
+                "file_type": if is_pdf { "pdf" } else { "image" },
+                "is_photo": is_photo
+            }));
+        }
+    }
+
+    // Also check storage_objects table if available
+    let storage_rows = sqlx::query_as::<_, (String, String, String, String)>(
+        r#"
+        SELECT file_name, file_path, url, mime_type
+        FROM storage_objects
+        WHERE entity_id = $1::text
+        ORDER BY created_at DESC
+        "#,
+    )
+    .bind(admission_id.to_string())
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    for (f_name, _path, url, mime) in storage_rows {
+        if !documents.iter().any(|d| d["url"] == url) {
+            let is_pdf = mime.contains("pdf") || url.ends_with(".pdf");
+            let is_photo = f_name.to_lowercase().contains("photo") || mime.contains("image");
+            documents.push(json!({
+                "id": format!("storage_{}", Uuid::new_v4().simple()),
+                "title": f_name.replace('_', " "),
+                "url": url,
+                "file_name": f_name,
+                "file_type": if is_pdf { "pdf" } else { "image" },
+                "is_photo": is_photo
+            }));
+        }
+    }
+
+    // Generate Verification QR Code SVG
+    let app_url = std::env::var("APP_URL")
+        .unwrap_or_else(|_| "https://my-frontend-kappa-five.vercel.app".to_string());
+    let clean_url = app_url.trim_end_matches('/');
+    let verify_url =
+        format!("{clean_url}/admissions/verify?id={admission_id}&app_no={app_number_str}");
+
+    let qr_code_svg = if let Ok(code) = QrCode::new(verify_url.as_bytes()) {
+        code.render::<svg::Color>().min_dimensions(120, 120).build()
+    } else {
+        String::new()
+    };
+
+    let template_config = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT value FROM school_settings WHERE school_id = $1 AND key = 'report_tpl_admission_form'",
+    )
+    .bind(school_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+
+    let application_data = json!({
+        "id": id,
+        "school_id": school_id,
+        "school_name": school.0,
+        "school_address": school.1.unwrap_or_else(|| "Campus Road, Knowledge Park".to_string()),
+        "school_city": school.2.unwrap_or_default(),
+        "school_phone": school.3.unwrap_or_default(),
+        "school_email": school.4.unwrap_or_default(),
+        "academic_year": ay_name,
+        "application_number": app_number_str,
+        "status": status,
+        "submitted_at": submitted_at.map(|d| d.to_rfc3339()).unwrap_or_default(),
+        "applicant": applicant.map(|a| json!({
+            "first_name": a.0,
+            "middle_name": a.1.unwrap_or_default(),
+            "last_name": a.2,
+            "date_of_birth": a.3.to_string(),
+            "gender": a.4.unwrap_or_else(|| "Male".to_string()),
+            "phone": a.5.unwrap_or_default(),
+            "email": a.6.unwrap_or_default()
+        })),
+        "guardian": guardian.map(|g| json!({
+            "name": g.0,
+            "relationship": g.1,
+            "phone": g.2,
+            "email": g.3.unwrap_or_default(),
+            "occupation": g.4.unwrap_or_default()
+        })),
+        "custom_fields": custom_fields_json,
+        "template_config": template_config,
+        "qr_code_svg": qr_code_svg,
+        "verify_url": verify_url
+    });
+
+    Ok(Json(json!({
+        "success": true,
+        "admission_id": admission_id,
+        "student_photo_url": student_photo_url,
+        "application": application_data,
+        "documents": documents
+    })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1602,5 +2273,17 @@ mod tests {
         let addr2_none: Option<&str> = None;
         let parts2: Vec<&str> = [addr1_only, addr2_none].into_iter().flatten().collect();
         assert_eq!(parts2.join(", "), "Central Avenue");
+    }
+
+    #[test]
+    fn test_officer_verification_phone_normalization_and_email_masking() {
+        assert_eq!(normalize_phone_last_10("+91 96054 49544"), "9605449544");
+        assert_eq!(normalize_phone_last_10("09605449544"), "9605449544");
+        assert_eq!(normalize_phone_last_10("9605449544"), "9605449544");
+        assert_eq!(normalize_phone_last_10("(+91) 987-654-3210"), "9876543210");
+
+        assert_eq!(mask_email("john.doe@gmail.com"), "j***e@gmail.com");
+        assert_eq!(mask_email("ab@eraya.edu"), "a***@eraya.edu");
+        assert_eq!(mask_email("officer@school.org"), "o***r@school.org");
     }
 }

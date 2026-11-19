@@ -429,7 +429,7 @@ pub fn parse_date_input(text: &str, current_date: NaiveDate) -> Result<Option<Na
         }
         if target < current_date - chrono::Duration::days(60) {
             return Err(format!(
-                "Cannot mark attendance for dates older than 60 days via WhatsApp ({}). Please use the ERAVAYA Web Portal for historical records.",
+                "Cannot mark attendance for dates older than 60 days via WhatsApp ({}). Please use the School Web Portal for historical records.",
                 target.format("%d %b %Y")
             ));
         }
@@ -667,7 +667,7 @@ pub fn parse_take_attendance_args(text: &str, current_date: NaiveDate) -> Parsed
                         ));
                     } else if d < current_date - chrono::Duration::days(60) {
                         date_error = Some(format!(
-                            "Cannot mark attendance for dates older than 60 days via WhatsApp ({}). Please use the ERAVAYA Web Portal for historical records.",
+                            "Cannot mark attendance for dates older than 60 days via WhatsApp ({}). Please use the School Web Portal for historical records.",
                             d.format("%d/%m/%Y")
                         ));
                     } else {
@@ -1036,7 +1036,7 @@ pub async fn transition_to_class_attendance(
             return format!(
                 "🔒 *Attendance Frozen / Locked*\n\n\
                 Attendance for *{} - Section {}* on *{}* has been administratively locked.\n\n\
-                Modifications require School Administrator action in the ERAVAYA ERP dashboard.",
+                Modifications require School Administrator action in the school dashboard.",
                 selected.class_name, selected.section_name, formatted_target_date
             );
         }
@@ -1983,7 +1983,7 @@ pub async fn record_or_update_attendance_for_roster(
     }
 
     receipt.push_str(&format!(
-        "\n\n_Attendance recorded by {name}. Data synced to ERAVAYA ERP in real-time._"
+        "\n\n_Attendance recorded by {name}. Data synced to school portal in real-time._"
     ));
 
     receipt
@@ -2459,7 +2459,7 @@ pub async fn handle_attendance_query(pool: &PgPool, context: &WhatsAppUserContex
             👨‍🏫 *Teaching & Admin Staff*: {}\n\
             ⏳ *Pending Enrollments*: {}\n\n\
             👉 *Manage All Records*:\n{clean_url}/dashboard/academics/attendance\n\n\
-            _Live summary generated from ERAVAYA ERP for Admin {name}._",
+            _Live summary generated for Admin {name}._",
             stats.total_students,
             stats.active_classes,
             stats.total_staff,
@@ -2478,7 +2478,7 @@ pub async fn handle_attendance_query(pool: &PgPool, context: &WhatsAppUserContex
             📅 *Academic Session*: Active (2026-2027)\n\n\
             👉 *View Detailed Monthly Report*:\n\
             {clean_url}/dashboard\n\n\
-            _Verified by ERAVAYA ERP. No attendance penalties or warnings apply._"
+            _Verified by school administration. No attendance penalties or warnings apply._"
         )
     }
 }

@@ -7,6 +7,15 @@ pub async fn send_email(
     subject: &str,
     html_body: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    send_email_with_sender(None, to, subject, html_body).await
+}
+
+pub async fn send_email_with_sender(
+    from_name: Option<&str>,
+    to: &str,
+    subject: &str,
+    html_body: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let smtp_host = env::var("SMTP_HOST").unwrap_or_else(|_| "smtp.gmail.com".to_string());
     let smtp_port = env::var("SMTP_PORT")
         .unwrap_or_else(|_| "465".to_string())
@@ -25,9 +34,24 @@ pub async fn send_email(
         _ => return Err("SMTP_FROM environment variable is not set".into()),
     };
     let clean_from = raw_from.trim().trim_matches('"').trim_matches('\'');
+    let from_header_value = match from_name {
+        Some(name) if !name.trim().is_empty() => {
+            let email_addr = if let Some(start) = clean_from.find('<') {
+                if let Some(end) = clean_from.find('>') {
+                    &clean_from[start + 1..end]
+                } else {
+                    clean_from
+                }
+            } else {
+                clean_from
+            };
+            format!("{} <{}>", name.trim(), email_addr.trim())
+        }
+        _ => clean_from.to_string(),
+    };
 
     let email = Message::builder()
-        .from(clean_from.parse()?)
+        .from(from_header_value.parse()?)
         .to(to.parse()?)
         .subject(subject)
         .header(lettre::message::header::ContentType::TEXT_HTML)

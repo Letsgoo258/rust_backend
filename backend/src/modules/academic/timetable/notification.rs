@@ -93,7 +93,7 @@ pub async fn queue_substitution_notifications(
                 📚 *Subject*: {subject_name} ({subject_code})\n\
                 📝 *Reason*: {display_reason}\n\n\
                 Please report to the classroom promptly. Thank you!\n\
-                — *Eravaya Academic Operations*"
+                — *{school_name} Academic Operations*"
             );
             let wa_payload = serde_json::json!({
                 "text": wa_text,
@@ -129,7 +129,7 @@ pub async fn queue_substitution_notifications(
                 👤 *Substitute*: {sub_teacher_name}\n\
                 📝 *Reason*: {display_reason}\n\n\
                 Your class coverage is confirmed.\n\
-                — *Eravaya Academic Operations*"
+                — *{school_name} Academic Operations*"
             );
             let wa_payload = serde_json::json!({
                 "text": wa_text,
@@ -382,7 +382,7 @@ fn generate_substitution_email_html(
       </div>
 
       <div style="border-top: 1px solid #f1f5f9; padding-top: 16px; font-size: 11px; color: #94a3b8; text-align: center;">
-        Automated notification dispatched by Eravaya ERP Academic Desk. Please do not reply directly to this email.
+        Automated notification dispatched by {school_name} Academic Desk. Please do not reply directly to this email.
       </div>
     </div>
   </div>

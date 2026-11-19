@@ -35,7 +35,7 @@ pub async fn generate_link_token(
     payload_opt: Option<Json<GenerateLinkTokenPayload>>,
 ) -> Result<impl IntoResponse, AppError> {
     let user = auth_session.user.ok_or_else(|| {
-        AppError::Unauthorized("Please log in to ERAVAYA ERP to link WhatsApp".into())
+        AppError::Unauthorized("Please log in to your account to link WhatsApp".into())
     })?;
 
     // Extract client IP (prioritize X-Forwarded-For or X-Real-IP)
@@ -207,9 +207,27 @@ pub async fn send_otp(
 
     WhatsAppRepository::set_verification_otp(&state.db, &payload.token, &otp_str).await?;
 
+    let school_name: String = sqlx::query_scalar(
+        r#"
+        SELECT s.name 
+        FROM users u 
+        JOIN schools s ON s.id = u.school_id 
+        WHERE u.phone = $1 OR u.phone = $2
+        LIMIT 1
+        "#,
+    )
+    .bind(&token_row.phone)
+    .bind(format!("+{}", token_row.phone))
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_else(|| "School Portal".to_string());
+
     // Send OTP directly to WhatsApp chat
     let message = format!(
-        "🔐 *ERAVAYA ERP Verification Code*\n\nYour one-time code is: *{otp_str}*\n\nThis code expires in 10 minutes. Please enter it on the verification page to complete linking your account."
+        "🔐 *{} Verification Code*\n\nYour one-time code is: *{otp_str}*\n\nThis code expires in 10 minutes. Please enter it on the verification page to complete linking your account.",
+        school_name
     );
 
     let _ = send_whatsapp_message(&state.db, &token_row.sender_jid, &message, None).await;
@@ -367,11 +385,19 @@ pub async fn complete_verification(
     // Mark verification token as completed
     let _ = WhatsAppRepository::mark_token_verified(&state.db, &payload.token).await;
 
+    let school_name: String = sqlx::query_scalar("SELECT name FROM schools WHERE id = $1")
+        .bind(school_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "School Portal".to_string());
+
     // Send confirmation message to WhatsApp
     let welcome_msg = format!(
         "🎉 *Account Successfully Linked!*\n\n\
         Welcome, *{display_name}*!\n\
-        Your WhatsApp is now authenticated with ERAVAYA ERP as a *{primary_role}*.\n\n\
+        Your WhatsApp is now authenticated with {school_name} as a *{primary_role}*.\n\n\
         You can now check attendance, fees, timetable, and exam updates directly here anytime.\n\
         Type *help* to view your interactive menu!"
     );

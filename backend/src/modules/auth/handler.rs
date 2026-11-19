@@ -765,15 +765,22 @@ pub async fn request_delete_otp(
     sqlx::query!("INSERT INTO admin_action_otps (user_id, action_type, target_id, otp_code, expires_at) VALUES ($1, 'DELETE_SCHOOL', $2, $3, NOW() + INTERVAL '10 minutes')", user.id, id, otp)
         .execute(&state.db).await?;
 
+    let school_name: String = sqlx::query_scalar!("SELECT name FROM schools WHERE id = $1", id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "School".to_string());
+
     let email_body = format!(
         "<h1>Action Required</h1>\n\
-        <p>You have requested to <b>permanently delete</b> school tenant <code>{}</code>.</p>\n\
+        <p>You have requested to <b>permanently delete</b> school tenant <b>{}</b> (ID: <code>{}</code>).</p>\n\
         <p>If you initiated this action, please enter the following OTP to confirm:</p>\n\
         <h2 style='color:red; letter-spacing:4px'>{}</h2>\n\
         <p>This code will expire in 10 minutes.</p>\n\
         <br>\n\
         <p><i>If you did not request this action, please ignore this email.</i></p>",
-        id, otp
+        school_name, id, otp
     );
 
     let user_email = sqlx::query_scalar!("SELECT email FROM users WHERE id = $1", user.id)
@@ -782,9 +789,11 @@ pub async fn request_delete_otp(
         .unwrap_or_default();
 
     if !user_email.is_empty() {
-        if let Err(e) = crate::utils::email::send_email(
+        let subject = format!("{}: Confirm School Deletion", school_name);
+        if let Err(e) = crate::utils::email::send_email_with_sender(
+            Some(&school_name),
             &user_email,
-            "Eravaya: Confirm Tenant Deletion",
+            &subject,
             &email_body,
         )
         .await
@@ -953,24 +962,31 @@ pub async fn request_verify_otp(
     sqlx::query!("INSERT INTO admin_action_otps (user_id, action_type, otp_code, expires_at) VALUES ($1, 'VERIFY_PHONE', $2, NOW() + INTERVAL '15 minutes')", user.id, phone_otp)
         .execute(&state.db).await?;
 
+    let school_name: String =
+        sqlx::query_scalar!("SELECT name FROM schools WHERE id = $1", user.school_id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "School".to_string());
+
     let email_body = format!(
-        "<h1>Verify your Eravaya Account</h1>
-\
-        <p>Your Email Verification Code is:</p>
-\
-        <h2 style='color:blue; letter-spacing:4px'>{}</h2>
-\
+        "<h1>Verify your {} Account</h1>\
+        <p>Your Email Verification Code is:</p>\
+        <h2 style='color:blue; letter-spacing:4px'>{}</h2>\
         <p>This code will expire in 15 minutes.</p>",
-        email_otp
+        school_name, email_otp
     );
 
     let target_email = user_data.email.unwrap_or_default();
     let target_phone = norm_ph.clone();
 
     if !target_email.is_empty() {
-        if let Err(e) = crate::utils::email::send_email(
+        let subject = format!("{}: Email Verification Code", school_name);
+        if let Err(e) = crate::utils::email::send_email_with_sender(
+            Some(&school_name),
             &target_email,
-            "Eravaya: Email Verification Code",
+            &subject,
             &email_body,
         )
         .await
@@ -1003,8 +1019,8 @@ pub async fn request_verify_otp(
         if !clean_phone.is_empty() {
             let jid = format!("{clean_phone}@s.whatsapp.net");
             let wa_msg = format!(
-                "🔐 *ERAVAYA Account Verification*\n\nHello {},\nYour WhatsApp verification code is: *{}*\n\nThis code will expire in 15 minutes.",
-                user.username, phone_otp
+                "🔐 *{} Account Verification*\n\nHello {},\nYour WhatsApp verification code is: *{}*\n\nThis code will expire in 15 minutes.",
+                school_name, user.username, phone_otp
             );
             let pool = state.db.clone();
             tokio::spawn(async move {
@@ -1129,14 +1145,25 @@ pub async fn request_password_reset(
 ) -> Result<impl axum::response::IntoResponse, AppError> {
     let email = payload.email.trim().to_lowercase();
 
-    let user = sqlx::query_as::<_, (uuid::Uuid, String, Option<String>)>(
-        "SELECT id, username, phone FROM users WHERE LOWER(email) = LOWER($1) AND status NOT IN ('DELETED', 'SUSPENDED') LIMIT 1",
+    let user = sqlx::query_as::<_, (uuid::Uuid, String, Option<String>, Option<uuid::Uuid>)>(
+        "SELECT id, username, phone, school_id FROM users WHERE LOWER(email) = LOWER($1) AND status NOT IN ('DELETED', 'SUSPENDED') LIMIT 1",
     )
     .bind(&email)
     .fetch_optional(&state.db)
     .await?;
 
-    if let Some((user_id, username, phone)) = user {
+    if let Some((user_id, username, phone, school_id)) = user {
+        let school_name: String = if let Some(sid) = school_id {
+            sqlx::query_scalar!("SELECT name FROM schools WHERE id = $1", sid)
+                .fetch_optional(&state.db)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "School".to_string())
+        } else {
+            "School".to_string()
+        };
+
         use argon2::password_hash::rand_core::{OsRng, RngCore};
         let code = format!("{:06}", OsRng.next_u32() % 1_000_000);
         let token = uuid::Uuid::new_v4().to_string();
@@ -1163,19 +1190,22 @@ pub async fn request_password_reset(
             email
         );
         let email_body = format!(
-            "<h3>Eravaya Password Reset Request</h3>\
+            "<h3>{} Password Reset Request</h3>\
              <p>Hello {},</p>\
              <p>Your verification code is: <strong>{}</strong></p>\
              <p>Or click this link to reset your password: <a href=\"{}\">Reset Password</a></p>\
              <p>This code will expire in 15 minutes.</p>",
-            username, code, reset_url
+            school_name, username, code, reset_url
         );
 
         let email_to_send = email.clone();
+        let email_subject = format!("Reset Your {} Password", school_name);
+        let s_name = school_name.clone();
         tokio::spawn(async move {
-            if let Err(e) = crate::utils::email::send_email(
+            if let Err(e) = crate::utils::email::send_email_with_sender(
+                Some(&s_name),
                 &email_to_send,
-                "Reset Your Eravaya Password",
+                &email_subject,
                 &email_body,
             )
             .await
@@ -1189,8 +1219,8 @@ pub async fn request_password_reset(
             if !clean_phone.is_empty() {
                 let jid = format!("{clean_phone}@s.whatsapp.net");
                 let wa_msg = format!(
-                    "🔐 *ERAVAYA Password Reset*\n\nHello {},\nYour password reset code is: *{}*\n\nReset link: {}\n\nThis code will expire in 15 minutes.",
-                    username, code, reset_url
+                    "🔐 *{} Password Reset*\n\nHello {},\nYour password reset code is: *{}*\n\nReset link: {}\n\nThis code will expire in 15 minutes.",
+                    school_name, username, code, reset_url
                 );
                 let pool = state.db.clone();
                 tokio::spawn(async move {
@@ -1655,6 +1685,14 @@ pub async fn request_user_grant_otp(
         otp
     );
 
+    let school_name: String =
+        sqlx::query_scalar!("SELECT name FROM schools WHERE id = $1", user.school_id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "School".to_string());
+
     let user_email: Option<String> =
         sqlx::query_scalar!("SELECT email FROM users WHERE id = $1", user.id)
             .fetch_optional(&state.db)
@@ -1663,9 +1701,11 @@ pub async fn request_user_grant_otp(
 
     if let Some(email) = user_email {
         if !email.is_empty() {
-            if let Err(e) = crate::utils::email::send_email(
+            let subject = format!("{}: Confirm User Permission Delegation", school_name);
+            if let Err(e) = crate::utils::email::send_email_with_sender(
+                Some(&school_name),
                 &email,
-                "Eravaya: Confirm User Permission Delegation",
+                &subject,
                 &email_body,
             )
             .await

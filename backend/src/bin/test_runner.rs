@@ -108,7 +108,7 @@ async fn main() {
 <body>
   <div class="card">
     <div class="badge">CRITICAL: Test Suite Failure</div>
-    <h2 style="color: #0f172a; margin-top: 12px;">Eravaya Backend Automated Test Alert</h2>
+    <h2 style="color: #0f172a; margin-top: 12px;">Backend Automated Test Alert</h2>
 
     <div class="meta">
       <strong>Timestamp:</strong> {}<br/>

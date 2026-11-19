@@ -43,7 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::error!("PANIC at {}: {}", location, msg);
     }));
 
-    tracing::info!("Starting ERAVAYA ERP backend initialization...");
+    tracing::info!("Starting ERP backend initialization...");
 
     let config = AppConfig::from_env();
 

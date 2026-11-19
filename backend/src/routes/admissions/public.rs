@@ -1322,6 +1322,30 @@ pub async fn get_submitted_application_details(
     .ok()
     .flatten();
 
+    // Admissions config from school_settings (for dynamically configured required documents)
+    let adm_setting_val = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT value FROM school_settings WHERE school_id = $1 AND key = 'admissions_config'",
+    )
+    .bind(school_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+
+    let required_docs = adm_setting_val
+        .and_then(|v| v.get("required_docs").cloned())
+        .unwrap_or_else(|| {
+            json!([
+                { "id": "birth_cert", "label": "Birth Certificate", "required": true },
+                { "id": "prev_report", "label": "Previous Year Report Card", "required": true },
+                { "id": "transfer_cert", "label": "Transfer Certificate (TC)", "required": false },
+                { "id": "photo", "label": "Passport-size Photographs (4 copies)", "required": true },
+                { "id": "address_proof", "label": "Address Proof (Aadhaar / Utility Bill)", "required": true },
+                { "id": "caste_cert", "label": "Caste / Category Certificate", "required": false },
+                { "id": "medical_fit", "label": "Medical Fitness Certificate", "required": false }
+            ])
+        });
+
     // Generate Verification QR Code SVG (User Request: "below needs to be a qr code when scanned can view the uploaded pdfs")
     let app_url = std::env::var("APP_URL")
         .unwrap_or_else(|_| "https://my-frontend-kappa-five.vercel.app".to_string());
@@ -1367,6 +1391,7 @@ pub async fn get_submitted_application_details(
             })),
             "custom_fields": custom_fields_json,
             "template_config": template_config,
+            "required_docs": required_docs,
             "qr_code_svg": qr_code_svg,
             "verify_url": verify_url
         }
@@ -2184,6 +2209,29 @@ pub async fn get_officer_verified_documents(
     .ok()
     .flatten();
 
+    let adm_setting_val = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT value FROM school_settings WHERE school_id = $1 AND key = 'admissions_config'",
+    )
+    .bind(school_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+
+    let required_docs = adm_setting_val
+        .and_then(|v| v.get("required_docs").cloned())
+        .unwrap_or_else(|| {
+            json!([
+                { "id": "birth_cert", "label": "Birth Certificate", "required": true },
+                { "id": "prev_report", "label": "Previous Year Report Card", "required": true },
+                { "id": "transfer_cert", "label": "Transfer Certificate (TC)", "required": false },
+                { "id": "photo", "label": "Passport-size Photographs (4 copies)", "required": true },
+                { "id": "address_proof", "label": "Address Proof (Aadhaar / Utility Bill)", "required": true },
+                { "id": "caste_cert", "label": "Caste / Category Certificate", "required": false },
+                { "id": "medical_fit", "label": "Medical Fitness Certificate", "required": false }
+            ])
+        });
+
     let application_data = json!({
         "id": id,
         "school_id": school_id,
@@ -2214,6 +2262,7 @@ pub async fn get_officer_verified_documents(
         })),
         "custom_fields": custom_fields_json,
         "template_config": template_config,
+        "required_docs": required_docs,
         "qr_code_svg": qr_code_svg,
         "verify_url": verify_url
     });

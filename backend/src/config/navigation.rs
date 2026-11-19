@@ -314,6 +314,13 @@ impl NavigationConfig {
                         badge: None,
                     },
                     NavigationItem {
+                        name: "Modules Config".into(),
+                        path: "/dashboard/school-setting?tab=modules_config".into(),
+                        icon: "grid".into(),
+                        capability: Some("settings:view".into()),
+                        badge: None,
+                    },
+                    NavigationItem {
                         name: "Config".into(),
                         path: "/dashboard/school-setting?tab=config".into(),
                         icon: "config".into(),
@@ -846,6 +853,21 @@ mod tests {
         assert!(
             exams_in_settings,
             "Exams must appear in school settings sidebar"
+        );
+    }
+
+    #[test]
+    fn test_school_settings_modules_config_sidebar() {
+        let admin = create_test_user(vec!["SCHOOL_ADMIN"], false, false);
+        let nav_admin = NavigationConfig::build_user_navigation(&admin);
+        let modules_in_settings = nav_admin.school_settings_sidebar.iter().any(|sec| {
+            sec.items.iter().any(|item| {
+                item.name == "Modules Config" && item.path.contains("tab=modules_config")
+            })
+        });
+        assert!(
+            modules_in_settings,
+            "Modules Config must appear in school settings sidebar"
         );
     }
 

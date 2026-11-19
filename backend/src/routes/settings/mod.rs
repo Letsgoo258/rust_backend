@@ -1,4 +1,5 @@
 pub mod admissions;
+pub mod modules;
 pub mod reports;
 pub mod whatsapp;
 
@@ -10,4 +11,5 @@ pub fn router() -> Router<AppState> {
         .nest("/whatsapp", whatsapp::router())
         .nest("/admissions", admissions::router())
         .nest("/reports", reports::router())
+        .nest("/modules", modules::router())
 }

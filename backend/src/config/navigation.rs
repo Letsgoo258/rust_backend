@@ -80,10 +80,10 @@ impl NavigationConfig {
                     badge: None,
                 },
                 NavigationItem {
-                    name: "Observe".into(),
-                    path: "/dashboard/observe".into(),
-                    icon: "eye".into(),
-                    capability: Some("settings:view".into()),
+                    name: "Fees".into(),
+                    path: "/dashboard/modules/fee".into(),
+                    icon: "rupee".into(),
+                    capability: None,
                     badge: None,
                 },
                 NavigationItem {

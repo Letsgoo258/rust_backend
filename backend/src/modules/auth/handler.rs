@@ -765,12 +765,14 @@ pub async fn request_delete_otp(
     sqlx::query!("INSERT INTO admin_action_otps (user_id, action_type, target_id, otp_code, expires_at) VALUES ($1, 'DELETE_SCHOOL', $2, $3, NOW() + INTERVAL '10 minutes')", user.id, id, otp)
         .execute(&state.db).await?;
 
-    let school_name: String = sqlx::query_scalar!("SELECT name FROM schools WHERE id = $1", id)
-        .fetch_optional(&state.db)
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "School".to_string());
+    let school_name: String =
+        sqlx::query_scalar::<_, String>("SELECT name FROM schools WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "School".to_string());
 
     let email_body = format!(
         "<h1>Action Required</h1>\n\
@@ -963,7 +965,8 @@ pub async fn request_verify_otp(
         .execute(&state.db).await?;
 
     let school_name: String =
-        sqlx::query_scalar!("SELECT name FROM schools WHERE id = $1", user.school_id)
+        sqlx::query_scalar::<_, String>("SELECT name FROM schools WHERE id = $1")
+            .bind(user.school_id)
             .fetch_optional(&state.db)
             .await
             .ok()
@@ -1154,7 +1157,8 @@ pub async fn request_password_reset(
 
     if let Some((user_id, username, phone, school_id)) = user {
         let school_name: String = if let Some(sid) = school_id {
-            sqlx::query_scalar!("SELECT name FROM schools WHERE id = $1", sid)
+            sqlx::query_scalar::<_, String>("SELECT name FROM schools WHERE id = $1")
+                .bind(sid)
                 .fetch_optional(&state.db)
                 .await
                 .ok()
@@ -1686,7 +1690,8 @@ pub async fn request_user_grant_otp(
     );
 
     let school_name: String =
-        sqlx::query_scalar!("SELECT name FROM schools WHERE id = $1", user.school_id)
+        sqlx::query_scalar::<_, String>("SELECT name FROM schools WHERE id = $1")
+            .bind(user.school_id)
             .fetch_optional(&state.db)
             .await
             .ok()

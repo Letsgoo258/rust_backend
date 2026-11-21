@@ -1326,6 +1326,47 @@ impl ExamRepository {
             });
         }
 
+        // 2b. Fetch evaluated LMS tasks configured for result inclusion
+        let lms_eval_rows = sqlx::query(
+            r#"
+            SELECT
+                e.id as eval_id,
+                e.evaluation_title,
+                t.subject_id,
+                s.name as subject_name,
+                e.maximum_marks::FLOAT8 as max_marks,
+                COALESCE(e.evaluation_date::TEXT, t.assigned_at::DATE::TEXT) as date,
+                e.include_in_results
+            FROM lms_evaluations e
+            JOIN lms_tasks t ON e.task_id = t.id
+            LEFT JOIN subjects s ON t.subject_id = s.id
+            WHERE t.class_section_id = $1 AND t.school_id = $2
+              AND e.include_in_results = true
+            ORDER BY date DESC
+            "#,
+        )
+        .bind(class_section_id)
+        .bind(school_id)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+
+        for r in &lms_eval_rows {
+            let sub_id: Option<Uuid> = r.try_get("subject_id").ok();
+            items.push(ClassScoreItemSummary {
+                item_id: r.get("eval_id"),
+                item_type: "LMS_EVALUATION".into(),
+                title: r.get("evaluation_title"),
+                subject_id: sub_id.unwrap_or_default(),
+                subject_name: r
+                    .try_get("subject_name")
+                    .unwrap_or_else(|_| "General".into()),
+                max_marks: r.get("max_marks"),
+                date: r.get("date"),
+                affects_overall: r.get("include_in_results"),
+            });
+        }
+
         // 3. Fetch all students enrolled
         let student_rows = sqlx::query(
             r#"
@@ -1384,6 +1425,22 @@ impl ExamRepository {
         .await
         .map_err(|e| AppError::InternalServerError(e.to_string()))?;
 
+        // 5b. Fetch all LMS evaluation marks for tasks configured for result inclusion
+        let lms_mark_rows = sqlx::query(
+            r#"
+            SELECT lem.evaluation_id, lem.student_id, lem.marks_obtained::FLOAT8 as marks_obtained, lem.is_absent, lem.remarks
+            FROM lms_evaluation_marks lem
+            JOIN lms_evaluations le ON lem.evaluation_id = le.id
+            JOIN lms_tasks lt ON le.task_id = lt.id
+            WHERE lt.class_section_id = $1 AND lt.school_id = $2 AND le.include_in_results = true
+            "#
+        )
+        .bind(class_section_id)
+        .bind(school_id)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+
         let mut students = Vec::new();
         for sr in student_rows {
             let student_id: Uuid = sr.get("student_id");
@@ -1409,6 +1466,18 @@ impl ExamRepository {
                         marks_obtained: am.get("marks_obtained"),
                         is_absent: am.get("is_absent"),
                         remarks: am.get("remarks"),
+                    });
+                }
+            }
+
+            for lm in &lms_mark_rows {
+                let s_id: Uuid = lm.get("student_id");
+                if s_id == student_id {
+                    scores.push(StudentItemScore {
+                        item_id: lm.get("evaluation_id"),
+                        marks_obtained: lm.get("marks_obtained"),
+                        is_absent: lm.get("is_absent"),
+                        remarks: lm.get("remarks"),
                     });
                 }
             }

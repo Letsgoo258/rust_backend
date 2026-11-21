@@ -755,7 +755,17 @@ pub async fn check_active_period(
           AND cdt.date = $3
           AND (NOW() AT TIME ZONE COALESCE(sch.timezone, 'Asia/Kolkata'))::time >= (cdt.start_time - INTERVAL '10 minutes')
           AND (NOW() AT TIME ZONE COALESCE(sch.timezone, 'Asia/Kolkata'))::time <= (cdt.end_time + INTERVAL '10 minutes')
-        ORDER BY cdt.period_number ASC
+        ORDER BY
+            CASE 
+                WHEN (NOW() AT TIME ZONE COALESCE(sch.timezone, 'Asia/Kolkata'))::time >= cdt.start_time 
+                 AND (NOW() AT TIME ZONE COALESCE(sch.timezone, 'Asia/Kolkata'))::time <= cdt.end_time 
+                THEN 0 
+                ELSE 1 
+            END ASC,
+            LEAST(
+                ABS(EXTRACT(EPOCH FROM ((NOW() AT TIME ZONE COALESCE(sch.timezone, 'Asia/Kolkata'))::time - cdt.start_time))),
+                ABS(EXTRACT(EPOCH FROM ((NOW() AT TIME ZONE COALESCE(sch.timezone, 'Asia/Kolkata'))::time - cdt.end_time)))
+            ) ASC
         LIMIT 1
         "#,
     )
@@ -767,7 +777,66 @@ pub async fn check_active_period(
     .ok()
     .flatten();
 
-    row.map(|r| ActiveTimetableSlot {
+    if let Some(r) = row {
+        return Some(ActiveTimetableSlot {
+            class_section_id: r.get("class_section_id"),
+            class_name: r.get("class_name"),
+            section_name: r.get("section_name"),
+            period_number: r.get("period_number"),
+            subject_id: r.get("subject_id"),
+            subject_name: r.get("subject_name"),
+            start_time: r.get("start_time_str"),
+            end_time: r.get("end_time_str"),
+        });
+    }
+
+    // Fallback: If not in current_day_timetable, check active timetable_slots
+    let ts_row = sqlx::query(
+        r#"
+        SELECT
+            ts.class_section_id,
+            c.name as class_name,
+            sec.name as section_name,
+            ts.period_number,
+            ts.subject_id,
+            sub.name as subject_name,
+            ts.start_time::text as start_time_str,
+            ts.end_time::text as end_time_str
+        FROM timetable_slots ts
+        JOIN schools sch ON sch.id = ts.school_id
+        JOIN class_sections cs ON cs.id = ts.class_section_id
+        JOIN classes c ON c.id = cs.class_id
+        JOIN sections sec ON sec.id = cs.section_id
+        JOIN subjects sub ON sub.id = ts.subject_id
+        WHERE ts.school_id = $1
+          AND (ts.teacher_staff_id = $2 OR ts.co_teacher_staff_ids @> ARRAY[$2::uuid])
+          AND ts.day_of_week = EXTRACT(ISODOW FROM $3::date)::int
+          AND ts.status = 'ACTIVE'
+          AND (NOW() AT TIME ZONE COALESCE(sch.timezone, 'Asia/Kolkata'))::time >= (ts.start_time - INTERVAL '10 minutes')
+          AND (NOW() AT TIME ZONE COALESCE(sch.timezone, 'Asia/Kolkata'))::time <= (ts.end_time + INTERVAL '10 minutes')
+        ORDER BY
+            CASE 
+                WHEN (NOW() AT TIME ZONE COALESCE(sch.timezone, 'Asia/Kolkata'))::time >= ts.start_time 
+                 AND (NOW() AT TIME ZONE COALESCE(sch.timezone, 'Asia/Kolkata'))::time <= ts.end_time 
+                THEN 0 
+                ELSE 1 
+            END ASC,
+            LEAST(
+                ABS(EXTRACT(EPOCH FROM ((NOW() AT TIME ZONE COALESCE(sch.timezone, 'Asia/Kolkata'))::time - ts.start_time))),
+                ABS(EXTRACT(EPOCH FROM ((NOW() AT TIME ZONE COALESCE(sch.timezone, 'Asia/Kolkata'))::time - ts.end_time)))
+            ) ASC
+        LIMIT 1
+        "#,
+    )
+    .bind(school_id)
+    .bind(staff_id)
+    .bind(local_date)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+
+    ts_row.map(|r| ActiveTimetableSlot {
         class_section_id: r.get("class_section_id"),
         class_name: r.get("class_name"),
         section_name: r.get("section_name"),
@@ -860,31 +929,8 @@ pub async fn get_teacher_available_classes_for_date(
               AND (cdt.effective_teacher_id = $2 OR cdt.effective_teacher_id = $3 
                    OR cdt.co_teacher_ids @> ARRAY[$2::uuid] OR cdt.co_teacher_ids @> ARRAY[$3::uuid])
               AND cdt.date = $4
-
-            UNION
-
-            -- 3. Master Timetable slots
-            SELECT
-                cs.id AS class_section_id,
-                c.name AS class_name,
-                sec.name AS section_name,
-                c.sequence AS class_seq,
-                sub.id AS subject_id,
-                sub.name AS subject_name,
-                ts.period_number,
-                false AS is_daily_roll_call
-            FROM timetable_slots ts
-            JOIN class_sections cs ON cs.id = ts.class_section_id
-            JOIN classes c ON c.id = cs.class_id
-            JOIN sections sec ON sec.id = cs.section_id
-            JOIN subjects sub ON sub.id = ts.subject_id
-            WHERE ts.school_id = $1
-              AND (ts.teacher_staff_id = $2 OR ts.teacher_staff_id = $3 
-                   OR ts.co_teacher_staff_ids @> ARRAY[$2::uuid] OR ts.co_teacher_staff_ids @> ARRAY[$3::uuid])
-              AND ts.status = 'ACTIVE'
         ) AS t
-        ORDER BY is_daily_roll_call DESC, class_seq ASC, section_name ASC, period_number ASC NULLS LAST, subject_name ASC
-        LIMIT 15
+        ORDER BY is_daily_roll_call DESC, period_number ASC NULLS FIRST, class_seq ASC, section_name ASC, subject_name ASC
         "#,
     )
     .bind(school_id)
@@ -1426,10 +1472,35 @@ pub async fn start_attendance_flow(
         let opt_match = options.iter().find(|o| {
             o.class_section_id == active_slot.class_section_id
                 && o.period_number == Some(active_slot.period_number)
-                && o.subject_id == active_slot.subject_id
+                && (o.subject_id == active_slot.subject_id
+                    || o.subject_id.is_none()
+                    || active_slot.subject_id.is_none())
         });
         if let Some(opt) = opt_match {
             return transition_to_class_attendance(pool, context, opt, target_date).await;
+        } else {
+            // Direct transition to active slot so an actively running class is never dropped
+            let opt = AvailableClassOption {
+                index: 1,
+                class_section_id: active_slot.class_section_id,
+                class_name: active_slot.class_name.clone(),
+                section_name: active_slot.section_name.clone(),
+                subject_id: active_slot.subject_id,
+                subject_name: active_slot.subject_name.clone(),
+                period_number: Some(active_slot.period_number),
+                is_daily_roll_call: false,
+                is_holiday: false,
+                holiday_title: None,
+                is_recorded: false,
+                display: format!(
+                    "{} - Section {} | 📚 {} (Period {})",
+                    active_slot.class_name,
+                    active_slot.section_name,
+                    active_slot.subject_name,
+                    active_slot.period_number
+                ),
+            };
+            return transition_to_class_attendance(pool, context, &opt, target_date).await;
         }
     }
 
@@ -1904,8 +1975,27 @@ pub async fn record_or_update_attendance_for_roster(
         return format!("❌ Failed to commit attendance: {e}");
     }
 
-    // 10. Clear conversation state
-    let _ = WhatsAppRepository::clear_conversation_state(pool, context.session_id).await;
+    // 10. Keep 15-minute active window for this class session so any further roll updates
+    // (absent, present, replace) apply to this class automatically without re-selecting.
+    let active_session_payload = serde_json::json!({
+        "class_section_id": class_section_id,
+        "class_name": class_name,
+        "section_name": section_name,
+        "period_number": period_number,
+        "subject_id": subject_id,
+        "subject_name": subject_name,
+        "is_daily_roll_call": period_number.is_none(),
+        "target_date": target_date.to_string(),
+        "is_edit": true,
+        "existing_session_id": saved_session_id.to_string(),
+    });
+    let _ = WhatsAppRepository::set_conversation_state(
+        pool,
+        context.session_id,
+        "ATTENDANCE_WAITING_FOR_ABSENTEES",
+        active_session_payload,
+    )
+    .await;
 
     // 11. Format receipt
     let total_count = candidates.len();
@@ -1983,7 +2073,8 @@ pub async fn record_or_update_attendance_for_roster(
     }
 
     receipt.push_str(&format!(
-        "\n\n_Attendance recorded by {name}. Data synced to school portal in real-time._"
+        "\n\n_Attendance recorded by {name}. Data synced to school portal in real-time._\n\
+        ⏰ *Session active for 15 mins*: Send any updates (e.g. *5 absent*, *2 present*, *all present*) or reply *cancel* when done."
     ));
 
     receipt

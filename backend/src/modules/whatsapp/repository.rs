@@ -785,7 +785,7 @@ impl WhatsAppRepository {
         }))
     }
 
-    /// Retrieve active conversation state for a WhatsApp session (valid within 30 minutes).
+    /// Retrieve active conversation state for a WhatsApp session (valid within 15 minutes).
     pub async fn get_conversation_state(
         pool: &PgPool,
         session_id: Uuid,
@@ -794,7 +794,7 @@ impl WhatsAppRepository {
             r#"
             SELECT state_type, payload
             FROM whatsapp_conversation_state
-            WHERE session_id = $1 AND updated_at > NOW() - INTERVAL '30 minutes'
+            WHERE session_id = $1 AND updated_at > NOW() - INTERVAL '15 minutes'
             "#,
         )
         .bind(session_id)

@@ -552,6 +552,24 @@ impl WhatsAppMessageService {
                         ];
                     }
 
+                    // If user provides a fresh explicit "assign homework" command, break out of existing state
+                    if menus::lms::is_lms_task_command(trimmed) {
+                        let _ =
+                            WhatsAppRepository::clear_conversation_state(pool, session.id).await;
+                        info!(sender = %sender_jid, "User initiated fresh LMS task command; clearing previous state");
+                        return vec![menus::lms::start_lms_flow(pool, &context, trimmed).await];
+                    }
+
+                    if state_type == "LMS_FLOW" {
+                        info!(sender = %sender_jid, state = %state_type, "Handling interactive WhatsApp LMS task step");
+                        return vec![
+                            menus::lms::handle_lms_conversation_step(
+                                pool, &context, trimmed, &payload,
+                            )
+                            .await,
+                        ];
+                    }
+
                     info!(sender = %sender_jid, state = %state_type, "Handling interactive WhatsApp conversation step");
                     return vec![
                         menus::attendance::handle_attendance_conversation_step(
@@ -612,6 +630,11 @@ impl WhatsAppMessageService {
                     return vec![
                         menus::attendance::start_attendance_flow(pool, &context, trimmed).await,
                     ];
+                }
+
+                // Explicit "assign homework" / LMS task creation request
+                if menus::lms::is_lms_task_command(trimmed) {
+                    return vec![menus::lms::start_lms_flow(pool, &context, trimmed).await];
                 }
 
                 // 1️⃣ Attendance Menu

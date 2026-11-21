@@ -248,5 +248,91 @@ pub fn catalogue() -> Vec<(&'static str, &'static str, &'static str, &'static st
             "Attendance",
             "Review, approve, or resolve attendance collision and deadlock tickets",
         ),
+
+        // 10. LMS (Learning Management System)
+        (
+            "lms:view",
+            "View LMS Tasks",
+            "LMS",
+            "View homework, assignments, and classroom tasks",
+        ),
+        (
+            "lms:create",
+            "Create LMS Tasks",
+            "LMS",
+            "Draft and create LMS academic tasks",
+        ),
+        (
+            "lms:edit_own",
+            "Edit Own LMS Tasks",
+            "LMS",
+            "Modify academic tasks created by oneself",
+        ),
+        (
+            "lms:edit_all",
+            "Edit All LMS Tasks",
+            "LMS",
+            "Administrative permission to edit any LMS task across the school",
+        ),
+        (
+            "lms:publish",
+            "Publish LMS Tasks",
+            "LMS",
+            "Publish LMS tasks to students and trigger delivery notifications",
+        ),
+        (
+            "lms:cancel",
+            "Cancel LMS Tasks",
+            "LMS",
+            "Cancel or close active LMS academic tasks",
+        ),
+        (
+            "lms:attachments_manage",
+            "Manage LMS Attachments",
+            "LMS",
+            "Upload files or configure Google Drive resources for LMS tasks",
+        ),
+        (
+            "lms:evaluation_configure",
+            "Configure Task Evaluation",
+            "LMS",
+            "Enable marks evaluation and maximum marks for academic tasks",
+        ),
+        (
+            "lms:marks_enter",
+            "Enter Evaluation Marks",
+            "LMS",
+            "Enter and record marks for student task submissions",
+        ),
+        (
+            "lms:marks_edit",
+            "Edit Evaluation Marks",
+            "LMS",
+            "Modify previously recorded student evaluation scores",
+        ),
+        (
+            "lms:results_include",
+            "Include Tasks in Results",
+            "LMS",
+            "Map and contribute LMS evaluation marks to official academic results",
+        ),
+        (
+            "lms:reports_view",
+            "View LMS Reports",
+            "LMS",
+            "View daily teacher task reports and LMS audit analytics",
+        ),
+        (
+            "lms:reports_export",
+            "Export LMS Reports",
+            "LMS",
+            "Export task registers and completion reports to CSV or Excel",
+        ),
+        (
+            "lms:settings_manage",
+            "Manage LMS Settings",
+            "LMS",
+            "Configure school-level LMS rules, storage policies, and defaults",
+        ),
     ]
 }

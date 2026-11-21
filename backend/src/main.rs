@@ -68,6 +68,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         pool.clone(),
     ));
     modules::academic::timetable::start_daily_timetable_worker(pool.clone());
+    tokio::spawn(modules::lms::jobs::run_expired_attachments_cleanup(
+        pool.clone(),
+    ));
 
     // Create App State
     let state = AppState::new(pool, config.clone());

@@ -3,6 +3,7 @@ pub mod admissions;
 pub mod attendance;
 pub mod auth;
 pub mod cron;
+pub mod lms;
 pub mod notifications;
 pub mod telemetry;
 pub mod transfer_certificate;

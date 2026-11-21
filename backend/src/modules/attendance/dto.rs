@@ -123,6 +123,19 @@ pub struct AttendanceSessionDetailResponse {
     pub session: AttendanceSessionSummary,
     pub records: Vec<StudentAttendanceDetail>,
     pub corrections: Vec<AttendanceCorrectionLog>,
+    #[serde(default)]
+    pub lms_tasks: Vec<SessionLmsTaskSnippet>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionLmsTaskSnippet {
+    pub id: Uuid,
+    pub title: String,
+    pub task_type: String,
+    pub subject_name: Option<String>,
+    pub deadline_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub is_evaluation: bool,
+    pub marks_entered: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

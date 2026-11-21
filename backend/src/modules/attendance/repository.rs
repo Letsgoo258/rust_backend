@@ -512,6 +512,7 @@ impl AttendanceRepository {
         school_id: Uuid,
         date_opt: Option<NaiveDate>,
         class_section_id_opt: Option<Uuid>,
+        marked_by_opt: Option<Uuid>,
     ) -> Result<Vec<AttendanceSessionSummary>, AppError> {
         let rows = sqlx::query(
             r#"
@@ -541,6 +542,7 @@ impl AttendanceRepository {
             WHERE s.school_id = $1
               AND ($2::date IS NULL OR s.date = $2)
               AND ($3::uuid IS NULL OR s.class_section_id = $3)
+              AND ($4::uuid IS NULL OR s.marked_by = $4 OR $4 = ANY(s.co_marked_by))
             GROUP BY s.id, c.name, sec.name, subj.name, u.display_name, u.username
             ORDER BY s.date DESC, s.period_number ASC, c.name ASC
             "#,
@@ -548,6 +550,7 @@ impl AttendanceRepository {
         .bind(school_id)
         .bind(date_opt)
         .bind(class_section_id_opt)
+        .bind(marked_by_opt)
         .fetch_all(pool)
         .await?;
 
@@ -591,7 +594,7 @@ impl AttendanceRepository {
         school_id: Uuid,
         session_id: Uuid,
     ) -> Result<AttendanceSessionDetailResponse, AppError> {
-        let sessions = Self::list_sessions(pool, school_id, None, None).await?;
+        let sessions = Self::list_sessions(pool, school_id, None, None, None).await?;
         let session = sessions
             .into_iter()
             .find(|s| s.id == session_id)
@@ -670,10 +673,48 @@ impl AttendanceRepository {
             })
             .collect();
 
+        // Associated LMS tasks
+        let task_rows = sqlx::query(
+            r#"
+            SELECT
+                t.id, t.title, t.task_type, s.name as subject_name,
+                t.deadline_at, t.is_evaluation,
+                EXISTS(
+                    SELECT 1 FROM lms_evaluations e
+                    JOIN lms_evaluation_marks em ON em.evaluation_id = e.id
+                    WHERE e.task_id = t.id AND em.marks_obtained IS NOT NULL
+                ) as marks_entered
+            FROM lms_tasks t
+            LEFT JOIN subjects s ON t.subject_id = s.id
+            WHERE t.attendance_session_id = $1 AND t.school_id = $2
+              AND t.status != 'CANCELLED'
+            ORDER BY t.created_at ASC
+            "#,
+        )
+        .bind(session_id)
+        .bind(school_id)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+
+        let lms_tasks = task_rows
+            .into_iter()
+            .map(|r| crate::modules::attendance::dto::SessionLmsTaskSnippet {
+                id: r.get("id"),
+                title: r.get("title"),
+                task_type: r.get("task_type"),
+                subject_name: r.try_get("subject_name").ok(),
+                deadline_at: r.try_get("deadline_at").ok(),
+                is_evaluation: r.get("is_evaluation"),
+                marks_entered: r.get("marks_entered"),
+            })
+            .collect();
+
         Ok(AttendanceSessionDetailResponse {
             session,
             records,
             corrections,
+            lms_tasks,
         })
     }
 

@@ -28,6 +28,7 @@ use crate::{
 pub struct ListSessionsQuery {
     pub date: Option<String>,
     pub class_section_id: Option<Uuid>,
+    pub marked_by: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -140,9 +141,14 @@ impl AttendanceHandler {
             .as_deref()
             .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
 
-        let sessions =
-            AttendanceService::list_sessions(&state.db, &user, date_opt, params.class_section_id)
-                .await?;
+        let sessions = AttendanceService::list_sessions(
+            &state.db,
+            &user,
+            date_opt,
+            params.class_section_id,
+            params.marked_by,
+        )
+        .await?;
 
         Ok(Json(serde_json::json!({
             "success": true,

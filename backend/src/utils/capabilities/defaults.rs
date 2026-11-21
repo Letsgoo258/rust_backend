@@ -88,6 +88,17 @@ pub fn default_enabled_keys(role_code: &str) -> HashSet<&'static str> {
             set.insert("attendance:edit");
             set.insert("attendance:edit_class");
             set.insert("attendance:edit_subject");
+            // LMS Capabilities
+            set.insert("lms:view");
+            set.insert("lms:create");
+            set.insert("lms:edit_own");
+            set.insert("lms:publish");
+            set.insert("lms:cancel");
+            set.insert("lms:attachments_manage");
+            set.insert("lms:evaluation_configure");
+            set.insert("lms:marks_enter");
+            set.insert("lms:marks_edit");
+            set.insert("lms:reports_view");
         }
 
         // 6. Regular Teachers & Faculty
@@ -103,6 +114,17 @@ pub fn default_enabled_keys(role_code: &str) -> HashSet<&'static str> {
             set.insert("attendance:mark");
             set.insert("attendance:edit");
             set.insert("attendance:edit_subject");
+            // LMS Capabilities
+            set.insert("lms:view");
+            set.insert("lms:create");
+            set.insert("lms:edit_own");
+            set.insert("lms:publish");
+            set.insert("lms:cancel");
+            set.insert("lms:attachments_manage");
+            set.insert("lms:evaluation_configure");
+            set.insert("lms:marks_enter");
+            set.insert("lms:marks_edit");
+            set.insert("lms:reports_view");
         }
 
         // 7. Academic Support: Lab Assistant & Counselor
@@ -187,10 +209,11 @@ pub fn default_enabled_keys(role_code: &str) -> HashSet<&'static str> {
         }
 
         // 16. Stakeholders: Students, Parents, Alumni
-        "STUDENT" | "PARENT" => {
+        "STUDENT" | "PARENT" | "GUARDIAN" => {
             set.insert("academics:view");
             set.insert("finance:view_fees");
             set.insert("attendance:view");
+            set.insert("lms:view");
         }
 
         "ALUMNI" => {

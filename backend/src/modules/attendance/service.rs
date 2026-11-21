@@ -473,9 +473,16 @@ impl AttendanceService {
         user: &User,
         date_opt: Option<NaiveDate>,
         class_section_id_opt: Option<Uuid>,
+        marked_by_opt: Option<Uuid>,
     ) -> Result<Vec<AttendanceSessionSummary>, AppError> {
-        AttendanceRepository::list_sessions(pool, user.school_id, date_opt, class_section_id_opt)
-            .await
+        AttendanceRepository::list_sessions(
+            pool,
+            user.school_id,
+            date_opt,
+            class_section_id_opt,
+            marked_by_opt,
+        )
+        .await
     }
 
     /// Live KPIs for attendance dashboard

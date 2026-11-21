@@ -790,7 +790,7 @@ impl WhatsAppRepository {
         }))
     }
 
-    /// Retrieve active conversation state for a WhatsApp session (valid within 15 minutes).
+    /// Retrieve active conversation state for a WhatsApp session (valid within 3 minutes for immediate prompts).
     pub async fn get_conversation_state(
         pool: &PgPool,
         session_id: Uuid,
@@ -799,7 +799,7 @@ impl WhatsAppRepository {
             r#"
             SELECT state_type, payload
             FROM whatsapp_conversation_state
-            WHERE session_id = $1 AND updated_at > NOW() - INTERVAL '15 minutes'
+            WHERE session_id = $1 AND updated_at > NOW() - INTERVAL '3 minutes'
             "#,
         )
         .bind(session_id)
@@ -807,6 +807,14 @@ impl WhatsAppRepository {
         .await?;
 
         Ok(row)
+    }
+
+    /// Prune any conversational state rows older than 3 minutes to prevent stale locks.
+    pub async fn prune_expired_conversation_states(pool: &PgPool) -> Result<u64, AppError> {
+        let res = sqlx::query("DELETE FROM whatsapp_conversation_state WHERE updated_at < NOW() - INTERVAL '3 minutes'")
+            .execute(pool)
+            .await?;
+        Ok(res.rows_affected())
     }
 
     /// Set or update the conversational state for a WhatsApp session.

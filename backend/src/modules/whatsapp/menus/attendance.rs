@@ -2567,6 +2567,7 @@ pub struct RecentAttendanceSessionSummary {
     pub subject_name: Option<String>,
     pub target_date: NaiveDate,
     pub updated_at: DateTime<Utc>,
+    #[allow(dead_code)]
     pub created_at: DateTime<Utc>,
 }
 

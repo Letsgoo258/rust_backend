@@ -560,6 +560,51 @@ impl WhatsAppMessageService {
                         return vec![menus::lms::start_lms_flow(pool, &context, trimmed).await];
                     }
 
+                    // If user sends standalone attendance directive (e.g. "56 57 absent", "2 present"), break out and handle directly
+                    if menus::attendance::is_standalone_attendance_directive(trimmed) {
+                        let _ =
+                            WhatsAppRepository::clear_conversation_state(pool, session.id).await;
+                        info!(sender = %sender_jid, "User sent standalone attendance directive; clearing previous state");
+                        return vec![
+                            menus::attendance::handle_standalone_attendance_update(
+                                pool, &context, trimmed,
+                            )
+                            .await,
+                        ];
+                    }
+
+                    // Never trap help, greetings, or common system requests inside a conversation state
+                    if Self::is_help_request(trimmed) {
+                        let _ =
+                            WhatsAppRepository::clear_conversation_state(pool, session.id).await;
+                        return vec![Self::format_authenticated_menu(&context)];
+                    }
+
+                    if Self::is_greeting(trimmed) {
+                        let _ =
+                            WhatsAppRepository::clear_conversation_state(pool, session.id).await;
+                        let name = context.display_name.as_deref().unwrap_or("User");
+                        return vec![format!(
+                            "👋 Hello, *{name}*!\n\nWelcome back to {} (Logged in as *{}*).\nType *help* to view your options or ask any question.",
+                            context.school_name,
+                            context.role
+                        )];
+                    }
+
+                    if menus::timetable::is_timetable(trimmed) {
+                        let _ =
+                            WhatsAppRepository::clear_conversation_state(pool, session.id).await;
+                        return vec![
+                            menus::timetable::handle_timetable_query(pool, &context).await,
+                        ];
+                    }
+
+                    if menus::exams::is_exams(trimmed) {
+                        let _ =
+                            WhatsAppRepository::clear_conversation_state(pool, session.id).await;
+                        return vec![menus::exams::handle_exams_query(pool, &context).await];
+                    }
+
                     if state_type == "LMS_FLOW" {
                         info!(sender = %sender_jid, state = %state_type, "Handling interactive WhatsApp LMS task step");
                         return vec![
@@ -763,6 +808,9 @@ impl WhatsAppMessageService {
             Utc::now(),
         )
         .await;
+
+        // Prune any expired conversation states (>3 mins) to prevent resource holding or conversational locks
+        let _ = WhatsAppRepository::prune_expired_conversation_states(pool).await;
 
         // Immediate feedback: If teacher is submitting attendance roll-call, enqueue "⏳ Processing..." first
         if let Ok(Some(session)) = WhatsAppRepository::get_session_by_jid(pool, sender_jid).await {

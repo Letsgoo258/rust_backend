@@ -280,13 +280,15 @@ impl WhatsAppRepository {
         pool: &PgPool,
         sender_jid: &str,
     ) -> Result<Option<WhatsAppUserSessionRow>, AppError> {
-        let phone: String = sender_jid
+        let base_jid = sender_jid
             .split('@')
             .next()
             .unwrap_or("")
-            .chars()
-            .filter(|c| c.is_ascii_digit())
-            .collect();
+            .split(':')
+            .next()
+            .unwrap_or("");
+
+        let phone: String = base_jid.chars().filter(|c| c.is_ascii_digit()).collect();
 
         let row = sqlx::query(
             r#"
@@ -300,12 +302,15 @@ impl WhatsAppRepository {
             FROM whatsapp_user_sessions s
             JOIN users u ON s.user_id = u.id
             LEFT JOIN schools sc ON s.school_id = sc.id
-            WHERE (s.sender_jid = $1 OR (s.phone != '' AND s.phone = $2))
+            WHERE (s.sender_jid = $1 
+                OR ($2 != '' AND SPLIT_PART(SPLIT_PART(s.sender_jid, '@', 1), ':', 1) = $2)
+                OR (s.phone != '' AND s.phone = $3))
             ORDER BY s.updated_at DESC
             LIMIT 1
             "#,
         )
         .bind(sender_jid)
+        .bind(base_jid)
         .bind(&phone)
         .fetch_optional(pool)
         .await?;

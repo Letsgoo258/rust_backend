@@ -1,9 +1,10 @@
+use crate::error::AppError;
 use crate::modules::academic::repository::{AcademicRepository, SchoolStatsRow};
 use crate::modules::attendance::dto::StudentAttendanceInput;
 use crate::modules::attendance::repository::AttendanceRepository;
 use crate::modules::whatsapp::repository::WhatsAppRepository;
 use crate::modules::whatsapp::service::WhatsAppUserContext;
-use chrono::{Datelike, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
@@ -1975,27 +1976,8 @@ pub async fn record_or_update_attendance_for_roster(
         return format!("❌ Failed to commit attendance: {e}");
     }
 
-    // 10. Keep 15-minute active window for this class session so any further roll updates
-    // (absent, present, replace) apply to this class automatically without re-selecting.
-    let active_session_payload = serde_json::json!({
-        "class_section_id": class_section_id,
-        "class_name": class_name,
-        "section_name": section_name,
-        "period_number": period_number,
-        "subject_id": subject_id,
-        "subject_name": subject_name,
-        "is_daily_roll_call": period_number.is_none(),
-        "target_date": target_date.to_string(),
-        "is_edit": true,
-        "existing_session_id": saved_session_id.to_string(),
-    });
-    let _ = WhatsAppRepository::set_conversation_state(
-        pool,
-        context.session_id,
-        "ATTENDANCE_WAITING_FOR_ABSENTEES",
-        active_session_payload,
-    )
-    .await;
+    // 10. Clear conversation state since attendance is now fully recorded and saved in database
+    let _ = WhatsAppRepository::clear_conversation_state(pool, context.session_id).await;
 
     // 11. Format receipt
     let total_count = candidates.len();
@@ -2074,7 +2056,7 @@ pub async fn record_or_update_attendance_for_roster(
 
     receipt.push_str(&format!(
         "\n\n_Attendance recorded by {name}. Data synced to school portal in real-time._\n\
-        ⏰ *Session active for 15 mins*: Send any updates (e.g. *5 absent*, *2 present*, *all present*) or reply *cancel* when done."
+        💡 *Updates*: Reply with any changes (e.g. *56 57 absent*, *2 present*, *all present*) to update this session."
     ));
 
     receipt
@@ -2574,6 +2556,212 @@ pub async fn handle_attendance_query(pool: &PgPool, context: &WhatsAppUserContex
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct RecentAttendanceSessionSummary {
+    pub session_id: Uuid,
+    pub class_section_id: Uuid,
+    pub class_name: String,
+    pub section_name: String,
+    pub period_number: Option<i32>,
+    pub subject_id: Option<Uuid>,
+    pub subject_name: Option<String>,
+    pub target_date: NaiveDate,
+    pub updated_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+}
+
+pub async fn get_latest_teacher_attendance_session(
+    pool: &PgPool,
+    school_id: Uuid,
+    user_id: Uuid,
+) -> Result<Option<RecentAttendanceSessionSummary>, AppError> {
+    let row = sqlx::query(
+        r#"
+        SELECT
+            s.id as session_id,
+            s.class_section_id,
+            c.name as class_name,
+            sec.name as section_name,
+            s.period_number,
+            s.subject_id,
+            sub.name as subject_name,
+            s.date as target_date,
+            s.updated_at,
+            s.created_at
+        FROM attendance_sessions s
+        JOIN class_sections cs ON s.class_section_id = cs.id
+        JOIN classes c ON cs.class_id = c.id
+        JOIN sections sec ON cs.section_id = sec.id
+        LEFT JOIN subjects sub ON s.subject_id = sub.id
+        WHERE s.school_id = $1
+          AND (s.marked_by = $2 OR $2 = ANY(s.co_marked_by))
+          AND s.date >= (CURRENT_DATE - INTERVAL '1 day')
+        ORDER BY s.updated_at DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(school_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| RecentAttendanceSessionSummary {
+        session_id: r.get("session_id"),
+        class_section_id: r.get("class_section_id"),
+        class_name: r.get("class_name"),
+        section_name: r.get("section_name"),
+        period_number: r.get("period_number"),
+        subject_id: r.get("subject_id"),
+        subject_name: r.try_get("subject_name").ok().flatten(),
+        target_date: r.get("target_date"),
+        updated_at: r.get("updated_at"),
+        created_at: r.get("created_at"),
+    }))
+}
+
+/// Detects whether an incoming message is a standalone attendance roll-call or update command
+/// (e.g. "56 57 absent", "2 present", "all present", "5, 10 absent", "replace: 5 absent")
+pub fn is_standalone_attendance_directive(text: &str) -> bool {
+    let raw = text.trim();
+    if raw.is_empty() {
+        return false;
+    }
+
+    let lower = raw.to_lowercase();
+
+    // If it's an explicit navigation/system command, ignore
+    if lower == "cancel"
+        || lower == "exit"
+        || lower == "abort"
+        || lower == "stop"
+        || lower == "help"
+        || lower == "menu"
+        || lower == "hi"
+        || lower == "hello"
+        || lower == "hey"
+        || is_take_attendance(&lower)
+        || crate::modules::whatsapp::menus::timetable::is_timetable(&lower)
+        || crate::modules::whatsapp::menus::exams::is_exams(&lower)
+        || crate::modules::whatsapp::menus::lms::is_lms_task_command(&lower)
+    {
+        return false;
+    }
+
+    // Explicit absent/present/clear keywords
+    if lower.contains("absent")
+        || lower.contains("abs ")
+        || lower.ends_with(" abs")
+        || lower.contains("present")
+        || lower.contains("prst")
+        || lower.ends_with(" p")
+        || lower.ends_with(" a")
+        || lower == "all present"
+        || lower == "all"
+        || lower == "all students present"
+        || lower == "everyone present"
+        || lower == "everybody present"
+        || lower == "nil"
+        || lower == "nil absent"
+        || lower == "zero absent"
+        || lower == "no absent"
+        || lower == "no absentees"
+        || lower == "0"
+        || lower == "0 absent"
+    {
+        return parse_attendance_command(raw).is_ok();
+    }
+
+    // Multi-roll list: e.g. "56, 57", "1, 2, 3", "56 57"
+    let tokens: Vec<&str> = raw
+        .split(|c: char| c == ',' || c == ' ' || c == ';' || c == '\n')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if tokens.len() >= 2 && tokens.iter().all(|t| t.chars().all(|c| c.is_ascii_digit())) {
+        return true;
+    }
+
+    false
+}
+
+/// Handles a standalone attendance update intelligently by checking the teacher's most recently
+/// recorded attendance session and applying changes directly without keeping fragile conversational states.
+pub async fn handle_standalone_attendance_update(
+    pool: &PgPool,
+    context: &WhatsAppUserContext,
+    text: &str,
+) -> String {
+    let command = match parse_attendance_command(text) {
+        Ok(cmd) => cmd,
+        Err(_) => {
+            return "⚠️ Could not understand roll numbers.\n\nExamples:\n• *56 57 absent*\n• *2 present*\n• *all present*\n• *replace: 12, 15 absent*".to_string();
+        }
+    };
+
+    let recent =
+        match get_latest_teacher_attendance_session(pool, context.school_id, context.user_id).await
+        {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                return "⚠️ *No Recent Attendance Session Found*\n\n\
+            Could not find an attendance session recorded by you recently to update.\n\n\
+            👉 To record attendance, please type:\n\
+            *take attendance [class]* (e.g. *take attendance 4a*)"
+                    .to_string();
+            }
+            Err(e) => {
+                return format!("❌ Error checking recent attendance: {e}");
+            }
+        };
+
+    let config = AttendanceRepository::get_attendance_config(pool, context.school_id)
+        .await
+        .unwrap_or_default();
+
+    let elapsed_minutes = Utc::now()
+        .signed_duration_since(recent.updated_at)
+        .num_minutes();
+
+    if elapsed_minutes > config.allow_teacher_edit_window_minutes as i64
+        && !context.is_school_admin()
+    {
+        let app_url = std::env::var("APP_URL")
+            .unwrap_or_else(|_| "https://my-frontend-kappa-five.vercel.app".to_string());
+        let clean_url = app_url.trim_end_matches('/');
+        return format!(
+            "🔒 *Teacher Edit Window Expired*\n\n\
+            Attendance for *{} - Section {}* was marked at *{}* ({} mins ago).\n\
+            The {}-minute teacher edit window has expired.\n\n\
+            👉 Modifications require administrative review at:\n\
+            {clean_url}/dashboard/attendance\n\n\
+            👉 To record attendance for another class, type:\n\
+            *take attendance [class]*",
+            recent.class_name,
+            recent.section_name,
+            recent.updated_at.format("%I:%M %p"),
+            elapsed_minutes,
+            config.allow_teacher_edit_window_minutes
+        );
+    }
+
+    record_or_update_attendance_for_roster(
+        pool,
+        context,
+        recent.class_section_id,
+        &recent.class_name,
+        &recent.section_name,
+        recent.period_number,
+        recent.subject_id,
+        recent.subject_name.as_deref(),
+        recent.target_date,
+        command,
+        true, // is_edit
+        Some(recent.session_id),
+    )
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2783,5 +2971,29 @@ mod tests {
             parse_attendance_command("all absent").unwrap(),
             AttendanceInputParsed::AllAbsent
         );
+    }
+
+    #[test]
+    fn test_is_standalone_attendance_directive() {
+        assert!(is_standalone_attendance_directive("56 57 absent"));
+        assert!(is_standalone_attendance_directive("2,34,55,20 absent"));
+        assert!(is_standalone_attendance_directive("5 absent"));
+        assert!(is_standalone_attendance_directive("5 present"));
+        assert!(is_standalone_attendance_directive("all present"));
+        assert!(is_standalone_attendance_directive("all p"));
+        assert!(is_standalone_attendance_directive("nil absent"));
+        assert!(is_standalone_attendance_directive("0 absent"));
+        assert!(is_standalone_attendance_directive("56 57"));
+        assert!(is_standalone_attendance_directive("1, 2, 3"));
+        assert!(is_standalone_attendance_directive("replace: 2, 4 absent"));
+
+        // Must NOT match general system commands or menu options
+        assert!(!is_standalone_attendance_directive("cancel"));
+        assert!(!is_standalone_attendance_directive("help"));
+        assert!(!is_standalone_attendance_directive("take attendance"));
+        assert!(!is_standalone_attendance_directive("take attendance 4a"));
+        assert!(!is_standalone_attendance_directive("timetable"));
+        assert!(!is_standalone_attendance_directive("1")); // bare single digit
+        assert!(!is_standalone_attendance_directive("hello"));
     }
 }

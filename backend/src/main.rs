@@ -143,11 +143,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .layer(cors)
         .layer(
             tower_http::trace::TraceLayer::new_for_http()
-                .make_span_with(
-                    tower_http::trace::DefaultMakeSpan::new()
-                        .level(tracing::Level::INFO)
-                        .include_headers(true),
-                )
+                .make_span_with(|request: &axum::http::Request<axum::body::Body>| {
+                    tracing::info_span!(
+                        "http_request",
+                        method = %request.method(),
+                        uri = %request.uri().path(),
+                        http.status_code = tracing::field::Empty,
+                        otel.status_code = tracing::field::Empty,
+                        user.id = tracing::field::Empty,
+                        user.school_id = tracing::field::Empty,
+                        user.username = tracing::field::Empty,
+                    )
+                })
                 .on_response(
                     |response: &axum::response::Response,
                      latency: std::time::Duration,

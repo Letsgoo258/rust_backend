@@ -103,6 +103,12 @@ pub async fn enforce_tenant_isolation_middleware(
             }
         }
 
+        // Attach user info to current tracing span for distributed tracing workflows
+        let span = tracing::Span::current();
+        span.record("user.id", tracing::field::display(user.id));
+        span.record("user.school_id", tracing::field::display(user.school_id));
+        span.record("user.username", tracing::field::display(&user.username));
+
         // Attach TenantContext and school_id to Request extensions for downstream handlers
         let tenant_ctx = TenantContext {
             school_id: user.school_id,

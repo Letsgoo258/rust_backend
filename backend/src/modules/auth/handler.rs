@@ -188,6 +188,11 @@ pub async fn login(
             let target_user_id = existing_user.as_ref().map(|u| u.id);
             let target_school_id = existing_user.as_ref().map(|u| u.school_id);
 
+            if let Some(uid) = target_user_id {
+                let span = tracing::Span::current();
+                span.record("user.id", tracing::field::display(uid));
+            }
+
             let _ = sqlx::query!(
                 r#"
                 INSERT INTO login_history (
@@ -245,6 +250,11 @@ pub async fn login(
             "Failed to create session".into(),
         ));
     }
+
+    let span = tracing::Span::current();
+    span.record("user.id", tracing::field::display(user.id));
+    span.record("user.school_id", tracing::field::display(user.school_id));
+    span.record("user.username", tracing::field::display(&user.username));
 
     // Check for device fingerprint or IP anomalies against last successful login
     let prev_login = sqlx::query!(

@@ -1,0 +1,557 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 100,
+      "title": "1. Core System Health & Operational KPIs",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": ""
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1000
+              },
+              {
+                "color": "blue",
+                "value": 5000
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 1
+      },
+      "id": 1,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.4.0",
+      "title": "Total Telemetry Events (24h)",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": ""
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(*) AS total_events FROM frontend_telemetry WHERE created_at >= NOW() - INTERVAL '24 hours';",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": ""
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 3
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 1
+      },
+      "id": 2,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "title": "Login Failure Rate (24h)",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": ""
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT ROUND(100.0 * COUNT(*) FILTER (WHERE status = 'FAILED') / NULLIF(COUNT(*), 0), 2) AS login_failure_rate FROM login_history WHERE created_at >= NOW() - INTERVAL '24 hours';",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": ""
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 95
+              },
+              {
+                "color": "green",
+                "value": 98
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 1
+      },
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "title": "WhatsApp Delivery Success Rate",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": ""
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT ROUND(100.0 * COUNT(*) FILTER (WHERE status = 'sent') / NULLIF(COUNT(*), 0), 2) AS delivery_rate FROM whatsapp_outbox WHERE created_at >= NOW() - INTERVAL '24 hours';",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": ""
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 2
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 1
+      },
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "title": "Pending Print Queue Jobs",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": ""
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(*) AS pending_prints FROM print_queue WHERE status = 'PENDING';",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      },
+      "id": 101,
+      "title": "2. Security, Suspicious Logins & Anomaly Feed",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": ""
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 6
+      },
+      "id": 5,
+      "title": "Brute Force & Failed Login Detection",
+      "type": "table",
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": ""
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT created_at AS \"Time\", username AS \"User\", ip_address AS \"IP Address\", status AS \"Status\", COALESCE(suspicious_reason, 'Failed Credentials') AS \"Reason\", COALESCE(user_agent, 'Unknown') AS \"User Agent\" FROM login_history WHERE status = 'FAILED' OR is_suspicious = true ORDER BY created_at DESC LIMIT 50;",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": ""
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
+      "id": 6,
+      "title": "Critical Security & Frontend Error Alerts",
+      "type": "table",
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": ""
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT created_at AS \"Time\", event_type AS \"Event\", COALESCE(component, url, 'General') AS \"Source\", error_message AS \"Error Details\" FROM frontend_telemetry WHERE event_type IN ('FRONTEND_ERROR', 'CRITICAL_SECURITY_ALERT', 'CRITICAL_AUDIT') ORDER BY created_at DESC LIMIT 50;",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 13
+      },
+      "id": 102,
+      "title": "3. Operational Reliability: WhatsApp, Print Queue & Database Latency",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": ""
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
+      "id": 7,
+      "title": "WhatsApp Dead Letter Queue (Failed Deliveries)",
+      "type": "table",
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": ""
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT created_at AS \"Time\", recipient_jid AS \"Recipient\", attempt_count AS \"Attempts\", last_error AS \"Failure Reason\" FROM whatsapp_outbox WHERE status = 'failed' ORDER BY created_at DESC LIMIT 50;",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": ""
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 14
+      },
+      "id": 8,
+      "title": "Top 10 Slowest SQL Queries (pg_stat_statements)",
+      "type": "table",
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": ""
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT LEFT(query, 75) AS \"Query\", calls AS \"Calls\", ROUND(mean_exec_time::numeric, 2) AS \"Avg Latency (ms)\", ROUND(max_exec_time::numeric, 2) AS \"Max (ms)\", rows AS \"Rows\" FROM pg_stat_statements WHERE query NOT LIKE '%pg_stat_statements%' ORDER BY mean_exec_time DESC LIMIT 10;",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      },
+      "id": 103,
+      "title": "4. User Workflow, Distributed Tracing & Audit Trail",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "tempo",
+        "uid": ""
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 22
+      },
+      "id": 9,
+      "title": "User Distributed Traces (Tempo TraceQL)",
+      "type": "traces",
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": ""
+          },
+          "query": "{ span.service.name =~ \"eravaya.*\" && span.user.id = \"\" }",
+          "queryType": "traceql",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": ""
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 22
+      },
+      "id": 10,
+      "title": "User Action & Audit History",
+      "type": "table",
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": ""
+          },
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT created_at AS \"Timestamp\", event_type AS \"Action\", COALESCE(component, url, 'General') AS \"Target\", COALESCE(error_message, 'Success') AS \"Details\" FROM frontend_telemetry WHERE user_id = ''::uuid ORDER BY created_at DESC LIMIT 50;",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": [
+    "eravaya",
+    "erp",
+    "observability",
+    "production"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "datasource": {
+          "type": "postgres",
+          "uid": ""
+        },
+        "definition": "SELECT id AS __value, username || ' (' || id || ')' AS __text FROM users ORDER BY username ASC;",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Target User",
+        "multi": false,
+        "name": "user_id",
+        "options": [],
+        "query": "SELECT id AS __value, username || ' (' || id || ')' AS __text FROM users ORDER BY username ASC;",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Eravaya ERP \u2014 Enterprise Observability & Operations",
+  "uid": "eravaya-enterprise-ops",
+  "version": 1,
+  "weekStart": ""
+}

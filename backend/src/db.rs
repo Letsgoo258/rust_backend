@@ -24,12 +24,25 @@ pub async fn init_pool(config: &AppConfig) -> Result<PgPool, sqlx::Error> {
     let connect_options = connect_options
         .log_slow_statements(tracing::log::LevelFilter::Warn, Duration::from_secs(1));
 
+    let max_connections: u32 = std::env::var("DATABASE_MAX_CONNECTIONS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(4);
+    let min_connections: u32 = std::env::var("DATABASE_MIN_CONNECTIONS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let idle_timeout_secs: u64 = std::env::var("DATABASE_IDLE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10);
+
     let pool = PgPoolOptions::new()
-        .max_connections(20)
-        .min_connections(2)
-        .idle_timeout(Duration::from_secs(60))
+        .max_connections(max_connections)
+        .min_connections(min_connections)
+        .idle_timeout(Duration::from_secs(idle_timeout_secs))
         .acquire_slow_threshold(Duration::from_secs(2))
-        .acquire_timeout(Duration::from_secs(30))
+        .acquire_timeout(Duration::from_secs(15))
         .connect_with(connect_options)
         .await?;
 

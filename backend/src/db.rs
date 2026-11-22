@@ -20,15 +20,15 @@ pub async fn init_pool(config: &AppConfig) -> Result<PgPool, sqlx::Error> {
     }
 
     let connect_options = PgConnectOptions::from_str(&db_url)?.statement_cache_capacity(0); // Fix for PgBouncer/Supabase introspection overhead
-                                                                                            // Increase slow statement threshold from 1s to 5s to avoid noisy logs in Supabase
+                                                                                            // Log any queries taking > 1s as warnings to catch bottlenecks early
     let connect_options = connect_options
-        .log_slow_statements(tracing::log::LevelFilter::Warn, Duration::from_secs(5));
+        .log_slow_statements(tracing::log::LevelFilter::Warn, Duration::from_secs(1));
 
     let pool = PgPoolOptions::new()
         .max_connections(20)
         .min_connections(2)
         .idle_timeout(Duration::from_secs(60))
-        .acquire_slow_threshold(Duration::from_secs(5))
+        .acquire_slow_threshold(Duration::from_secs(2))
         .acquire_timeout(Duration::from_secs(30))
         .connect_with(connect_options)
         .await?;

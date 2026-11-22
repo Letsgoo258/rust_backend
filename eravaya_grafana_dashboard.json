@@ -553,5 +553,23 @@
   "title": "Eravaya ERP \u2014 Enterprise Observability & Operations",
   "uid": "eravaya-enterprise-ops",
   "version": 1,
-  "weekStart": ""
+  "weekStart": "",
+  "__inputs": [
+    {
+      "name": "DS_POSTGRES",
+      "label": "PostgreSQL Database",
+      "description": "Select your Eravaya PostgreSQL database datasource",
+      "type": "datasource",
+      "pluginId": "postgres",
+      "pluginName": "PostgreSQL"
+    },
+    {
+      "name": "DS_TEMPO",
+      "label": "Tempo Traces",
+      "description": "Select your Grafana Cloud Tempo traces datasource",
+      "type": "datasource",
+      "pluginId": "tempo",
+      "pluginName": "Tempo"
+    }
+  ]
 }

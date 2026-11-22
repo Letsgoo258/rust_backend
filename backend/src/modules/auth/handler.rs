@@ -113,6 +113,7 @@ pub async fn login(
     mut auth_session: AuthSession,
     axum::extract::State(state): axum::extract::State<crate::state::AppState>,
     axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
     Json(payload): Json<LoginRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let creds = Credentials {
@@ -120,17 +121,122 @@ pub async fn login(
         password: payload.password,
     };
 
+    let ip_str = headers
+        .get("cf-connecting-ip")
+        .or_else(|| headers.get("x-real-ip"))
+        .or_else(|| headers.get("x-forwarded-for"))
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.split(',').next().unwrap_or(s).trim().to_string())
+        .unwrap_or_else(|| addr.ip().to_string());
+
+    let user_agent = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.to_string());
+
+    let device_fingerprint = headers
+        .get("x-device-fingerprint")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.to_string());
+
+    let location_str = if addr.ip().is_loopback() {
+        "Localhost / Private Network".to_string()
+    } else {
+        format!("IP: {}", ip_str)
+    };
+
     let user = match auth_session.authenticate(creds).await {
         Ok(Some(user)) => user,
         Ok(None) => {
+            // Count recent failed attempts from this IP or username in the last 10 minutes
+            let recent_failures = sqlx::query_scalar!(
+                r#"
+                SELECT COUNT(*)::bigint FROM login_history
+                WHERE (username = $1 OR ip_address = $2)
+                  AND status = 'FAILED'
+                  AND created_at >= NOW() - INTERVAL '10 minutes'
+                "#,
+                payload.username.trim(),
+                ip_str
+            )
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(Some(0))
+            .unwrap_or(0);
+
+            let is_brute_force = recent_failures >= 4;
+            let suspicious_reason = if is_brute_force {
+                Some(format!(
+                    "Brute-force alert: {} failed login attempts from IP {} in last 10 minutes",
+                    recent_failures + 1,
+                    ip_str
+                ))
+            } else {
+                None
+            };
+
+            // Attempt to resolve user_id and school_id by username if user exists
+            let existing_user = sqlx::query!(
+                "SELECT id, school_id FROM users WHERE username = $1 LIMIT 1",
+                payload.username.trim()
+            )
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+
+            let target_user_id = existing_user.as_ref().map(|u| u.id);
+            let target_school_id = existing_user.as_ref().map(|u| u.school_id);
+
+            let _ = sqlx::query!(
+                r#"
+                INSERT INTO login_history (
+                    user_id, school_id, username, ip_address, user_agent, device_fingerprint,
+                    location, status, is_suspicious, suspicious_reason
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, 'FAILED', $8, $9)
+                "#,
+                target_user_id,
+                target_school_id,
+                payload.username.trim(),
+                ip_str,
+                user_agent.as_deref(),
+                device_fingerprint.as_deref(),
+                location_str,
+                is_brute_force,
+                suspicious_reason
+            )
+            .execute(&state.db)
+            .await;
+
+            if is_brute_force {
+                if let (Some(sid), Some(uid)) = (target_school_id, target_user_id) {
+                    crate::utils::telemetry::dispatch_security_alert(
+                        &state.db,
+                        sid,
+                        uid,
+                        "BRUTE_FORCE_LOGIN_DETECTED",
+                        "auth",
+                        &format!(
+                            "Brute-force attack detected from IP {}: 5+ failed attempts for user '{}'",
+                            ip_str,
+                            payload.username.trim()
+                        ),
+                        &["SYSTEM".into()],
+                        Some(ip_str.clone()),
+                    )
+                    .await;
+                }
+            }
+
             return Err(AppError::Unauthorized(
                 "Invalid username or password".into(),
-            ))
+            ));
         }
         Err(_) => {
             return Err(AppError::InternalServerError(
                 "Authentication failed".into(),
-            ))
+            ));
         }
     };
 
@@ -140,59 +246,85 @@ pub async fn login(
         ));
     }
 
-    let ip_str = addr.ip().to_string();
-    let location_str = if addr.ip().is_loopback() {
-        "Localhost / Private Network".to_string()
-    } else {
-        format!("IP: {}", ip_str)
-    };
-
-    // Check for far-apart logins for this user in the last 1 hour from a different IP
-    let recent_different_ip_login = sqlx::query!(
+    // Check for device fingerprint or IP anomalies against last successful login
+    let prev_login = sqlx::query!(
         r#"
-        SELECT id, ip_address FROM login_history
-        WHERE user_id = $1 AND ip_address <> $2 AND created_at >= NOW() - INTERVAL '1 hour'
+        SELECT id, ip_address, device_fingerprint FROM login_history
+        WHERE user_id = $1 AND status = 'SUCCESS' AND created_at >= NOW() - INTERVAL '7 days'
+        ORDER BY created_at DESC
         LIMIT 1
         "#,
-        user.id,
-        ip_str
+        user.id
     )
     .fetch_optional(&state.db)
     .await
     .ok()
     .flatten();
 
-    let (is_suspicious, suspicious_reason) =
-        if let Some(prev) = recent_different_ip_login {
-            sqlx::query!(
-            "UPDATE login_history SET is_suspicious = true, suspicious_reason = $1 WHERE id = $2",
-            format!("Far-apart login: switched from IP {} to {}", prev.ip_address, ip_str),
-            prev.id
-        )
-            .execute(&state.db)
-            .await
-            .ok();
+    let (is_suspicious, suspicious_reason) = if let Some(prev) = prev_login {
+        let ip_changed = prev.ip_address != ip_str;
+        let fp_changed = match (&prev.device_fingerprint, &device_fingerprint) {
+            (Some(prev_fp), Some(curr_fp)) => prev_fp != curr_fp,
+            _ => false,
+        };
 
+        if fp_changed && ip_changed {
             (
                 true,
                 Some(format!(
-                    "Far-apart login: logged in from IP {} within 1 hour of IP {}",
-                    ip_str, prev.ip_address
+                    "Suspicious device change: new browser fingerprint and IP switched from {} to {}",
+                    prev.ip_address, ip_str
                 )),
             )
+        } else if ip_changed {
+            // Check if IP switched within 1 hour
+            let recent_different_ip = sqlx::query_scalar!(
+                r#"
+                SELECT 1 FROM login_history
+                WHERE user_id = $1 AND ip_address <> $2 AND status = 'SUCCESS' AND created_at >= NOW() - INTERVAL '1 hour'
+                LIMIT 1
+                "#,
+                user.id,
+                ip_str
+            )
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten()
+            .is_some();
+
+            if recent_different_ip {
+                (
+                    true,
+                    Some(format!(
+                        "Far-apart login: logged in from IP {} within 1 hour of previous IP {}",
+                        ip_str, prev.ip_address
+                    )),
+                )
+            } else {
+                (false, None)
+            }
         } else {
             (false, None)
-        };
+        }
+    } else {
+        (false, None)
+    };
 
     sqlx::query!(
         r#"
-        INSERT INTO login_history (user_id, school_id, username, ip_address, location, status, is_suspicious, suspicious_reason)
-        VALUES ($1, $2, $3, $4, $5, 'SUCCESS', $6, $7)
+        INSERT INTO login_history (
+            user_id, school_id, username, ip_address, user_agent, device_fingerprint,
+            location, status, is_suspicious, suspicious_reason
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'SUCCESS', $8, $9)
         "#,
         user.id,
         user.school_id,
         user.username,
         ip_str,
+        user_agent.as_deref(),
+        device_fingerprint.as_deref(),
         location_str,
         is_suspicious,
         suspicious_reason
@@ -1376,6 +1508,8 @@ pub struct LoginHistoryRecordDto {
     pub id: uuid::Uuid,
     pub username: String,
     pub ip_address: String,
+    pub user_agent: Option<String>,
+    pub device_fingerprint: Option<String>,
     pub location: Option<String>,
     pub status: String,
     pub is_suspicious: Option<bool>,
@@ -1400,7 +1534,7 @@ pub async fn get_super_admin_login_history(
 
     let records = sqlx::query!(
         r#"
-        SELECT id, username, ip_address, location, status, is_suspicious, suspicious_reason, created_at
+        SELECT id, username, ip_address, user_agent, device_fingerprint, location, status, is_suspicious, suspicious_reason, created_at
         FROM login_history
         ORDER BY created_at DESC
         LIMIT 100
@@ -1415,6 +1549,8 @@ pub async fn get_super_admin_login_history(
             id: r.id,
             username: r.username,
             ip_address: r.ip_address,
+            user_agent: r.user_agent,
+            device_fingerprint: r.device_fingerprint,
             location: r.location,
             status: r.status,
             is_suspicious: r.is_suspicious,

@@ -144,10 +144,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .layer(
             tower_http::trace::TraceLayer::new_for_http()
                 .make_span_with(|request: &axum::http::Request<axum::body::Body>| {
+                    let path = request.uri().path();
+                    let service_name = if path.starts_with("/api/auth") {
+                        "eravaya-auth"
+                    } else if path.starts_with("/api/attendance") {
+                        "eravaya-attendance"
+                    } else if path.starts_with("/api/lms") {
+                        "eravaya-lms"
+                    } else if path.starts_with("/api/admissions") {
+                        "eravaya-admissions"
+                    } else if path.starts_with("/api/academics")
+                        || path.starts_with("/api/academic")
+                        || path.starts_with("/api/exams")
+                        || path.starts_with("/api/timetable")
+                    {
+                        "eravaya-academics"
+                    } else if path.starts_with("/api/transfer-certificate")
+                        || path.starts_with("/api/certificates")
+                        || path.starts_with("/api/print")
+                    {
+                        "eravaya-print-studio"
+                    } else if path.starts_with("/api/whatsapp") {
+                        "eravaya-whatsapp"
+                    } else if path.starts_with("/api/users")
+                        || path.starts_with("/api/students")
+                        || path.starts_with("/api/staff")
+                        || path.starts_with("/api/guardians")
+                    {
+                        "eravaya-users"
+                    } else if path.starts_with("/api/telemetry") {
+                        "eravaya-telemetry"
+                    } else {
+                        "eravaya-core"
+                    };
+
+                    let otel_span_name =
+                        format!("[{}] {} {}", service_name, request.method(), path);
+
                     tracing::info_span!(
                         "http_request",
+                        otel.name = %otel_span_name,
+                        service.name = service_name,
+                        component = service_name,
+                        subsystem = service_name,
                         method = %request.method(),
-                        uri = %request.uri().path(),
+                        uri = %path,
+                        http.route = %path,
                         http.status_code = tracing::field::Empty,
                         otel.status_code = tracing::field::Empty,
                         user.id = tracing::field::Empty,

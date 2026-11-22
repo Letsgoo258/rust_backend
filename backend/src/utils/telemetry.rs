@@ -445,7 +445,8 @@ pub fn init_telemetry() -> Result<Option<SdkTracerProvider>, Box<dyn std::error:
                 .with_resource(
                     Resource::builder_empty()
                         .with_attributes(vec![
-                            KeyValue::new("service.name", "eravaya-backend"),
+                            KeyValue::new("service.name", "eravaya-erp"),
+                            KeyValue::new("service.namespace", "eravaya"),
                             KeyValue::new("service.version", "0.1.0"),
                         ])
                         .build(),

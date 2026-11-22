@@ -347,40 +347,31 @@ impl TelemetryDispatcher {
 // OpenTelemetry & Tracing Subsystem Initializer
 // ---------------------------------------------------------------------------
 
-struct EnterFuture<F> {
-    handle: tokio::runtime::Handle,
-    future: F,
-}
-
-impl<F: std::future::Future> std::future::Future for EnterFuture<F> {
-    type Output = F::Output;
-    fn poll(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        let this = unsafe { self.get_unchecked_mut() };
-        let _guard = this.handle.enter();
-        let pinned = unsafe { std::pin::Pin::new_unchecked(&mut this.future) };
-        pinned.poll(cx)
-    }
-}
-
 #[derive(Debug)]
 struct TokioSpanExporter<E> {
-    inner: E,
+    inner: Arc<E>,
     handle: tokio::runtime::Handle,
 }
 
-impl<E: opentelemetry_sdk::trace::SpanExporter> opentelemetry_sdk::trace::SpanExporter
+impl<E: opentelemetry_sdk::trace::SpanExporter + 'static> opentelemetry_sdk::trace::SpanExporter
     for TokioSpanExporter<E>
 {
     fn export(
         &self,
         batch: Vec<opentelemetry_sdk::trace::SpanData>,
     ) -> impl std::future::Future<Output = opentelemetry_sdk::error::OTelSdkResult> + Send {
-        EnterFuture {
-            handle: self.handle.clone(),
-            future: self.inner.export(batch),
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let inner = Arc::clone(&self.inner);
+        self.handle.spawn(async move {
+            let res = inner.export(batch).await;
+            let _ = tx.send(res);
+        });
+        async move {
+            rx.await.unwrap_or_else(|_| {
+                Err(opentelemetry_sdk::error::OTelSdkError::InternalFailure(
+                    "Tokio exporter channel dropped".into(),
+                ))
+            })
         }
     }
 
@@ -403,7 +394,9 @@ impl<E: opentelemetry_sdk::trace::SpanExporter> opentelemetry_sdk::trace::SpanEx
     }
 
     fn set_resource(&mut self, resource: &opentelemetry_sdk::Resource) {
-        self.inner.set_resource(resource)
+        if let Some(inner) = Arc::get_mut(&mut self.inner) {
+            inner.set_resource(resource);
+        }
     }
 }
 
@@ -436,11 +429,17 @@ pub fn init_telemetry() -> Result<Option<SdkTracerProvider>, Box<dyn std::error:
                 .build(),
         ) {
             let tokio_exporter = TokioSpanExporter {
-                inner: exporter,
+                inner: Arc::new(exporter),
                 handle,
             };
             let batch_processor =
-                opentelemetry_sdk::trace::BatchSpanProcessor::builder(tokio_exporter).build();
+                opentelemetry_sdk::trace::BatchSpanProcessor::builder(tokio_exporter)
+                    .with_batch_config(
+                        opentelemetry_sdk::trace::BatchConfigBuilder::default()
+                            .with_scheduled_delay(std::time::Duration::from_secs(1))
+                            .build(),
+                    )
+                    .build();
             let provider = SdkTracerProvider::builder()
                 .with_span_processor(batch_processor)
                 .with_resource(

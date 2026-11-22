@@ -24,6 +24,7 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Initialize structured concurrency tracing (Console + File + Grafana OpenTelemetry)
     dotenvy::dotenv().ok();
+    dotenvy::from_filename("backend/.env").ok();
     let _tokio_handle_guard = tokio::runtime::Handle::current().enter();
     let tracer_provider = utils::telemetry::init_telemetry()?;
 
@@ -140,26 +141,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .layer(auth_layer)
         .layer(governor_layer)
         .layer(cors)
-        .layer(tower_http::trace::TraceLayer::new_for_http().on_response(
-            |response: &axum::response::Response,
-             latency: std::time::Duration,
-             _span: &tracing::Span| {
-                if response.status().is_server_error() || response.status().is_client_error() {
-                    tracing::error!(
-                        latency_ms = latency.as_millis(),
-                        status = response.status().as_u16(),
-                        otel.status_code = "ERROR",
-                        "HTTP Request failed"
-                    );
-                } else {
-                    tracing::info!(
-                        latency_ms = latency.as_millis(),
-                        status = response.status().as_u16(),
-                        "HTTP Request succeeded"
-                    );
-                }
-            },
-        ))
+        .layer(
+            tower_http::trace::TraceLayer::new_for_http()
+                .make_span_with(
+                    tower_http::trace::DefaultMakeSpan::new()
+                        .level(tracing::Level::INFO)
+                        .include_headers(true),
+                )
+                .on_response(
+                    |response: &axum::response::Response,
+                     latency: std::time::Duration,
+                     _span: &tracing::Span| {
+                        _span.record("http.status_code", response.status().as_u16());
+                        if response.status().is_server_error()
+                            || response.status().is_client_error()
+                        {
+                            _span.record("otel.status_code", "ERROR");
+                            tracing::error!(
+                                latency_ms = latency.as_millis(),
+                                status = response.status().as_u16(),
+                                otel.status_code = "ERROR",
+                                "HTTP Request failed"
+                            );
+                        } else {
+                            tracing::info!(
+                                latency_ms = latency.as_millis(),
+                                status = response.status().as_u16(),
+                                "HTTP Request succeeded"
+                            );
+                        }
+                    },
+                ),
+        )
         .with_state(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));

@@ -560,8 +560,10 @@ impl WhatsAppMessageService {
                         return vec![menus::lms::start_lms_flow(pool, &context, trimmed).await];
                     }
 
-                    // If user sends standalone attendance directive (e.g. "56 57 absent", "2 present"), break out and handle directly
-                    if menus::attendance::is_standalone_attendance_directive(trimmed) {
+                    // If user sends standalone attendance directive outside of attendance flow (e.g. while in LMS flow), break out and handle directly
+                    if !state_type.starts_with("ATTENDANCE_")
+                        && menus::attendance::is_standalone_attendance_directive(trimmed)
+                    {
                         let _ =
                             WhatsAppRepository::clear_conversation_state(pool, session.id).await;
                         info!(sender = %sender_jid, "User sent standalone attendance directive; clearing previous state");
@@ -591,7 +593,9 @@ impl WhatsAppMessageService {
                         )];
                     }
 
-                    if menus::timetable::is_timetable(trimmed) {
+                    // Explicit keyword triggers for timetable/exams (do not match single digits '3' or '4' while in a conversation step)
+                    let lower = trimmed.to_lowercase();
+                    if lower.contains("timetable") || lower.contains("schedule") {
                         let _ =
                             WhatsAppRepository::clear_conversation_state(pool, session.id).await;
                         return vec![
@@ -599,7 +603,7 @@ impl WhatsAppMessageService {
                         ];
                     }
 
-                    if menus::exams::is_exams(trimmed) {
+                    if lower.contains("exam") || lower.contains("report card") {
                         let _ =
                             WhatsAppRepository::clear_conversation_state(pool, session.id).await;
                         return vec![menus::exams::handle_exams_query(pool, &context).await];

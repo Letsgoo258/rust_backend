@@ -1150,6 +1150,107 @@ impl LmsRepository {
 
         let rows = qb.build().fetch_all(pool).await?;
 
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let task_ids: Vec<Uuid> = rows.iter().map(|r| r.get("id")).collect();
+
+        // Batch fetch all attachments for these tasks in 1 query (eliminates N+1)
+        let att_rows = sqlx::query(
+            r#"
+            SELECT
+                task_id, id, attachment_type, original_filename, mime_type, file_size,
+                file_url, google_drive_url, expires_at, deletion_status, uploaded_at
+            FROM lms_task_attachments
+            WHERE task_id = ANY($1) AND school_id = $2 AND deletion_status != 'DELETED'
+            ORDER BY uploaded_at ASC
+            "#,
+        )
+        .bind(&task_ids)
+        .bind(school_id)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+
+        let mut attachments_by_task: std::collections::HashMap<Uuid, Vec<LmsAttachmentResponse>> =
+            std::collections::HashMap::new();
+        for ar in att_rows {
+            let t_id: Uuid = ar.get("task_id");
+            attachments_by_task
+                .entry(t_id)
+                .or_default()
+                .push(LmsAttachmentResponse {
+                    id: ar.get("id"),
+                    attachment_type: ar.get("attachment_type"),
+                    original_filename: ar.try_get("original_filename").ok(),
+                    mime_type: ar.try_get("mime_type").ok(),
+                    file_size: ar.try_get("file_size").ok(),
+                    file_url: ar.get("file_url"),
+                    google_drive_url: ar.try_get("google_drive_url").ok(),
+                    expires_at: ar.try_get("expires_at").ok(),
+                    deletion_status: ar.get("deletion_status"),
+                    uploaded_at: ar.get("uploaded_at"),
+                });
+        }
+
+        // Batch fetch all evaluations for these tasks in 1 query (eliminates N+1)
+        let eval_rows = sqlx::query(
+            r#"
+            SELECT 
+                e.id, e.task_id, e.evaluation_title, e.maximum_marks::FLOAT8 as maximum_marks,
+                e.pass_marks::FLOAT8 as pass_marks, e.evaluation_category, e.evaluation_date,
+                e.include_in_results, e.result_component_id, e.status, e.created_at, e.updated_at,
+                COALESCE(r.total_recipients, 0)::bigint as total_students,
+                COALESCE(m.evaluated_count, 0)::bigint as evaluated_students
+            FROM lms_evaluations e
+            LEFT JOIN (
+                SELECT task_id, COUNT(*)::bigint as total_recipients 
+                FROM lms_task_recipients 
+                WHERE task_id = ANY($1) 
+                GROUP BY task_id
+            ) r ON e.task_id = r.task_id
+            LEFT JOIN (
+                SELECT evaluation_id, COUNT(*)::bigint as evaluated_count 
+                FROM lms_evaluation_marks 
+                WHERE evaluation_id IN (SELECT id FROM lms_evaluations WHERE task_id = ANY($1)) 
+                  AND marks_obtained IS NOT NULL 
+                GROUP BY evaluation_id
+            ) m ON e.id = m.evaluation_id
+            WHERE e.task_id = ANY($1) AND e.school_id = $2
+            "#,
+        )
+        .bind(&task_ids)
+        .bind(school_id)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default();
+
+        let mut evaluations_by_task: std::collections::HashMap<Uuid, LmsEvaluationResponse> =
+            std::collections::HashMap::new();
+        for er in eval_rows {
+            let t_id: Uuid = er.get("task_id");
+            evaluations_by_task.insert(
+                t_id,
+                LmsEvaluationResponse {
+                    id: er.get("id"),
+                    task_id: er.get("task_id"),
+                    evaluation_title: er.get("evaluation_title"),
+                    maximum_marks: er.get("maximum_marks"),
+                    pass_marks: er.get("pass_marks"),
+                    evaluation_category: er.try_get("evaluation_category").ok(),
+                    evaluation_date: er.try_get("evaluation_date").ok(),
+                    include_in_results: er.get("include_in_results"),
+                    result_component_id: er.try_get("result_component_id").ok(),
+                    status: er.get("status"),
+                    total_students: er.get("total_students"),
+                    evaluated_students: er.get("evaluated_students"),
+                    created_at: er.get("created_at"),
+                    updated_at: er.get("updated_at"),
+                },
+            );
+        }
+
         let mut res = Vec::with_capacity(rows.len());
         for r in rows {
             let t_id: Uuid = r.get("id");
@@ -1173,12 +1274,8 @@ impl LmsRepository {
                 None
             };
 
-            let attachments = Self::list_attachments(pool, school_id, t_id)
-                .await
-                .unwrap_or_default();
-            let evaluation = Self::get_evaluation_by_task_id(pool, school_id, t_id)
-                .await
-                .unwrap_or_default();
+            let attachments = attachments_by_task.remove(&t_id).unwrap_or_default();
+            let evaluation = evaluations_by_task.remove(&t_id);
 
             res.push(LmsTaskResponse {
                 id: t_id,
@@ -1224,108 +1321,39 @@ impl LmsRepository {
         school_id: Uuid,
         teacher_id: Option<Uuid>,
     ) -> Result<LmsOverviewStats, AppError> {
-        let total_tasks: i64 = if let Some(t_id) = teacher_id {
-            sqlx::query_scalar(
-                "SELECT COUNT(*) FROM lms_tasks WHERE school_id = $1 AND created_by = $2",
-            )
-            .bind(school_id)
-            .bind(t_id)
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0)
-        } else {
-            sqlx::query_scalar("SELECT COUNT(*) FROM lms_tasks WHERE school_id = $1")
-                .bind(school_id)
-                .fetch_one(pool)
-                .await
-                .unwrap_or(0)
-        };
+        let stats_row = sqlx::query(
+            r#"
+            SELECT
+                COUNT(*)::bigint AS total_tasks,
+                COUNT(*) FILTER (WHERE status = 'PUBLISHED' AND (deadline_at IS NULL OR deadline_at >= NOW()))::bigint AS active_tasks,
+                COUNT(*) FILTER (WHERE status = 'PUBLISHED' AND deadline_at >= NOW() AND deadline_at <= (NOW() + INTERVAL '48 hours'))::bigint AS upcoming_deadlines,
+                COUNT(*) FILTER (WHERE status = 'CLOSED' OR (status = 'PUBLISHED' AND deadline_at < NOW()))::bigint AS completed_tasks,
+                COUNT(*) FILTER (WHERE status = 'PUBLISHED' AND eval_status IS NOT NULL AND eval_status != 'COMPLETED')::bigint AS pending_evaluation
+            FROM (
+                SELECT t.status, t.deadline_at, e.status AS eval_status
+                FROM lms_tasks t
+                LEFT JOIN lms_evaluations e ON t.id = e.task_id
+                WHERE t.school_id = $1 AND ($2::uuid IS NULL OR t.created_by = $2)
+            ) sub
+            "#,
+        )
+        .bind(school_id)
+        .bind(teacher_id)
+        .fetch_optional(pool)
+        .await?;
 
-        let active_tasks: i64 = if let Some(t_id) = teacher_id {
-            sqlx::query_scalar(
-                "SELECT COUNT(*) FROM lms_tasks WHERE school_id = $1 AND created_by = $2 AND status = 'PUBLISHED' AND (deadline_at IS NULL OR deadline_at >= NOW())"
-            )
-            .bind(school_id)
-            .bind(t_id)
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0)
-        } else {
-            sqlx::query_scalar(
-                "SELECT COUNT(*) FROM lms_tasks WHERE school_id = $1 AND status = 'PUBLISHED' AND (deadline_at IS NULL OR deadline_at >= NOW())"
-            )
-            .bind(school_id)
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0)
-        };
-
-        let upcoming_deadlines: i64 = if let Some(t_id) = teacher_id {
-            sqlx::query_scalar(
-                "SELECT COUNT(*) FROM lms_tasks WHERE school_id = $1 AND created_by = $2 AND status = 'PUBLISHED' AND deadline_at >= NOW() AND deadline_at <= (NOW() + INTERVAL '48 hours')"
-            )
-            .bind(school_id)
-            .bind(t_id)
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0)
-        } else {
-            sqlx::query_scalar(
-                "SELECT COUNT(*) FROM lms_tasks WHERE school_id = $1 AND status = 'PUBLISHED' AND deadline_at >= NOW() AND deadline_at <= (NOW() + INTERVAL '48 hours')"
-            )
-            .bind(school_id)
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0)
-        };
-
-        let completed_tasks: i64 = if let Some(t_id) = teacher_id {
-            sqlx::query_scalar(
-                "SELECT COUNT(*) FROM lms_tasks WHERE school_id = $1 AND created_by = $2 AND (status = 'CLOSED' OR (status = 'PUBLISHED' AND deadline_at < NOW()))"
-            )
-            .bind(school_id)
-            .bind(t_id)
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0)
-        } else {
-            sqlx::query_scalar(
-                "SELECT COUNT(*) FROM lms_tasks WHERE school_id = $1 AND (status = 'CLOSED' OR (status = 'PUBLISHED' AND deadline_at < NOW()))"
-            )
-            .bind(school_id)
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0)
-        };
-
-        let pending_evaluation: i64 = if let Some(t_id) = teacher_id {
-            sqlx::query_scalar(
-                r#"
-                SELECT COUNT(*) FROM lms_tasks t
-                JOIN lms_evaluations e ON t.id = e.task_id
-                WHERE t.school_id = $1 AND t.created_by = $2 AND t.status = 'PUBLISHED'
-                  AND e.status != 'COMPLETED'
-                "#,
-            )
-            .bind(school_id)
-            .bind(t_id)
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0)
-        } else {
-            sqlx::query_scalar(
-                r#"
-                SELECT COUNT(*) FROM lms_tasks t
-                JOIN lms_evaluations e ON t.id = e.task_id
-                WHERE t.school_id = $1 AND t.status = 'PUBLISHED'
-                  AND e.status != 'COMPLETED'
-                "#,
-            )
-            .bind(school_id)
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0)
-        };
+        let (total_tasks, active_tasks, upcoming_deadlines, completed_tasks, pending_evaluation) =
+            if let Some(r) = stats_row {
+                (
+                    r.get::<i64, _>("total_tasks"),
+                    r.get::<i64, _>("active_tasks"),
+                    r.get::<i64, _>("upcoming_deadlines"),
+                    r.get::<i64, _>("completed_tasks"),
+                    r.get::<i64, _>("pending_evaluation"),
+                )
+            } else {
+                (0, 0, 0, 0, 0)
+            };
 
         let recent = Self::list_tasks(
             pool,
@@ -1420,7 +1448,7 @@ impl LmsRepository {
                 t.is_evaluation,
                 eval.id as evaluation_id,
                 eval.status as evaluation_status,
-                (SELECT COUNT(*) FROM lms_evaluation_marks em WHERE em.evaluation_id = eval.id) as marks_count
+                COALESCE(em_agg.marks_count, 0) as marks_count
             FROM attendance_sessions att
             JOIN users u ON att.marked_by = u.id
             JOIN class_sections cs ON att.class_section_id = cs.id
@@ -1429,6 +1457,11 @@ impl LmsRepository {
             LEFT JOIN subjects s ON att.subject_id = s.id
             LEFT JOIN lms_tasks t ON t.attendance_session_id = att.id AND t.status != 'CANCELLED'
             LEFT JOIN lms_evaluations eval ON t.id = eval.task_id
+            LEFT JOIN (
+                SELECT evaluation_id, COUNT(*)::bigint as marks_count
+                FROM lms_evaluation_marks
+                GROUP BY evaluation_id
+            ) em_agg ON eval.id = em_agg.evaluation_id
             WHERE att.school_id = $1 AND att.date = $2
               AND ($3::uuid IS NULL OR att.marked_by = $3)
             ORDER BY teacher_name, att.period_number ASC

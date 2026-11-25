@@ -518,6 +518,13 @@ impl NavigationConfig {
                             badge: None,
                         },
                         NavigationItem {
+                            name: "My Schedule".into(),
+                            path: "/dashboard/academics/timetable?view=my_schedule".into(),
+                            icon: "schedule".into(),
+                            capability: Some("attendance:record".into()),
+                            badge: None,
+                        },
+                        NavigationItem {
                             name: "Live Overview".into(),
                             path: "/dashboard/attendance".into(),
                             icon: "home".into(),
@@ -528,6 +535,13 @@ impl NavigationConfig {
                             name: "School Register".into(),
                             path: "/dashboard/attendance/register".into(),
                             icon: "spreadsheet".into(),
+                            capability: Some("attendance:view".into()),
+                            badge: None,
+                        },
+                        NavigationItem {
+                            name: "Substitution Chart".into(),
+                            path: "/dashboard/academics/substitution".into(),
+                            icon: "substitution".into(),
                             capability: Some("attendance:view".into()),
                             badge: None,
                         },

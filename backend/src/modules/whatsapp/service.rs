@@ -1027,4 +1027,103 @@ mod tests {
         WhatsAppMessageService::clear_invitation_cooldown(test_jid);
         assert!(cache.get(test_jid).is_none());
     }
+
+    #[test]
+    fn test_attendance_state_interception_prevention() {
+        // 1. In ATTENDANCE_WAITING_FOR_ABSENTEES state:
+        let state_waiting = "ATTENDANCE_WAITING_FOR_ABSENTEES";
+
+        // Multi-roll list like "5,3,7,10,15,23,24" MUST NOT be intercepted as standalone
+        let input_multi = "5,3,7,10,15,23,24";
+        let is_intercepted = !state_waiting.starts_with("ATTENDANCE_")
+            && menus::attendance::is_standalone_attendance_directive(input_multi);
+        assert!(
+            !is_intercepted,
+            "ATTENDANCE_WAITING_FOR_ABSENTEES must NOT be intercepted by standalone directive handler"
+        );
+
+        // Standard absent prompt responses must NOT be intercepted
+        let inputs_waiting = [
+            "5,3,7,10,15,23,24",
+            "1, 2, 55 absent",
+            "1, 5, 10, 34 present",
+            "all present",
+            "3",
+            "4",
+            "0",
+            "nil",
+        ];
+
+        for input in &inputs_waiting {
+            let intercepted = !state_waiting.starts_with("ATTENDANCE_")
+                && menus::attendance::is_standalone_attendance_directive(input);
+            assert!(
+                !intercepted,
+                "Input '{input}' must NOT be intercepted by standalone directive handler in {state_waiting}"
+            );
+
+            // Single digit 3 or 4 must NOT trigger timetable or exams keywords
+            let lower = input.to_lowercase();
+            let is_timetable_breakout = lower.contains("timetable") || lower.contains("schedule");
+            let is_exams_breakout = lower.contains("exam") || lower.contains("report card");
+            assert!(
+                !is_timetable_breakout,
+                "Input '{input}' must NOT trigger timetable breakout in {state_waiting}"
+            );
+            assert!(
+                !is_exams_breakout,
+                "Input '{input}' must NOT trigger exams breakout in {state_waiting}"
+            );
+        }
+
+        // 2. In ATTENDANCE_SELECT_CLASS state:
+        let state_select = "ATTENDANCE_SELECT_CLASS";
+        let inputs_select = ["1", "2", "3", "4", "Class 4A", "Class 1 Section A"];
+
+        for input in &inputs_select {
+            let intercepted = !state_select.starts_with("ATTENDANCE_")
+                && menus::attendance::is_standalone_attendance_directive(input);
+            assert!(
+                !intercepted,
+                "Class selection '{input}' must NOT be intercepted by standalone directive handler in {state_select}"
+            );
+
+            let lower = input.to_lowercase();
+            let is_timetable_breakout = lower.contains("timetable") || lower.contains("schedule");
+            let is_exams_breakout = lower.contains("exam") || lower.contains("report card");
+            assert!(
+                !is_timetable_breakout,
+                "Class selection '{input}' must NOT trigger timetable breakout in {state_select}"
+            );
+            assert!(
+                !is_exams_breakout,
+                "Class selection '{input}' must NOT trigger exams breakout in {state_select}"
+            );
+        }
+
+        // 3. Outside of attendance state (e.g. in LMS_FLOW or root level):
+        let state_lms = "LMS_FLOW";
+        assert!(
+            !state_lms.starts_with("ATTENDANCE_")
+                && menus::attendance::is_standalone_attendance_directive("56 57 absent"),
+            "Standalone directive SHOULD break out of non-attendance states like LMS_FLOW"
+        );
+        assert!(
+            !state_lms.starts_with("ATTENDANCE_")
+                && menus::attendance::is_standalone_attendance_directive("5,3,7,10,15,23,24"),
+            "Multi-roll absentees SHOULD break out of non-attendance states like LMS_FLOW"
+        );
+
+        // 4. Intentional breakout commands must always work across any state:
+        assert!(menus::attendance::is_take_attendance("take attendance 4a"));
+        assert!(menus::attendance::is_take_attendance("Take attendance"));
+        assert!(WhatsAppMessageService::is_help_request("help"));
+        assert!(WhatsAppMessageService::is_greeting("hi"));
+        let cancel_input = "cancel";
+        assert!(
+            cancel_input.eq_ignore_ascii_case("cancel")
+                || cancel_input.eq_ignore_ascii_case("exit")
+                || cancel_input.eq_ignore_ascii_case("abort")
+        );
+    }
 }

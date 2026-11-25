@@ -2972,6 +2972,61 @@ mod tests {
             parse_attendance_command("all absent").unwrap(),
             AttendanceInputParsed::AllAbsent
         );
+
+        // 8. Multi-roll absentees list (e.g. user input: 5,3,7,10,15,23,24)
+        let cmd_multi = parse_attendance_command("5,3,7,10,15,23,24").unwrap();
+        match cmd_multi {
+            AttendanceInputParsed::Directives {
+                absent_rolls,
+                present_rolls,
+                is_replace,
+                is_present_only,
+            } => {
+                assert_eq!(absent_rolls, vec!["5", "3", "7", "10", "15", "23", "24"]);
+                assert!(present_rolls.is_empty());
+                assert!(!is_replace);
+                assert!(!is_present_only);
+            }
+            other => panic!("Expected multi-roll absent directives, got: {:?}", other),
+        }
+
+        // 9. Single roll digit inputs (must parse as absentees without ambiguity)
+        let cmd_digit_3 = parse_attendance_command("3").unwrap();
+        match cmd_digit_3 {
+            AttendanceInputParsed::Directives { absent_rolls, .. } => {
+                assert_eq!(absent_rolls, vec!["3"]);
+            }
+            other => panic!("Expected single roll 3 absent, got: {:?}", other),
+        }
+
+        let cmd_digit_4 = parse_attendance_command("4").unwrap();
+        match cmd_digit_4 {
+            AttendanceInputParsed::Directives { absent_rolls, .. } => {
+                assert_eq!(absent_rolls, vec!["4"]);
+            }
+            other => panic!("Expected single roll 4 absent, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_is_take_attendance_variations() {
+        assert!(is_take_attendance("take attendance"));
+        assert!(is_take_attendance("Take attendance"));
+        assert!(is_take_attendance("TAKE ATTENDANCE"));
+        assert!(is_take_attendance("take attendance 4a"));
+        assert!(is_take_attendance("take attendance class 1"));
+        assert!(is_take_attendance("mark attendance"));
+        assert!(is_take_attendance("record attendance"));
+        assert!(is_take_attendance(":take attendance"));
+        assert!(is_take_attendance("!take attendance"));
+        assert!(is_take_attendance("/take attendance"));
+
+        // Must NOT match roll numbers or standalone directives
+        assert!(!is_take_attendance("5,3,7,10,15,23,24"));
+        assert!(!is_take_attendance("1, 2, 55 absent"));
+        assert!(!is_take_attendance("all present"));
+        assert!(!is_take_attendance("3"));
+        assert!(!is_take_attendance("4"));
     }
 
     #[test]

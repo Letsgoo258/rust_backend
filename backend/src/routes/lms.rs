@@ -12,7 +12,9 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/tasks/:id",
-            get(LmsController::get_task_detail).put(LmsController::update_task),
+            get(LmsController::get_task_detail)
+                .put(LmsController::update_task)
+                .delete(LmsController::delete_task),
         )
         .route("/tasks/:id/publish", post(LmsController::publish_task))
         .route("/tasks/:id/cancel", post(LmsController::cancel_task))

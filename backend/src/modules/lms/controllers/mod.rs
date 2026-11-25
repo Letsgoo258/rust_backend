@@ -127,6 +127,26 @@ impl LmsController {
         Ok(Json(res))
     }
 
+    /// Delete a task permanently
+    pub async fn delete_task(
+        auth_session: AuthSession,
+        State(state): State<AppState>,
+        Path(task_id): Path<Uuid>,
+    ) -> Result<impl IntoResponse, AppError> {
+        let user = auth_session
+            .user
+            .ok_or_else(|| AppError::Unauthorized("Authentication required".into()))?;
+
+        LmsService::delete_task(&state.db, &user, task_id).await?;
+        Ok((
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "success": true,
+                "message": "Task deleted successfully"
+            })),
+        ))
+    }
+
     /// Add attachment to a task
     pub async fn add_attachment(
         auth_session: AuthSession,

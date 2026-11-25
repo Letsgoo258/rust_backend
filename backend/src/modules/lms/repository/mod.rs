@@ -995,6 +995,47 @@ impl LmsRepository {
         Ok(updated)
     }
 
+    /// Permanently delete a task (allowed for DRAFT, PUBLISHED, or CANCELLED)
+    pub async fn delete_task(
+        pool: &PgPool,
+        school_id: Uuid,
+        task_id: Uuid,
+        actor_id: Uuid,
+    ) -> Result<(), AppError> {
+        let task = Self::get_task_by_id(pool, school_id, task_id).await?;
+
+        // 1. Remove calendar event if linked
+        if let Some(cal_id) = task.calendar_event_id {
+            let _ = sqlx::query("DELETE FROM academic_calendar WHERE id = $1 AND school_id = $2")
+                .bind(cal_id)
+                .bind(school_id)
+                .execute(pool)
+                .await;
+        }
+
+        // 2. Cascade delete task (recipients, attachments, evaluations, audit logs cascade via FK)
+        let rows_affected = sqlx::query("DELETE FROM lms_tasks WHERE id = $1 AND school_id = $2")
+            .bind(task_id)
+            .bind(school_id)
+            .execute(pool)
+            .await?
+            .rows_affected();
+
+        if rows_affected == 0 {
+            return Err(AppError::NotFound("Task not found".into()));
+        }
+
+        tracing::info!(
+            task_id = %task_id,
+            actor_id = %actor_id,
+            title = %task.title,
+            status = %task.status.as_str(),
+            "LMS task deleted successfully"
+        );
+
+        Ok(())
+    }
+
     /// Create an audit log record
     pub async fn create_audit_log(
         pool: &PgPool,

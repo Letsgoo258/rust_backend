@@ -147,6 +147,28 @@ impl LmsService {
         Self::get_task_details(pool, user, task.id).await
     }
 
+    /// Delete a task permanently (supports DRAFT, PUBLISHED, or CANCELLED)
+    pub async fn delete_task(pool: &PgPool, user: &User, task_id: Uuid) -> Result<(), AppError> {
+        let school_id = user.school_id;
+        let existing = LmsRepository::get_task_by_id(pool, school_id, task_id).await?;
+
+        let can_delete = existing.created_by == user.id
+            || user.capabilities.contains(&"lms:delete".to_string())
+            || user.capabilities.contains(&"lms:cancel".to_string())
+            || user
+                .roles
+                .iter()
+                .any(|r| r == "SUPER_ADMIN" || r == "SCHOOL_ADMIN" || r == "PRINCIPAL");
+
+        if !can_delete {
+            return Err(AppError::Forbidden(
+                "Permission denied to delete this task".into(),
+            ));
+        }
+
+        LmsRepository::delete_task(pool, school_id, task_id, user.id).await
+    }
+
     /// Retrieve task details by ID
     pub async fn get_task_details(
         pool: &PgPool,

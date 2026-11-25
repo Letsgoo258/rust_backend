@@ -13,6 +13,30 @@ pub async fn connect_to_ai(
     query: &str,
     conversation_history: &[crate::modules::whatsapp::repository::WhatsAppInboundRow],
 ) -> String {
+    // 1. Check NVIDIA NIM / API (if NVIDIA_API_KEY is configured)
+    let nvidia_key = std::env::var("NVIDIA_API_KEY")
+        .or_else(|_| std::env::var("NVIDIA_NIM_API_KEY"))
+        .ok();
+
+    if let Some(api_key) = nvidia_key {
+        if !api_key.trim().is_empty() {
+            match call_nvidia_api(&api_key, query, conversation_history).await {
+                Ok(ai_reply) => {
+                    info!(sender = %sender_jid, "NVIDIA AI successfully generated response for WhatsApp");
+                    return ai_reply;
+                }
+                Err(e) => {
+                    warn!(
+                        sender = %sender_jid,
+                        error = %e,
+                        "NVIDIA AI request failed, trying next provider"
+                    );
+                }
+            }
+        }
+    }
+
+    // 2. Check Gemini / OpenAI API
     let gemini_key = std::env::var("GEMINI_API_KEY")
         .or_else(|_| std::env::var("AI_API_KEY"))
         .or_else(|_| std::env::var("OPENAI_API_KEY"))
@@ -38,6 +62,79 @@ pub async fn connect_to_ai(
 
     // Robust Structured Fallback
     format_fallback_message(query)
+}
+
+/// Calls NVIDIA Cloud Functions / NIM chat completions API.
+pub async fn call_nvidia_api(
+    api_key: &str,
+    query: &str,
+    _history: &[crate::modules::whatsapp::repository::WhatsAppInboundRow],
+) -> Result<String, anyhow::Error> {
+    let url = "https://integrate.api.nvidia.com/v1/chat/completions";
+    let model =
+        std::env::var("NVIDIA_MODEL").unwrap_or_else(|_| "meta/llama-3.1-70b-instruct".to_string());
+
+    let system_instruction = "You are a smart school WhatsApp assistant. \
+Respond in concise, helpful plain text suitable for WhatsApp (you may use *bold* or _italics_). \
+Always return your output as valid JSON with format: {\"reply\": \"<your response message>\", \"intent\": \"<query_category>\"}.";
+
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [
+            { "role": "system", "content": system_instruction },
+            { "role": "user", "content": query }
+        ],
+        "temperature": 0.4,
+        "max_tokens": 300
+    });
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()?;
+
+    let res = client
+        .post(url)
+        .header("Authorization", format!("Bearer {}", api_key.trim()))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await?;
+
+    if !res.status().is_success() {
+        let status = res.status();
+        let err_body = res.text().await.unwrap_or_default();
+        return Err(anyhow::anyhow!("NVIDIA API HTTP {status}: {err_body}"));
+    }
+
+    let resp_json: serde_json::Value = res.json().await?;
+    let content = resp_json["choices"][0]["message"]["content"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("Missing message content in NVIDIA response"))?;
+
+    // Parse structured JSON returned by model
+    if let Ok(parsed) = serde_json::from_str::<AiResponsePayload>(content) {
+        if !parsed.reply.trim().is_empty() {
+            return Ok(parsed.reply);
+        }
+    }
+
+    Ok(content.to_string())
+}
+
+/// Checks if NVIDIA AI client is configured and query is possible.
+pub async fn check_nvidia_status() -> Result<String, String> {
+    let key = std::env::var("NVIDIA_API_KEY")
+        .or_else(|_| std::env::var("NVIDIA_NIM_API_KEY"))
+        .map_err(|_| "NVIDIA_API_KEY is not set in environment".to_string())?;
+
+    if key.trim().is_empty() {
+        return Err("NVIDIA_API_KEY is empty".to_string());
+    }
+
+    match call_nvidia_api(&key, "ping", &[]).await {
+        Ok(reply) => Ok(format!("NVIDIA AI connected successfully: {reply}")),
+        Err(e) => Err(format!("NVIDIA API query failed: {e}")),
+    }
 }
 
 /// Calls Gemini REST API expecting a structured JSON response.
